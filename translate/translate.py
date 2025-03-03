@@ -24,8 +24,8 @@ from mistral_common.protocol.instruct.request import ChatCompletionRequest
 
 
 
-def translate_text(text,tokenizer, source_lang = 'EN', target_lang = 'DE', hal =  False):
-    model = Transformer.from_folder(mistral_models_path).to("cuda")
+def translate_text(text,model, tokenizer,source_lang = 'EN', target_lang = 'DE', hal =  False):
+    #model = Transformer.from_folder(mistral_models_path).to("cuda")
 
     if hal:
       translation_prompt = f"""Translate the following text from {source_lang} to {target_lang}.  
@@ -81,7 +81,7 @@ def put_hallucination_tags(sample, answer):
       answer = answer[:end] + "<HAL>" + answer[end:]
       answer = answer[:start] + "<HAL>" + answer[start:] 
 
-   return answer
+   return answer,labels
 
 def create_sample_de(dict) :
     """Create a sample from the RAG truth data.
@@ -110,13 +110,15 @@ def create_sample_de(dict) :
     return RagTruthSample(prompt, answer, labels, split, task_type)
 
 
-def find_hallucination_tags(text):
+def find_hallucination_tags(text,labels):
     pattern = r"<HAL>(.*?)<HAL>" 
     hal_spans = []
-    for span in re.finditer(pattern, text):
+    i = 0
+    for  span in re.finditer(pattern, text):
         start = span.start(1)  # Start of the hallucinated text
         end = span.end(1)      # End of the hallucinated text
-        hal_spans.append((start, end))
+        hal_spans.append((start, end, labels[i]['label']))
+        i+=1
     return hal_spans
 
 def create_sample_de(dict) :
@@ -144,27 +146,40 @@ def create_sample_de(dict) :
     task_type = dict["task_type"]
 
     return RagTruthSample(prompt, answer, labels, split, task_type)
+def colab_print(text, max_width = 120):
+  words = text.split()
+  line = ""
+  for word in words:
+    if len(line) + len(word) + 1 > max_width:
+      print(line)
+      line = ""
+    line += word + " "
+  print (line)
 
-def translate_sample(sample, tokenizer,  mistral_models_path):
+def translate_sample(sample,  model,tokenizer):
     """Translate each sample of the RAG truth data."""
     hal =len(sample.labels) > 0 
     dict_de = {}
     dict_de["prompt"] = translate_text(sample.prompt,model, tokenizer)
-    dict_de["answer"] = translate_text(sample.answer,model, tokenizer, hal = hal)
+    answer,labels = put_hallucination_tags(sample, sample.answer)
+    dict_de["answer"] = translate_text(answer,model, tokenizer, hal = hal)
     dict_de["split"] = sample.split
     dict_de["task_type"] = translate_text(sample.task_type,model, tokenizer)
     dict_de["labels"] = []
-    #  print(dict_de["answer"])
-
+    colab_print(dict_de["answer"])
+    print(labels)
     if hal:
-        hal_spans = find_hallucination_tags(dict_de["answer"])
+        hal_spans = find_hallucination_tags(dict_de["answer"],labels)
         for span in hal_spans:
-            start, end = span
+            print(span)
+            start, end, label = span
             dict_de["labels"].append({
                     "start": start,
                     "end": end,
-                    "label": translate_text(label["label"],model, tokenizer),
+                    "label": translate_text(label,model, tokenizer),
                 })
+            print(dict_de["answer"][start:end])
+    
     
     sample_de = create_sample_de(dict_de)
     return sample_de
@@ -196,7 +211,7 @@ def main(input_dir: Path, output_dir: Path):
     mistral_models_path.mkdir(parents=True, exist_ok=True)
     snapshot_download(repo_id="mistralai/Mistral-7B-Instruct-v0.3", allow_patterns=["params.json", "consolidated.safetensors", "tokenizer.model.v3"], local_dir=mistral_models_path)
     tokenizer = MistralTokenizer.from_file(f"{mistral_models_path}/tokenizer.model.v3")
-    model = Transformer.from_folder(mistral_models_path).to("cuda")
+    model = Transformer.from_folder(mistral_models_path).half().to("cuda")
 
     num_processed = len(rag_truth_data_de.samples) 
     total_samples = len(rag_truth_data.samples)
@@ -204,10 +219,10 @@ def main(input_dir: Path, output_dir: Path):
     print(f"Continuing on sample {num_processed}/{total_samples}...")
 
     for i, sample in enumerate(rag_truth_data.samples[num_processed:],start=num_processed):
-        print(i)
-        sample_de = translate_sample(sample, mistral_models_path, tokenizer= tokenizer)
-        rag_truth_data_de.samples.append(sample_de)
 
+        print(i)
+        sample_de = translate_sample(sample, model, tokenizer)
+        rag_truth_data_de.samples.append(sample_de)
         if i % 5 == 0 or i == total_samples - 1:
             (output_dir / "ragtruth_data_de.json").write_text(
                 json.dumps(rag_truth_data_de.to_json(), indent=4)
