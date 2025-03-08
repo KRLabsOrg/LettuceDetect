@@ -24,16 +24,6 @@ class RagBenchSample:
             "task_type": self.task_type,
         }
 
-    @classmethod
-    def from_json(cls, json_dict: dict) -> "RagBenchSample":
-        return cls(
-            prompt=json_dict["prompt"],
-            answer=json_dict["answer"],
-            labels=json_dict["labels"],
-            split=json_dict["split"],
-            task_type=json_dict["task_type"],
-        )
-
 
 @dataclass
 class RagBenchData:
@@ -41,12 +31,6 @@ class RagBenchData:
 
     def to_json(self) -> list[dict]:
         return [sample.to_json() for sample in self.samples]
-
-    @classmethod
-    def from_json(cls, json_dict: list[dict]) -> "RagBenchData":
-        return cls(
-            samples=[RagBenchSample.from_json(sample) for sample in json_dict],
-        )
 
 
 def load_data(hugging_dir: str) -> dict:
@@ -123,11 +107,12 @@ def get_data_split(data, name, split):
 
 
 def main(output_dir: Path):
-    """Preprocess the RAGBench data.
-
-    :param output_dir: Path to the output directory.
     """
-    output_dir =Path(output_dir)
+    Preprocess the RAGBench data.
+
+    param output_dir: Path to the output directory.
+    """
+    output_dir = Path(output_dir)
 
     data = load_data("rungalileo/ragbench")
     rag_bench_data = RagBenchData(samples=[])
@@ -149,5 +134,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output_dir", type=str, required=True)
     args = parser.parse_args()
-
     main(args.output_dir)
