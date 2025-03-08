@@ -66,7 +66,6 @@ def create_labels(response, halucinations):
         labels.append(
             {"start": match.start(), "end": match.end(), "label": "Not supported"}
         )
-
     return labels
 
 
@@ -76,7 +75,7 @@ def create_sample(response: dict) -> RagBenchSample:
     :param response: The response from the RAG bench data.
     """
     prompt = (
-        "Instruction:\n"
+        "Instruction:"
         + "\n"
         + " Answer the question: "
         + response["question"]
@@ -106,20 +105,20 @@ def get_data_split(data, name, split):
     return data_split
 
 
-def main(output_dir: Path):
+def main(input_dir: str, output_dir: Path):
     """
     Preprocess the RAGBench data.
-
+    param input_dir: Path to HuggingFace directory
     param output_dir: Path to the output directory.
     """
     output_dir = Path(output_dir)
-
-    data = load_data("rungalileo/ragbench")
+    data = load_data(input_dir)
     rag_bench_data = RagBenchData(samples=[])
+
     for dataset_name in data:
         for split in ["train", "test", "validation"]:
             data_split = get_data_split(data, dataset_name, split)
-            for i, response in enumerate(data_split):
+            for response in data_split:
                 if not response["dataset_name"]:
                     continue
                 sample = create_sample(response)
@@ -132,6 +131,7 @@ def main(output_dir: Path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--input_dir", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
     args = parser.parse_args()
-    main(args.output_dir)
+    main(args.input_dir, args.output_dir)
