@@ -123,15 +123,14 @@ def get_data_split(data, name, split):
 
 
 def main(output_dir: Path):
-    """Preprocess the RAG truth data.
+    """Preprocess the RAGBench data.
 
     :param output_dir: Path to the output directory.
     """
-    output_dir = Path(output_dir)
+    output_dir =Path(output_dir)
 
     data = load_data("rungalileo/ragbench")
     rag_bench_data = RagBenchData(samples=[])
-
     for dataset_name in data:
         for split in ["train", "test", "validation"]:
             data_split = get_data_split(data, dataset_name, split)
