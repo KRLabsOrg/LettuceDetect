@@ -23,7 +23,7 @@ class RagBenchSample:
             "split": self.split,
             "task_type": self.task_type,
         }
-    
+
     @classmethod
     def from_json(cls, json_dict: dict) -> "RagBenchSample":
         return cls(
@@ -35,14 +35,13 @@ class RagBenchSample:
         )
 
 
-
 @dataclass
 class RagBenchData:
     samples: list[RagBenchSample]
 
     def to_json(self) -> list[dict]:
         return [sample.to_json() for sample in self.samples]
-    
+
     @classmethod
     def from_json(cls, json_dict: list[dict]) -> "RagBenchSample":
         return cls(
@@ -80,9 +79,7 @@ def create_labels(response, halucinations):
     resp = " ".join([sentence for label, sentence in response["response_sentences"]])
     for hal in halucinations:
         match = re.search(re.escape(hal), resp)
-        labels.append(
-            {"start": match.start(), "end": match.end(), "label": "Not supported"}
-        )
+        labels.append({"start": match.start(), "end": match.end(), "label": "Not supported"})
     return labels
 
 
@@ -141,9 +138,7 @@ def main(input_dir: str, output_dir: Path):
                 sample = create_sample(response)
                 rag_bench_data.samples.append(sample)
 
-    (output_dir / "ragbench_data.json").write_text(
-        json.dumps(rag_bench_data.to_json(), indent=4)
-    )
+    (output_dir / "ragbench_data.json").write_text(json.dumps(rag_bench_data.to_json(), indent=4))
 
 
 if __name__ == "__main__":
