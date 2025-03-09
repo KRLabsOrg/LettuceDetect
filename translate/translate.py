@@ -18,7 +18,8 @@ from vllm.sampling_params import SamplingParams
 
 
 def translate_text(
-    text, model, sampling_params, source_lang="EN", target_lang="DE", hal=False):
+    text, model, sampling_params, source_lang="EN", target_lang="DE", hal=False
+):
     if hal:
         translation_prompt = f"""Translate the following text from {source_lang} to {target_lang}.  
     - If the original text contains <HAL> tags, translate the content inside <HAL> tags and ensure the number of the <HAL> tags remain exactly the same in the output.
@@ -154,17 +155,6 @@ def create_sample_de(dict):
     return RagTruthSample(prompt, answer, labels, split, task_type)
 
 
-def colab_print(text, max_width=120):
-    words = text.split()
-    line = ""
-    for word in words:
-        if len(line) + len(word) + 1 > max_width:
-            print(line)
-            line = ""
-        line += word + " "
-    print(line)
-
-
 def translate_sample(sample, model, sampling_params, i, log_file):
     """Translate each sample of the RAG truth data."""
     hal = len(sample.labels) > 0
@@ -175,8 +165,6 @@ def translate_sample(sample, model, sampling_params, i, log_file):
     dict_de["split"] = sample.split
     dict_de["task_type"] = translate_text(sample.task_type, model, sampling_params)
     dict_de["labels"] = []
-    colab_print(dict_de["answer"])
-    print(labels)
     if hal:
         hal_spans = find_hallucination_tags(dict_de["answer"], labels, i, log_file)
         for span in hal_spans:
@@ -188,7 +176,6 @@ def translate_sample(sample, model, sampling_params, i, log_file):
                     "label": translate_text(label, model, sampling_params),
                 }
             )
-            print(dict_de["answer"][start:end])
 
     sample_de = create_sample_de(dict_de)
     return sample_de
@@ -229,7 +216,6 @@ def main(input_dir: Path, output_dir: Path):
     for i, sample in enumerate(
         rag_truth_data.samples[num_processed:], start=num_processed
     ):
-        print(i)
         sample_de = translate_sample(sample, model, sampling_params, i, log_file)
         rag_truth_data_de.samples.append(sample_de)
         if i % 50 == 0 or i == total_samples - 1:
