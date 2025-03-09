@@ -23,6 +23,17 @@ class RagBenchSample:
             "split": self.split,
             "task_type": self.task_type,
         }
+    
+    @classmethod
+    def from_json(cls, json_dict: dict) -> "RagBenchSample":
+        return cls(
+            prompt=json_dict["prompt"],
+            answer=json_dict["answer"],
+            labels=json_dict["labels"],
+            split=json_dict["split"],
+            task_type=json_dict["task_type"],
+        )
+
 
 
 @dataclass
@@ -31,6 +42,12 @@ class RagBenchData:
 
     def to_json(self) -> list[dict]:
         return [sample.to_json() for sample in self.samples]
+    
+    @classmethod
+    def from_json(cls, json_dict: list[dict]) -> "RagBenchSample":
+        return cls(
+            samples=[RagBenchSample.from_json(sample) for sample in json_dict],
+        )
 
 
 def load_data(hugging_dir: str) -> dict:
