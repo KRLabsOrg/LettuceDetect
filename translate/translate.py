@@ -17,9 +17,7 @@ from vllm import LLM
 from vllm.sampling_params import SamplingParams
 
 
-def translate_text(
-    text, model, sampling_params, source_lang="EN", target_lang="DE", hal=False
-):
+def translate_text(text, model, sampling_params, source_lang="EN", target_lang="DE", hal=False):
     if hal:
         translation_prompt = f"""Translate the following text from {source_lang} to {target_lang}.  
     - If the original text contains <HAL> tags, translate the content inside <HAL> tags and ensure the number of the <HAL> tags remain exactly the same in the output.
@@ -94,9 +92,7 @@ def find_hallucination_tags(text, labels, i, log_file):
                 label = labels[j]["label"]
             else:
                 label = "Unknown"
-                log.write(
-                    f"IndexError: No label for hallucinated text at sample ({i})\n"
-                )
+                log.write(f"IndexError: No label for hallucinated text at sample ({i})\n")
             hal_spans.append((start, end, label))
             j += 1
     return hal_spans
@@ -186,9 +182,7 @@ def main(input_dir: Path, output_dir: Path):
     )
     model = LLM(model=model_name)
 
-    for i, sample in enumerate(
-        rag_truth_data.samples[num_processed:], start=num_processed
-    ):
+    for i, sample in enumerate(rag_truth_data.samples[num_processed:], start=num_processed):
         sample_de = translate_sample(sample, model, sampling_params, i, log_file)
         rag_truth_data_de.samples.append(sample_de)
         if i % 50 == 0 or i == total_samples - 1:
