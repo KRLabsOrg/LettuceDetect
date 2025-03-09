@@ -82,33 +82,6 @@ def put_hallucination_tags(sample, answer):
     return answer, labels
 
 
-def create_sample_de(dict):
-    """Create a sample from the RAG truth data.
-
-    :param response: The response from the RAG truth data.
-    :param source: The source from the RAG truth data.
-    """
-    prompt = dict["prompt"]
-
-    answer = dict["answer"]
-    split = dict["split"]
-    labels = []
-
-    for label in dict["labels"]:
-        start_char = label["start"]
-        end_char = label["end"]
-        labels.append(
-            {
-                "start": start_char,
-                "end": end_char,
-                "label": label["label"],
-            }
-        )
-    task_type = dict["task_type"]
-
-    return RagTruthSample(prompt, answer, labels, split, task_type)
-
-
 def find_hallucination_tags(text, labels, i, log_file):
     pattern = r"<HAL>(.*?)<HAL>"
     hal_spans = []
