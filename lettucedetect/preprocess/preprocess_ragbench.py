@@ -1,10 +1,10 @@
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from datasets import load_dataset
-import re
 
 
 @dataclass
@@ -120,8 +120,7 @@ def get_data_split(data, name, split):
 
 
 def main(input_dir: str, output_dir: Path):
-    """
-    Preprocess the RAGBench data.
+    """Preprocess the RAGBench data.
     param input_dir: Path to HuggingFace directory
     param output_dir: Path to the output directory.
     """
