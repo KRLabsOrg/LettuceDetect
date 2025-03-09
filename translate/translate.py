@@ -1,20 +1,12 @@
-import json
-import os
-import re, string
-from pathlib import Path
-from lettucedetect.datasets.ragtruth import RagTruthDataset
-from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData
-from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData, RagTruthSample
-from torch.utils.data import DataLoader
 import argparse
-import torch
-import numpy as np
+import json
 import re
-from huggingface_hub import snapshot_download
 from pathlib import Path
-from transformers import AutoModelForCausalLM, AutoTokenizer
+
 from vllm import LLM
 from vllm.sampling_params import SamplingParams
+
+from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData, RagTruthSample
 
 
 def translate_text(text, model, sampling_params, source_lang="EN", target_lang="DE", hal=False):
@@ -163,7 +155,6 @@ def main(input_dir: Path, output_dir: Path):
     :param input_dir: Path to the input directory.
     :param output_dir: Path to the output directory.
     """
-
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     input_file = input_dir / "ragtruth_data.json"
