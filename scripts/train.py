@@ -9,9 +9,8 @@ from transformers import (
     DataCollatorForTokenClassification,
 )
 
-from lettucedetect.datasets.ragtruth import RagTruthDataset
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationDataset
 from lettucedetect.models.trainer import Trainer
-from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData
 
 
 def parse_args():
@@ -47,16 +46,16 @@ def parse_args():
 def main():
     args = parse_args()
     data_path = Path(args.data_path)
-    rag_truth_data = RagTruthData.from_json(json.loads(data_path.read_text()))
+    hallucination_data = HallucinationData.from_json(json.loads(data_path.read_text()))
 
-    train_samples = [sample for sample in rag_truth_data.samples if sample.split == "train"]
-    test_samples = [sample for sample in rag_truth_data.samples if sample.split == "test"]
+    train_samples = [sample for sample in hallucination_data.samples if sample.split == "train"]
+    test_samples = [sample for sample in hallucination_data.samples if sample.split == "test"]
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     data_collator = DataCollatorForTokenClassification(tokenizer=tokenizer, label_pad_token_id=-100)
 
-    train_dataset = RagTruthDataset(train_samples, tokenizer)
-    test_dataset = RagTruthDataset(test_samples, tokenizer)
+    train_dataset = HallucinationDataset(train_samples, tokenizer)
+    test_dataset = HallucinationDataset(test_samples, tokenizer)
 
     train_loader = DataLoader(
         train_dataset,

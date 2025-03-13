@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 import torch
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
-from lettucedetect.datasets.ragtruth import RagTruthDataset
+from lettucedetect.datasets.hallucination_dataset import HallucinationDataset
 
 PROMPT_QA = """
 Briefly answer the following question:
@@ -73,8 +73,10 @@ class TransformerDetector(BaseDetector):
         :param output_format: "tokens" to return token-level predictions, or "spans" to return grouped spans.
         """
         # Use the shared tokenization logic from RagTruthDataset
-        encoding, labels, offsets, answer_start_token = RagTruthDataset.prepare_tokenized_input(
-            self.tokenizer, context, answer, self.max_length
+        encoding, labels, offsets, answer_start_token = (
+            HallucinationDataset.prepare_tokenized_input(
+                self.tokenizer, context, answer, self.max_length
+            )
         )
 
         # Create a label tensor: mark tokens before answer as -100 (ignored) and answer tokens as 0.

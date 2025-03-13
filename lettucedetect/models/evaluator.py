@@ -4,7 +4,7 @@ from torch.nn import Module
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from lettucedetect.datasets.ragtruth import RagTruthSample
+from lettucedetect.datasets.hallucination_dataset import HallucinationSample
 from lettucedetect.models.inference import HallucinationDetector
 
 
@@ -185,7 +185,7 @@ def evaluate_model_example_level(
 
 
 def evaluate_detector_char_level(
-    detector: HallucinationDetector, samples: list[RagTruthSample]
+    detector: HallucinationDetector, samples: list[HallucinationSample]
 ) -> dict[str, float]:
     """Evaluate the HallucinationDetector at the character level.
 

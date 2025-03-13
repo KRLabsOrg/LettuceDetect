@@ -10,7 +10,7 @@ from transformers import (
     DataCollatorForTokenClassification,
 )
 
-from lettucedetect.datasets.ragtruth import RagTruthDataset
+from lettucedetect.datasets.hallucination_dataset import HallucinationDataset
 from lettucedetect.models.evaluator import (
     evaluate_detector_char_level,
     evaluate_model,
@@ -34,7 +34,7 @@ def evaluate_task_samples(
 
     if evaluation_type in {"token_level", "example_level"}:
         # Prepare the dataset and dataloader
-        test_dataset = RagTruthDataset(samples, tokenizer)
+        test_dataset = HallucinationDataset(samples, tokenizer)
         data_collator = DataCollatorForTokenClassification(
             tokenizer=tokenizer, label_pad_token_id=-100
         )

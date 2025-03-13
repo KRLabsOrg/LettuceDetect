@@ -1,53 +1,11 @@
 import argparse
 import json
 import re
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from datasets import load_dataset
 
-
-@dataclass
-class RagBenchSample:
-    prompt: str
-    answer: str
-    labels: list[dict]
-    split: Literal["train", "dev", "test"]
-    task_type: str
-
-    def to_json(self) -> dict:
-        return {
-            "prompt": self.prompt,
-            "answer": self.answer,
-            "labels": self.labels,
-            "split": self.split,
-            "task_type": self.task_type,
-        }
-
-    @classmethod
-    def from_json(cls, json_dict: dict) -> "RagBenchSample":
-        return cls(
-            prompt=json_dict["prompt"],
-            answer=json_dict["answer"],
-            labels=json_dict["labels"],
-            split=json_dict["split"],
-            task_type=json_dict["task_type"],
-        )
-
-
-@dataclass
-class RagBenchData:
-    samples: list[RagBenchSample]
-
-    def to_json(self) -> list[dict]:
-        return [sample.to_json() for sample in self.samples]
-
-    @classmethod
-    def from_json(cls, json_dict: list[dict]) -> "RagBenchSample":
-        return cls(
-            samples=[RagBenchSample.from_json(sample) for sample in json_dict],
-        )
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 
 
 def load_data(hugging_dir: str) -> dict:
@@ -84,7 +42,7 @@ def create_labels(response, halucinations):
     return labels
 
 
-def create_sample(response: dict) -> RagBenchSample:
+def create_sample(response: dict) -> HallucinationSample:
     """Create a sample from the RAGBench data.
 
     :param response: The response from the RAG bench data.
@@ -111,7 +69,7 @@ def create_sample(response: dict) -> RagBenchSample:
         ]
         labels = create_labels(response, hallucinations)
 
-    return RagBenchSample(prompt, answer, labels, split, task_type)
+    return HallucinationSample(prompt, answer, labels, split, task_type, "ragbench", "en")
 
 
 def get_data_split(data, name, split):
@@ -127,7 +85,7 @@ def main(input_dir: str, output_dir: Path):
     """
     output_dir = Path(output_dir)
     data = load_data(input_dir)
-    rag_bench_data = RagBenchData(samples=[])
+    hallucination_data = HallucinationData(samples=[])
 
     for dataset_name in data:
         for split in ["train", "test", "validation"]:
@@ -136,9 +94,11 @@ def main(input_dir: str, output_dir: Path):
                 if not response["dataset_name"]:
                     continue
                 sample = create_sample(response)
-                rag_bench_data.samples.append(sample)
+                hallucination_data.samples.append(sample)
 
-    (output_dir / "ragbench_data.json").write_text(json.dumps(rag_bench_data.to_json(), indent=4))
+    (output_dir / "ragbench_data.json").write_text(
+        json.dumps(hallucination_data.to_json(), indent=4)
+    )
 
 
 if __name__ == "__main__":

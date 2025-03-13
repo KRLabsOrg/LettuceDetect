@@ -1,26 +1,74 @@
+from dataclasses import dataclass
+from typing import Literal
+
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
-from lettucedetect.preprocess.preprocess_ragbench import RagBenchSample
+
+@dataclass
+class HallucinationSample:
+    prompt: str
+    answer: str
+    labels: list[dict]
+    split: Literal["train", "dev", "test"]
+    task_type: str
+    dataset: Literal["ragtruth", "ragbench"]
+    language: Literal["en", "de"]
+
+    def to_json(self) -> dict:
+        return {
+            "prompt": self.prompt,
+            "answer": self.answer,
+            "labels": self.labels,
+            "split": self.split,
+            "task_type": self.task_type,
+            "dataset": self.dataset,
+            "language": self.language,
+        }
+
+    @classmethod
+    def from_json(cls, json_dict: dict) -> "HallucinationSample":
+        return cls(
+            prompt=json_dict["prompt"],
+            answer=json_dict["answer"],
+            labels=json_dict["labels"],
+            split=json_dict["split"],
+            task_type=json_dict["task_type"],
+            dataset=json_dict["dataset"],
+            language=json_dict["language"],
+        )
 
 
-class RagBenchDataset(Dataset):
-    """Dataset for RAG Bench data."""
+@dataclass
+class HallucinationData:
+    samples: list[HallucinationSample]
+
+    def to_json(self) -> list[dict]:
+        return [sample.to_json() for sample in self.samples]
+
+    @classmethod
+    def from_json(cls, json_dict: list[dict]) -> "HallucinationData":
+        return cls(
+            samples=[HallucinationSample.from_json(sample) for sample in json_dict],
+        )
+
+
+class HallucinationDataset(Dataset):
+    """Dataset for Hallucination data."""
 
     def __init__(
         self,
-        samples: list[RagBenchSample],
+        samples: list[HallucinationSample],
         tokenizer: AutoTokenizer,
         max_length: int = 4096,
     ):
         """Initialize the dataset.
 
-        :param samples: List of RagBenchSample objects.
+        :param samples: List of HallucinationSample objects.
         :param tokenizer: Tokenizer to use for encoding the data.
         :param max_length: Maximum length of the input sequence.
         """
-
         self.samples = samples
         self.tokenizer = tokenizer
         self.max_length = max_length
@@ -49,11 +97,10 @@ class RagBenchDataset(Dataset):
                  - offsets: Offset mappings for each token (as a tensor of shape [seq_length, 2]).
                  - answer_start_token: The index where answer tokens begin.
         """
-
         encoding = tokenizer(
             context,
             answer,
-            truncation=True,
+            truncation="only_first",
             max_length=max_length,
             return_offsets_mapping=True,
             return_tensors="pt",
@@ -80,11 +127,10 @@ class RagBenchDataset(Dataset):
         :param idx: Index of the item to get.
         :return: Dictionary with input IDs, attention mask, and labels.
         """
-
         sample = self.samples[idx]
 
         # Use the shared class method to perform tokenization and initial label setup.
-        encoding, labels, offsets, answer_start = RagBenchDataset.prepare_tokenized_input(
+        encoding, labels, offsets, answer_start = HallucinationDataset.prepare_tokenized_input(
             self.tokenizer, sample.prompt, sample.answer, self.max_length
         )
         # Adjust the token labels based on the annotated hallucination spans.
@@ -103,11 +149,15 @@ class RagBenchDataset(Dataset):
             )
 
             # Default label is 0 (supported content).
+            token_label = 0
             # If token overlaps any annotated hallucination span, mark it as hallucinated (1).
             for ann in sample.labels:
                 if token_abs_end > ann["start"] and token_abs_start < ann["end"]:
                     token_label = 1
                     break
+
+            labels[i] = token_label
+
         labels = torch.tensor(labels, dtype=torch.long)
 
         return {
