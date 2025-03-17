@@ -6,7 +6,7 @@ from pathlib import Path
 from vllm import LLM
 from vllm.sampling_params import SamplingParams
 
-from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData, RagTruthSample
+from lettucedetect.datasets.hallucination_dataset import HallucinationData
 
 
 def translate_text(text, model, sampling_params, source_lang="EN", target_lang="DE", hal=False):
@@ -144,9 +144,9 @@ def translate_sample(sample, model, sampling_params, i, log_file):
 
 def load_check_existing_data(output_file):
     if output_file.exists():
-        return RagTruthData.from_json(json.loads(output_file.read_text()))
+        return HallucinationData.from_json(json.loads(output_file.read_text()))
     else:
-        return RagTruthData(samples=[])
+        return HallucinationData(samples=[])
 
 
 def main(input_dir: Path, output_dir: Path):
@@ -160,7 +160,7 @@ def main(input_dir: Path, output_dir: Path):
     input_file = input_dir / "ragtruth_data.json"
     output_file = output_dir / "ragtruth_data_de.json"
     log_file = output_dir / "error_log.txt"
-    rag_truth_data = RagTruthData.from_json(json.loads(input_file.read_text()))
+    rag_truth_data = HallucinationData.from_json(json.loads(input_file.read_text()))
 
     rag_truth_data_de = load_check_existing_data(output_file=output_file)
     num_processed = len(rag_truth_data_de.samples)

@@ -1,12 +1,10 @@
 import argparse
 import json
-from dataclasses import dataclass
 from pathlib import Path
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 
 
-@dataclass
 def load_data(input_dir: Path) -> tuple[list[dict], list[dict]]:
     """Load the RAG truth data.
 
