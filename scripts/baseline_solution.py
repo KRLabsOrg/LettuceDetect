@@ -9,21 +9,20 @@ from openai import OpenAI
 import re
 
 
+
 def ask_chat(sample):
     prompt = f"""
         Below is given the original question and the facts needed to answer the question.
         {sample.prompt}
         Below is the answer to the question:
         {sample.answer}
-        Your task is to detect sentences in the answer that are not supported by the facts.
-        Please do so by determing whether the answer contains either or both of the following two types of hallucinations:
+        Your task is to determine whether the answer contains either or both of the following two types of hallucinations:
         1. conflict: instances where the answer presents direct contraction or opposition to the original facts;
         2. baseless info: instances where the generated answer includes information which is not inferred from the original facts.
-        Please read the text carefully, not always there are hallucination spans.
         Then, compile the labeled hallucinated spans into a JSON dict, with a key "hallucination list" and its value is a list of
-        hallucinated spans.
+        hallucinated spans. Do not assume hallucination spans are present in every case.
         If there exist potential hallucinations, the output should be in the following JSON format: {{"hallucination
-        list": [hallucination span1, hallucination span2, ...]}}. Otherwise, leave the value as a empty list as following: {{"hallucination
+        list": [hallucination span1, hallucination span2, ...]}}.If there are no hallucinations,return an empty list, as following: {{"hallucination
         list": []}}.
         Output:
     )"""
@@ -44,7 +43,7 @@ def ask_chat(sample):
 def create_labels(sample, chat_response):
     labels = []
     answer = sample.answer
-    print(chat_response["hallucination list"])
+    print(chat_response)
     for hal in chat_response["hallucination list"]:
         # print("HALLLLLLL", hal)
         match = re.search(re.escape(hal), answer)
@@ -79,7 +78,7 @@ def main(input_dir: Path, output_dir: Path):
     rag_truth_data_base = RagTruthData(samples=[])
     total_samples = len(rag_truth_data_de.samples)
 
-    for i, sample in enumerate(test_samples[:7]):
+    for i, sample in enumerate(test_samples[:20]):
         print(i)
         sample_de = create_sample_baseline(sample)
         rag_truth_data_base.samples.append(sample_de)
