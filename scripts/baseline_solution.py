@@ -6,24 +6,24 @@ from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData, RagTruthS
 from pathlib import Path
 from datasets import load_dataset
 from openai import OpenAI
-
 import re
 
 
 def ask_chat(sample):
     prompt = f"""
-        Below is the original context for a given question:
+        Below is given the original question and the facts needed to answer the question.
         {sample.prompt}
-        Below is a answer to the original context:
+        Below is the answer to the question:
         {sample.answer}
-        Your task is to determine whether the answer contains either or both of the following two types of hallucinations:
-        1. conflict: instances where the answer presents direct contraction or opposition to the original news;
-        2. baseless info: instances where the generated answer includes information which is not substantiated by or inferred from the
-        original news.
+        Your task is to detect sentences in the answer that are not supported by the facts.
+        Please do so by determing whether the answer contains either or both of the following two types of hallucinations:
+        1. conflict: instances where the answer presents direct contraction or opposition to the original facts;
+        2. baseless info: instances where the generated answer includes information which is not inferred from the original facts.
+        Please read the text carefully, not always there are hallucination spans.
         Then, compile the labeled hallucinated spans into a JSON dict, with a key "hallucination list" and its value is a list of
-        hallucinated spans. Please also include the reason for hallucination which can be either conflict or baseless info.
+        hallucinated spans.
         If there exist potential hallucinations, the output should be in the following JSON format: {{"hallucination
-        list": [[hallucination span1, reason1 ], [hallucination span2, reason2], ...]}}. Otherwise, leave the value as a empty list as following: {{"hallucination
+        list": [hallucination span1, hallucination span2, ...]}}. Otherwise, leave the value as a empty list as following: {{"hallucination
         list": []}}.
         Output:
     )"""
@@ -31,26 +31,25 @@ def ask_chat(sample):
         model="gpt-4-turbo",
         messages=[
             {
-                "role": "developer",
+                "role": "system",
                 "content": "You are a helpful assistant who can identify hallucination spans.",
             },
             {"role": "user", "content": prompt},
         ],
         temperature=0,
     )
-    print(response)
     return response.choices[0].message.content
 
 
 def create_labels(sample, chat_response):
-    print(chat_response)
     labels = []
     answer = sample.answer
     print(chat_response["hallucination list"])
     for hal in chat_response["hallucination list"]:
-        print(hal)
-        match = re.search(re.escape(hal[0]), answer)
-        labels.append({"start": match.start(), "end": match.end(), "label": hal[1]})
+        # print("HALLLLLLL", hal)
+        match = re.search(re.escape(hal), answer)
+        if match:
+            labels.append({"start": match.start(), "end": match.end()})
     return labels
 
 
@@ -74,15 +73,18 @@ def main(input_dir: Path, output_dir: Path):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     input_file = input_dir / "ragtruth_data_de.json"
+
     rag_truth_data_de = RagTruthData.from_json(json.loads(input_file.read_text()))
+    test_samples = [sample for sample in rag_truth_data_de.samples if sample.split == "test"]
     rag_truth_data_base = RagTruthData(samples=[])
     total_samples = len(rag_truth_data_de.samples)
 
-    for i, sample in enumerate(rag_truth_data_de.samples[:20]):
+    for i, sample in enumerate(test_samples[:7]):
+        print(i)
         sample_de = create_sample_baseline(sample)
         rag_truth_data_base.samples.append(sample_de)
-        if i % 3 == 0 or i == total_samples - 1:
-            (output_dir / "rag_truth_data_base.json").write_text(
+        if i % 5 == 0 or i == total_samples - 1:
+            (output_dir / "rag_truth_data_base_test.json").write_text(
                 json.dumps(rag_truth_data_base.to_json(), indent=4)
             )
 
