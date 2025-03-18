@@ -82,6 +82,7 @@ def main():
     dev_samples = ragtruth_dev_samples
 
     if args.ragbench_path:
+        print(f"Loading RAGBench data from {args.ragbench_path}")
         ragbench_path = Path(args.ragbench_path)
         ragbench_data = HallucinationData.from_json(json.loads(ragbench_path.read_text()))
         ragbench_train_samples = [
@@ -89,6 +90,7 @@ def main():
         ]
         ragbench_dev_samples = [sample for sample in ragbench_data.samples if sample.split == "dev"]
 
+        print(f"Adding {len(ragbench_train_samples)} RAGBench train samples")
         train_samples.extend(ragbench_train_samples)
         dev_samples.extend(ragbench_dev_samples)
 
@@ -117,7 +119,7 @@ def main():
         model=model,
         tokenizer=tokenizer,
         train_loader=train_loader,
-        dev_loader=dev_loader,
+        test_loader=dev_loader,
         epochs=args.epochs,
         learning_rate=args.learning_rate,
         save_path=args.output_dir,

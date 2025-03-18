@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from datasets import load_dataset
+from tqdm import tqdm
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 
@@ -58,10 +59,12 @@ def create_labels(response, hallucinations):
     return labels
 
 
-def create_sample(response: dict) -> HallucinationSample:
+def create_sample(response: dict, dataset_name: str, split: str) -> HallucinationSample:
     """Create a sample from the RAGBench data.
 
     :param response: The response from the RAG bench data.
+    :param dataset_name: The name of the dataset.
+    :param split: The split of the dataset.
     :return: A sample from the RAGBench data.
     """
     context_str = "\n".join(
@@ -73,8 +76,6 @@ def create_sample(response: dict) -> HallucinationSample:
         context=context_str,
     )
     answer = " ".join([sentence for _, sentence in response["response_sentences"]])
-    split = response["dataset_name"].split("_")[1]
-    task_type = response["dataset_name"].split("_")[0]
     labels = []
     hallucinations = []
     if len(response["unsupported_response_sentence_keys"]) > 0:
@@ -85,7 +86,7 @@ def create_sample(response: dict) -> HallucinationSample:
         ]
         labels = create_labels(response, hallucinations)
 
-    return HallucinationSample(prompt, answer, labels, split, task_type, "ragbench", "en")
+    return HallucinationSample(prompt, answer, labels, split, dataset_name, "ragbench", "en")
 
 
 def main(input_dir: str, output_dir: Path):
@@ -99,15 +100,17 @@ def main(input_dir: str, output_dir: Path):
     hallucination_data = HallucinationData(samples=[])
 
     for dataset_name in data:
+        print(f"Processing {dataset_name} dataset")
         for split in ["train", "test", "validation"]:
             data_split = data[dataset_name][split]
-            for response in data_split:
+            split = "dev" if split == "validation" else split
+            for response in tqdm(data_split, desc=f"Processing {split} split"):
                 if not response["dataset_name"]:
                     continue
-                sample = create_sample(response)
+                sample = create_sample(response, dataset_name, split)
                 hallucination_data.samples.append(sample)
-                break
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "ragbench_data.json").write_text(
         json.dumps(hallucination_data.to_json(), indent=4)
     )

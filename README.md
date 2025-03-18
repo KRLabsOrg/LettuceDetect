@@ -132,12 +132,12 @@ Then you can train the model with the following command.
 
 ```bash
 python scripts/train.py \
-    --data_path data/ragtruth/ragtruth_data.json \
-    --model_name answerdotai/ModernBERT-base \
-    --output_dir outputs/hallucination_detector \
-    --batch_size 4 \
+    --ragtruth-path data/ragtruth/ragtruth_data.json \
+    --model-name answerdotai/ModernBERT-base \
+    --output-dir outputs/hallucination_detector \
+    --batch-size 4 \
     --epochs 6 \
-    --learning_rate 1e-5
+    --learning-rate 1e-5
 ```
 
 We trained our models for 6 epochs with a batch size of 8 on a single A100 GPU.
