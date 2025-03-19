@@ -10,10 +10,30 @@ import re
 
 
 def ask_chat(sample):
+    '''
     prompt = f"""
-        Below is given the original question and the facts needed to answer the question:
+        Unten findest du die ursprüngliche Frage und die dazugehörigen Fakten:
         {sample.prompt}
-        Below is the answer to the question:
+        Unten ist die Antwort auf die Frage:
+        {sample.answer}
+        Deine Aufgabe ist es zu bestimmen, ob die Antwort eine oder beider der folgenden Arten von Halluzinationen enthält:
+        1. Widerspruch: Fälle, in denen die Antwort einen direkten Gegensatz zu den ursprünglichen Fakten darstellt
+        2. Unbegründete Information: Fälle, in denen die Antwort Informationen enthält die nicht aus den ursprünglichen Fakten abgeleitet werden können
+        Nicht immer enthält eine Antwort Halluzinationen.
+        Du solltest du die Halluzinationen in einer JSON-Datenstruktur zusammenfassen.
+        Verwende dazu das folgende Format:
+        Falls Halluzinationen vorhanden sind, soll das JSON-Format wie folgt aussehen:
+        {{"hallucination list": [hallucination span1, hallucination span2, ...]}}
+        Falls keine Halluzinationen vorhanden sind, gib eine leere Liste zurück:
+        {{"hallucination list": []}}
+        Ausgabe:
+    )"""
+    '''
+
+    prompt = f"""
+        Below is given the original question and the facts needed to answer the question in german:
+        {sample.prompt}
+        Below is the answer to the question in german:
         {sample.answer}
         Your task is to determine whether the answer contains either or both of the following two types of hallucinations:
         1. conflict: instances where the answer presents direct contraction or opposition to the original facts;
@@ -25,6 +45,7 @@ def ask_chat(sample):
         list": []}}.
         Output:
     )"""
+
     response = client.chat.completions.create(
         model="gpt-4-turbo",
         messages=[
@@ -66,6 +87,13 @@ def create_sample_baseline(sample):
     return RagTruthSample(prompt, answer, labels, split, task_type)
 
 
+def load_check_existing_data(output_file):
+    if output_file.exists():
+        return RagTruthData.from_json(json.loads(output_file.read_text()))
+    else:
+        return RagTruthData(samples=[])
+
+
 def main(input_dir: Path, output_dir: Path):
     """Prompts ChatGPT to find hallucination spans in the german samples and saves the response in a new json file.
 
@@ -75,19 +103,22 @@ def main(input_dir: Path, output_dir: Path):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     input_file = input_dir / "ragtruth_data_de.json"
+    output_file = output_dir / "ragtruth_data_chatgpt.json"
 
     rag_truth_data_de = RagTruthData.from_json(json.loads(input_file.read_text()))
     test_samples = [sample for sample in rag_truth_data_de.samples if sample.split == "test"]
-    rag_truth_data_base = RagTruthData(samples=[])
-    total_samples = len(rag_truth_data_de.samples)
 
-    for i, sample in enumerate(test_samples):
+    rag_truth_data_gpt = load_check_existing_data(output_file=output_file)
+    num_processed = len(rag_truth_data_gpt.samples)
+    total_samples = len(rag_truth_data_gpt.samples)
+
+    for i, sample in enumerate(test_samples[num_processed:], start=num_processed):
         print(i)
-        sample_de = create_sample_baseline(sample)
-        rag_truth_data_base.samples.append(sample_de)
+        sample_gpt = create_sample_baseline(sample)
+        rag_truth_data_gpt.samples.append(sample_gpt)
         if i % 10 == 0 or i == total_samples - 1:
             (output_dir / "ragtruth_data_chatgpt.json").write_text(
-                json.dumps(rag_truth_data_base.to_json(), indent=4)
+                json.dumps(rag_truth_data_gpt.to_json(), indent=4)
             )
 
 
