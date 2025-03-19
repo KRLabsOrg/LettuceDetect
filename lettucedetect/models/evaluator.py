@@ -1,5 +1,10 @@
 import torch
-from sklearn.metrics import classification_report, precision_recall_fscore_support
+from sklearn.metrics import (
+    auc,
+    classification_report,
+    precision_recall_fscore_support,
+    roc_curve,
+)
 from torch.nn import Module
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
@@ -92,6 +97,8 @@ def print_metrics(metrics: dict[str, dict[str, float]]) -> None:
     print(f"  Recall: {metrics['supported']['recall']:.4f}")
     print(f"  F1: {metrics['supported']['f1']:.4f}")
 
+    print(f"\nAUROC: {metrics['auroc']:.4f}")
+
 
 def evaluate_model_example_level(
     model: Module,
@@ -168,6 +175,11 @@ def evaluate_model_example_level(
             "f1": float(f1[1]),
         },
     }
+
+    # Calculating AUROC
+    fpr, tpr, thresholds = roc_curve(example_labels, example_preds)
+    auroc = auc(fpr, tpr)
+    results["auroc"] = auroc
 
     if verbose:
         report = classification_report(
