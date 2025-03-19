@@ -56,6 +56,10 @@ def evaluate_model(
         all_labels, all_preds, labels=[0, 1], average=None
     )
 
+    # Calculating AUROC
+    fpr, tpr, _ = roc_curve(all_labels, all_preds)
+    auroc = auc(fpr, tpr)
+
     results: dict[str, dict[str, float]] = {
         "supported": {  # Class 0
             "precision": float(precision[0]),
@@ -68,6 +72,7 @@ def evaluate_model(
             "f1": float(f1[1]),
         },
     }
+    results["auroc"] = auroc
 
     if verbose:
         report = classification_report(
@@ -177,7 +182,7 @@ def evaluate_model_example_level(
     }
 
     # Calculating AUROC
-    fpr, tpr, thresholds = roc_curve(example_labels, example_preds)
+    fpr, tpr, _ = roc_curve(example_labels, example_preds)
     auroc = auc(fpr, tpr)
     results["auroc"] = auroc
 

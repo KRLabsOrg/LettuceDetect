@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Script to upload preprocessed LettuceDetect datasets to Hugging Face Hub.
-"""
+"""Script to upload preprocessed LettuceDetect datasets to Hugging Face Hub."""
 
 import argparse
 import json
