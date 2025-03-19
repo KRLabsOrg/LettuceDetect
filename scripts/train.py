@@ -94,7 +94,7 @@ def main():
         train_samples.extend(ragbench_train_samples)
         dev_samples.extend(ragbench_dev_samples)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
     data_collator = DataCollatorForTokenClassification(tokenizer=tokenizer, label_pad_token_id=-100)
 
     train_dataset = HallucinationDataset(train_samples, tokenizer)
@@ -113,7 +113,9 @@ def main():
         collate_fn=data_collator,
     )
 
-    model = AutoModelForTokenClassification.from_pretrained(args.model_name, num_labels=2)
+    model = AutoModelForTokenClassification.from_pretrained(
+        args.model_name, num_labels=2, trust_remote_code=True
+    )
 
     trainer = Trainer(
         model=model,
