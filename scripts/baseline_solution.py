@@ -11,7 +11,7 @@ import re
 
 def ask_chat(sample):
     prompt = f"""
-        Below is given the original question and the facts needed to answer the question.
+        Below is given the original question and the facts needed to answer the question:
         {sample.prompt}
         Below is the answer to the question:
         {sample.answer}
