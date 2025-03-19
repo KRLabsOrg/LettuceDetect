@@ -9,7 +9,6 @@ from openai import OpenAI
 import re
 
 
-
 def ask_chat(sample):
     prompt = f"""
         Below is given the original question and the facts needed to answer the question.
@@ -45,26 +44,30 @@ def create_labels(sample, chat_response):
     answer = sample.answer
     print(chat_response)
     for hal in chat_response["hallucination list"]:
-        # print("HALLLLLLL", hal)
         match = re.search(re.escape(hal), answer)
         if match:
-            labels.append({"start": match.start(), "end": match.end()})
+            labels.append({"start": match.start(), "end": match.end(), "text": hal})
     return labels
 
 
 def create_sample_baseline(sample):
+    """Creates a sample where the annotations / labels are based on the ChatGPT responses."""
+
     prompt = sample.prompt
     answer = sample.answer
     split = sample.split
     chat_response = ask_chat(sample)
-    chat_response = json.loads(chat_response)
+    try:
+        chat_response = json.loads(chat_response.strip())
+    except json.JSONDecodeError:
+        chat_response = {"hallucination list": []}
     labels = create_labels(sample, chat_response)
     task_type = sample.task_type
     return RagTruthSample(prompt, answer, labels, split, task_type)
 
 
 def main(input_dir: Path, output_dir: Path):
-    """Translates the already preprocessed RAG Truth Data
+    """Prompts ChatGPT to find hallucination spans in the german samples and saves the response in a new json file.
 
     :param input_dir: Path to the input directory.
     :param output_dir: Path to the output directory.
@@ -78,12 +81,12 @@ def main(input_dir: Path, output_dir: Path):
     rag_truth_data_base = RagTruthData(samples=[])
     total_samples = len(rag_truth_data_de.samples)
 
-    for i, sample in enumerate(test_samples[:20]):
+    for i, sample in enumerate(test_samples):
         print(i)
         sample_de = create_sample_baseline(sample)
         rag_truth_data_base.samples.append(sample_de)
-        if i % 5 == 0 or i == total_samples - 1:
-            (output_dir / "rag_truth_data_base_test.json").write_text(
+        if i % 10 == 0 or i == total_samples - 1:
+            (output_dir / "ragtruth_data_chatgpt.json").write_text(
                 json.dumps(rag_truth_data_base.to_json(), indent=4)
             )
 
