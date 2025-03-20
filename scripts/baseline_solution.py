@@ -8,55 +8,66 @@ from datasets import load_dataset
 from openai import OpenAI
 import re
 
-
 def ask_chat(sample):
-    '''
+    
     prompt = f"""
-        Unten findest du die ursprüngliche Frage und die dazugehörigen Fakten:
-        {sample.prompt}
-        Unten ist die Antwort auf die Frage:
-        {sample.answer}
-        Deine Aufgabe ist es zu bestimmen, ob die Antwort eine oder beider der folgenden Arten von Halluzinationen enthält:
-        1. Widerspruch: Fälle, in denen die Antwort einen direkten Gegensatz zu den ursprünglichen Fakten darstellt
-        2. Unbegründete Information: Fälle, in denen die Antwort Informationen enthält die nicht aus den ursprünglichen Fakten abgeleitet werden können
-        Nicht immer enthält eine Antwort Halluzinationen.
-        Du solltest du die Halluzinationen in einer JSON-Datenstruktur zusammenfassen.
-        Verwende dazu das folgende Format:
-        Falls Halluzinationen vorhanden sind, soll das JSON-Format wie folgt aussehen:
-        {{"hallucination list": [hallucination span1, hallucination span2, ...]}}
-        Falls keine Halluzinationen vorhanden sind, gib eine leere Liste zurück:
-        {{"hallucination list": []}}
-        Ausgabe:
-    )"""
-    '''
+        <task>
+        You will act as an expert annotator to evaluate an answer against a provided source text.
+        The source text will be given within <source>... </source> XML tags.
+        The answer  will be given within <answer>... </answer> XML tags.
 
-    prompt = f"""
-        Below is given the original question and the facts needed to answer the question in german:
-        {sample.prompt}
-        Below is the answer to the question in german:
-        {sample.answer}
-        Your task is to determine whether the answer contains either or both of the following two types of hallucinations:
-        1. conflict: instances where the answer presents direct contraction or opposition to the original facts;
-        2. baseless info: instances where the generated answer includes information which is not inferred from the original facts.
-        Then, compile the labeled hallucinated spans into a JSON dict, with a key "hallucination list" and its value is a list of
-        hallucinated spans. Do not assume hallucination spans are present in every case.
-        If there exist potential hallucinations, the output should be in the following JSON format: {{"hallucination
-        list": [hallucination span1, hallucination span2, ...]}}.If there are no hallucinations,return an empty list, as following: {{"hallucination
+        For each answer, follow these steps:
+
+        Step 1: Read and fully understand the answer. The answer is a text containing information related to the source text but it might also contain information not provided in the source text.
+        Step 2: Thoroughly analyze how the answer relates to the information in the source text. Then write your reasoning in 1-3 sentences
+        to determine whether the answer contains hallucinations. Hallucinations are sentences that contain one of the following information:
+            a. conflict: instances where the answer presents direct contraction or opposition to the original facts;
+            b. baseless info: instances where the generated answer includes information which is not inferred from the original facts.
+
+        Step 3: Determine which sentence of the answer is an hallucination. Not every answer contains hallucinations.
+        Step 4: Compile the labeled hallucinated spans found into a JSON dict, with a key "hallucination list" and its value is a list of
+        hallucinated spans. If there exist potential hallucinations, the output should be in the following JSON format: {{"hallucination
+        list": [hallucination span1, hallucination span2, ...]}}.In case of no hallucinations, please output an empty list : {{"hallucination
         list": []}}.
-        Output:
+        Return *ONLY* the JSON dict.
+     
+        </task>
+
+        <example>
+        Given below is an example for you to comprehend the task. It guides you in identifying hallucinations.
+
+        Source: What is the capital of France? What is the population of France? France is a country in Europe. The capital of France is Paris. The population of France is 67 million.
+        Answer: The capital of France is Paris. The population of France is 69 million.
+
+        1.The answer states that Paris is capital of France.- This matches the fact and is correct.
+        2.The answer states that the population of France is 69 million. This condradicts the fact that the population is actually 67 million. 
+        Hallucination -> "The population of France is 69 million."
+        Therefore, output only the JSON dict {{"hallucination list": ["The population of France is 69 million." ]}}
+        </example>
+        \n 
+
+        <source>
+        {sample.prompt}
+        </source>
+        \n 
+        <answer>
+        {sample.answer}
+        </answer>
+       
     )"""
 
     response = client.chat.completions.create(
-        model="gpt-4-turbo",
+        model="gpt-4o",
         messages=[
             {
-                "role": "system",
-                "content": "You are a helpful assistant who can identify hallucination spans.",
+                "role": "developer",
+                "content": "You are a helpful assistant.",
             },
             {"role": "user", "content": prompt},
         ],
         temperature=0,
     )
+    print(response.choices[0].message)
     return response.choices[0].message.content
 
 
@@ -103,7 +114,7 @@ def main(input_dir: Path, output_dir: Path):
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
     input_file = input_dir / "ragtruth_data_de.json"
-    output_file = output_dir / "ragtruth_data_chatgpt.json"
+    output_file = output_dir / "ragtruth_data_chatgpt4o.json"
 
     rag_truth_data_de = RagTruthData.from_json(json.loads(input_file.read_text()))
     test_samples = [sample for sample in rag_truth_data_de.samples if sample.split == "test"]
@@ -112,12 +123,12 @@ def main(input_dir: Path, output_dir: Path):
     num_processed = len(rag_truth_data_gpt.samples)
     total_samples = len(rag_truth_data_gpt.samples)
 
-    for i, sample in enumerate(test_samples[num_processed:], start=num_processed):
-        print(i)
+    for i, sample in enumerate(test_samples, start=num_processed):
+        print("--------",i,"--------")
         sample_gpt = create_sample_baseline(sample)
         rag_truth_data_gpt.samples.append(sample_gpt)
-        if i % 10 == 0 or i == total_samples - 1:
-            (output_dir / "ragtruth_data_chatgpt.json").write_text(
+        if i % 1 == 0 or i == total_samples - 1:
+            (output_dir / "ragtruth_data_chatgpt4o.json").write_text(
                 json.dumps(rag_truth_data_gpt.to_json(), indent=4)
             )
 
