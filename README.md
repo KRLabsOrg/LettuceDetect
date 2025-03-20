@@ -134,10 +134,10 @@ Then you can train the model with the following command.
 python scripts/train.py \
     --ragtruth-path data/ragtruth/ragtruth_data.json \
     --model-name answerdotai/ModernBERT-base \
-    --output-dir outputs/hallucination_detector \
+    --output-dir output/hallucination_detector \
     --batch-size 4 \
     --epochs 6 \
-    --learning-rate 1e-5
+    --learning-rate 1e-5 
 ```
 
 We trained our models for 6 epochs with a batch size of 8 on a single A100 GPU.
@@ -147,7 +147,7 @@ We trained our models for 6 epochs with a batch size of 8 on a single A100 GPU.
 You can evaluate the models on each level (example, token and span) and each data-type.
 
 ```bash
-python -m scripts/evaluate \
+python scripts/evaluate.py \
     --model_path outputs/hallucination_detector \
     --data_path data/ragtruth/ragtruth_data.json \
     --evaluation_type example_level

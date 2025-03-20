@@ -130,6 +130,7 @@ def evaluate_model_example_level(
     model.eval()
     example_preds: list[int] = []
     example_labels: list[int] = []
+    example_probs: list[float] = []
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating (Example Level)", leave=False):
@@ -141,6 +142,7 @@ def evaluate_model_example_level(
             outputs = model(input_ids, attention_mask=attention_mask)
             logits: torch.Tensor = outputs.logits  # Shape: [batch_size, seq_len, num_labels]
             predictions: torch.Tensor = torch.argmax(logits, dim=-1)  # Shape: [batch_size, seq_len]
+            probs = torch.softmax(logits, dim=-1)
 
             # Process each example in the batch separately.
             for i in range(batch["labels"].size(0)):
@@ -156,13 +158,16 @@ def evaluate_model_example_level(
                     # Apply the valid mask and bring labels to CPU if needed.
                     sample_labels = sample_labels[valid_mask].cpu()
                     sample_preds = sample_preds[valid_mask]
+                    sample_probs = probs[i][valid_mask]
 
                     # If any token in the sample is hallucinated (1), consider the whole sample hallucinated.
                     true_example_label = 1 if (sample_labels == 1).any().item() else 0
                     pred_example_label = 1 if (sample_preds == 1).any().item() else 0
+                    max_prob = sample_probs.max(dim=-1).values
 
                 example_labels.append(true_example_label)
                 example_preds.append(pred_example_label)
+                example_probs.append(max_prob)
 
     precision, recall, f1, _ = precision_recall_fscore_support(
         example_labels, example_preds, labels=[0, 1], average=None, zero_division=0
@@ -182,7 +187,7 @@ def evaluate_model_example_level(
     }
 
     # Calculating AUROC
-    fpr, tpr, _ = roc_curve(example_labels, example_preds)
+    fpr, tpr, _ = roc_curve(example_labels, example_probs)
     auroc = auc(fpr, tpr)
     results["auroc"] = auroc
 
