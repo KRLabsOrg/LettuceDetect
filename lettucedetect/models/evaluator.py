@@ -151,9 +151,10 @@ def evaluate_model_example_level(
                 valid_mask = sample_labels != -100
 
                 if valid_mask.sum().item() == 0:
-                    # If no valid tokens, assign default class (supported).
                     true_example_label = 0
                     pred_example_label = 0
+                    # Add a default probability score
+                    max_prob = 0.0
                 else:
                     # Apply the valid mask and bring labels to CPU if needed.
                     sample_labels = sample_labels[valid_mask].cpu()
@@ -163,7 +164,8 @@ def evaluate_model_example_level(
                     # If any token in the sample is hallucinated (1), consider the whole sample hallucinated.
                     true_example_label = 1 if (sample_labels == 1).any().item() else 0
                     pred_example_label = 1 if (sample_preds == 1).any().item() else 0
-                    max_prob = sample_probs.max(dim=-1).values
+                    # Get the max probability for class 1 (hallucinated)
+                    max_prob = sample_probs[:, 1].max().item()
 
                 example_labels.append(true_example_label)
                 example_preds.append(pred_example_label)
