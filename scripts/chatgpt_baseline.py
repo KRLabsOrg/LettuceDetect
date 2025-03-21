@@ -65,7 +65,6 @@ def ask_chat(sample):
         </example3>
 
         \n 
-
         <source>
         {sample.prompt}
         </source>
