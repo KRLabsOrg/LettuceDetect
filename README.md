@@ -10,12 +10,6 @@ LettuceDetect is a lightweight and efficient tool for detecting hallucinations i
 
 Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-industry.34/) paper which is an encoder-based model and uses a similar token-level approach.
 
-[![PyPI](https://img.shields.io/pypi/v/lettucedetect)](https://pypi.org/project/lettucedetect/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Hugging Face](https://img.shields.io/badge/🤗-Models-yellow.svg)](https://huggingface.co/KRLabsOrg)
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Ubca5aMaBGdHtJ1rpqj3Ke9SLEr-PaDn?usp=sharing)
-[![arXiv](https://img.shields.io/badge/arXiv-2502.17125-b31b1b.svg)](https://arxiv.org/abs/2502.17125)
-
 ## Highlights
 
 - LettuceDetect addresses two critical limitations of existing hallucination detection models:
