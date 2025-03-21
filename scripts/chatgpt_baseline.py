@@ -1,12 +1,14 @@
 import json
-from pathlib import Path
-from torch.utils.data import DataLoader
 import argparse
-from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData, RagTruthSample
+import re
 from pathlib import Path
+
+from torch.utils.data import DataLoader
 from datasets import load_dataset
 from openai import OpenAI
-import re
+
+from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData, RagTruthSample
+
 
 
 def ask_chat(sample):
