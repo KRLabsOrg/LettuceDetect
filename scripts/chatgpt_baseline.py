@@ -40,7 +40,7 @@ def ask_chat(sample):
 
         1.The answer states that Paris is capital of France. This matches the source and is correct.
         2.The answer states that the population of France is 69 million. This condradicts the source that the population is actually 67 million. 
-        Hallucination -> "The population of France is 69 million."
+        Hallucination -> "Die Bevölkerung von Frankreich beträgt 69 Millionen."
         Therefore, output only {{"hallucination list": ["Die Bevölkerung Frankreichs beträgt 69 Millionen." ]}}
         </example1>
 
