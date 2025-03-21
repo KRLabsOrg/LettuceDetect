@@ -146,7 +146,7 @@ def main(input_dir: Path, output_dir: Path):
         print("--------", i, "--------")
         sample_gpt = create_sample_baseline(sample)
         rag_truth_data_gpt.samples.append(sample_gpt)
-        if i % 1 == 0 or i == total_samples - 1:
+        if i % 10 == 0 or i == total_samples - 1:
             (output_dir / "ragtruth_data_chatgpt4o.json").write_text(
                 json.dumps(rag_truth_data_gpt.to_json(), indent=4)
             )
