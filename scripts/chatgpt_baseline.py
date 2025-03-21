@@ -9,7 +9,6 @@ from openai import OpenAI
 
 from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData, RagTruthSample
 
-
 def ask_chat(sample):
     prompt = f"""
         <task>
