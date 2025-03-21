@@ -8,8 +8,8 @@ from datasets import load_dataset
 from openai import OpenAI
 import re
 
+
 def ask_chat(sample):
-    
     prompt = f"""
         <task>
         You will act as an expert annotator to evaluate an answer against a provided source text.
@@ -17,33 +17,53 @@ def ask_chat(sample):
         The answer  will be given within <answer>... </answer> XML tags.
 
         For each answer, follow these steps:
-
-        Step 1: Read and fully understand the answer. The answer is a text containing information related to the source text but it might also contain information not provided in the source text.
-        Step 2: Thoroughly analyze how the answer relates to the information in the source text. Then write your reasoning in 1-3 sentences
-        to determine whether the answer contains hallucinations. Hallucinations are sentences that contain one of the following information:
-            a. conflict: instances where the answer presents direct contraction or opposition to the original facts;
-            b. baseless info: instances where the generated answer includes information which is not inferred from the original facts.
-
-        Step 3: Determine which sentence of the answer is an hallucination. Not every answer contains hallucinations.
+        Step 1: Read and fully understand the answer in german. The answer is a text containing information related to the source text.
+        Step 2: Thoroughly analyze how the answer relates to the information in the source text. Determine whether the answer contains hallucinations. Hallucinations are sentences that contain one of the following information:
+            a. conflict: instances where the answer presents direct contraction or opposition to the original source.
+            b. baseless info: instances where the generated answer includes information which is not inferred from the original source. General knowledge or logical deductions should not be considered hallucinations unless they contradict the source.
+        Step 3: Determine whether the answer contains any hallucinations. If no hallucinations are found, return an empty list.
         Step 4: Compile the labeled hallucinated spans found into a JSON dict, with a key "hallucination list" and its value is a list of
         hallucinated spans. If there exist potential hallucinations, the output should be in the following JSON format: {{"hallucination
-        list": [hallucination span1, hallucination span2, ...]}}.In case of no hallucinations, please output an empty list : {{"hallucination
+        list": [hallucination span1, hallucination span2, ...]}}. In case of no hallucinations, please output an empty list : {{"hallucination
         list": []}}.
-        Return *ONLY* the JSON dict.
+        Output only the JSON dict.
      
         </task>
 
-        <example>
-        Given below is an example for you to comprehend the task. It guides you in identifying hallucinations.
+        Given below are three examples for you to comprehend the task.
+        <example1>
+       
 
-        Source: What is the capital of France? What is the population of France? France is a country in Europe. The capital of France is Paris. The population of France is 67 million.
-        Answer: The capital of France is Paris. The population of France is 69 million.
+        Source: Was ist die Hauptstadt von Frankreich? Wie hoch ist die Bevölkerung Frankreichs? Frankreich ist ein Land in Europa. Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung Frankreichs beträgt 67 Millionen.
+        Answer: Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung Frankreichs beträgt 69 Millionen.
 
-        1.The answer states that Paris is capital of France.- This matches the fact and is correct.
-        2.The answer states that the population of France is 69 million. This condradicts the fact that the population is actually 67 million. 
+        1.The answer states that Paris is capital of France. This matches the source and is correct.
+        2.The answer states that the population of France is 69 million. This condradicts the source that the population is actually 67 million. 
         Hallucination -> "The population of France is 69 million."
-        Therefore, output only the JSON dict {{"hallucination list": ["The population of France is 69 million." ]}}
-        </example>
+        Therefore, output only {{"hallucination list": ["Die Bevölkerung Frankreichs beträgt 69 Millionen." ]}}
+        </example1>
+
+        <example2>
+        Source: Was ist die Hauptstadt von Frankreich? Wie hoch ist die Bevölkerung Frankreichs?  Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung von Frankreich beträgt 67 Millionen.
+        Answer: Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung von Frankreich beträgt 67 Millionen, und die Amtssprache ist Spanisch.
+
+        1.The answer states that Paris is capital of France. This matches the source and is correct.
+        2.The answer states that the population of France is 69 million. This matches the source and is correct.
+        3. The answer states that the language spoken in France is Spanish. This is incorrect and not supported by the source.
+        Hallucination -> "die Amtssprache ist Spanisch"
+        Therefore, output only {{"hallucination list": ["die Amtssprache ist Spanisch" ]}}
+
+        </example2>
+
+        <example3>
+        Source: Was ist die Hauptstadt von Österreich? Wie hoch ist die Bevölkerung Österreich? Österreich ist ein Land in Europa. Die Hauptstadt von Österreich ist Wien. Die Bevölkerung Österreichs beträgt 9.1 Millionen.
+        Answer: Die Hauptstadt von Österreich ist Wien. Die Bevölkerung Österreichs beträgt 9.1 Millionen.
+        1.The answer states that Vienna is capital of Austria. This matches the source and is correct.
+        2.The answer states that the population of Austria is 9.1 million. This matches the source and is correct.
+        Hallucination -> No hallucinations found
+        Therefore, output only {{"hallucination list": []}}
+        </example3>
+
         \n 
 
         <source>
@@ -60,21 +80,19 @@ def ask_chat(sample):
         model="gpt-4o",
         messages=[
             {
-                "role": "developer",
+                "role": "assistant",
                 "content": "You are a helpful assistant.",
             },
             {"role": "user", "content": prompt},
         ],
         temperature=0,
     )
-    print(response.choices[0].message)
     return response.choices[0].message.content
 
 
 def create_labels(sample, chat_response):
     labels = []
     answer = sample.answer
-    print(chat_response)
     for hal in chat_response["hallucination list"]:
         match = re.search(re.escape(hal), answer)
         if match:
@@ -89,11 +107,13 @@ def create_sample_baseline(sample):
     answer = sample.answer
     split = sample.split
     chat_response = ask_chat(sample)
+    match = re.search(r"\{.*?\}", chat_response, re.DOTALL)
     try:
-        chat_response = json.loads(chat_response.strip())
+        extracted_json = match.group(0)
+        extracted_json = json.loads(extracted_json)
     except json.JSONDecodeError:
         chat_response = {"hallucination list": []}
-    labels = create_labels(sample, chat_response)
+    labels = create_labels(sample, extracted_json)
     task_type = sample.task_type
     return RagTruthSample(prompt, answer, labels, split, task_type)
 
@@ -124,7 +144,7 @@ def main(input_dir: Path, output_dir: Path):
     total_samples = len(rag_truth_data_gpt.samples)
 
     for i, sample in enumerate(test_samples, start=num_processed):
-        print("--------",i,"--------")
+        print("--------", i, "--------")
         sample_gpt = create_sample_baseline(sample)
         rag_truth_data_gpt.samples.append(sample_gpt)
         if i % 1 == 0 or i == total_samples - 1:
