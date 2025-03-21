@@ -2,7 +2,7 @@
 
 
 <p align="center">
-  <img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/lettuce_detective.png?raw=true" alt="LettuceDetect Logo" width="400"/>
+  <img src="/assets/lettuce_detective.png" alt="LettuceDetect Logo" width="400"/>
   <br><em>Because even AI needs a reality check! 🥬</em>
 </p>
 
@@ -41,11 +41,6 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 Install from the repository:
 ```bash
 pip install -e .
-```
-
-From pip:
-```bash
-pip install lettucedetect
 ```
 
 ### Quick Start
@@ -196,18 +191,3 @@ streamlit run demo/streamlit_demo.py
 
 MIT License - see LICENSE file for details.
 
-## Citation
-
-Please cite the following paper if you use LettuceDetect in your work:
-
-```bibtex
-@misc{Kovacs:2025,
-      title={LettuceDetect: A Hallucination Detection Framework for RAG Applications}, 
-      author={Ádám Kovács and Gábor Recski},
-      year={2025},
-      eprint={2502.17125},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL},
-      url={https://arxiv.org/abs/2502.17125}, 
-}
-```
