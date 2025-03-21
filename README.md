@@ -79,7 +79,7 @@ We evaluate our model on the test set of the [RAGTruth](https://aclanthology.org
 The results on the example-level can be seen in the table below.
 
 <p align="center">
-  <img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/example_level_lettucedetect.png?raw=true" alt="Example-level Results" width="800"/>
+  <img src="/assets/example_level_results.png" alt="Example-level Results" width="800"/>
 </p>
 
 **Span-level results**
@@ -87,7 +87,7 @@ The results on the example-level can be seen in the table below.
 At the span level, our model achieves the best scores across all data types, significantly outperforming previous models. The results can be seen in the table below. Note that here we don't compare to models, like [RAG-HAT](https://aclanthology.org/2024.emnlp-industry.113.pdf), since they have no span-level evaluation presented.
 
 <p align="center">
-  <img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/span_level_lettucedetect.png?raw=true" alt="Span-level Results" width="800"/>
+  <img src="/assets/span_level_lettucedetect.png" alt="Span-level Results" width="800"/>
 </p>
 
 
