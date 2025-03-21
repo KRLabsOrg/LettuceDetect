@@ -21,7 +21,7 @@ def ask_chat(sample):
         Step 1: Read and fully understand the answer in german. The answer is a text containing information related to the source text.
         Step 2: Thoroughly analyze how the answer relates to the information in the source text. Determine whether the answer contains hallucinations. Hallucinations are sentences that contain one of the following information:
             a. conflict: instances where the answer presents direct contraction or opposition to the original source.
-            b. baseless info: instances where the generated answer includes information which is not inferred from the original source. General knowledge or logical deductions should not be considered hallucinations unless they contradict the source.
+            b. baseless info: instances where the generated answer includes information which is not inferred from the original source.
         Step 3: Determine whether the answer contains any hallucinations. If no hallucinations are found, return an empty list.
         Step 4: Compile the labeled hallucinated spans found into a JSON dict, with a key "hallucination list" and its value is a list of
         hallucinated spans. If there exist potential hallucinations, the output should be in the following JSON format: {{"hallucination
