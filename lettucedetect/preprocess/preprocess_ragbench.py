@@ -1,59 +1,28 @@
 import argparse
 import json
 import re
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from datasets import load_dataset
+from tqdm import tqdm
 
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 
-@dataclass
-class RagBenchSample:
-    prompt: str
-    answer: str
-    labels: list[dict]
-    split: Literal["train", "dev", "test"]
-    task_type: str
-
-    def to_json(self) -> dict:
-        return {
-            "prompt": self.prompt,
-            "answer": self.answer,
-            "labels": self.labels,
-            "split": self.split,
-            "task_type": self.task_type,
-        }
-
-    @classmethod
-    def from_json(cls, json_dict: dict) -> "RagBenchSample":
-        return cls(
-            prompt=json_dict["prompt"],
-            answer=json_dict["answer"],
-            labels=json_dict["labels"],
-            split=json_dict["split"],
-            task_type=json_dict["task_type"],
-        )
-
-
-@dataclass
-class RagBenchData:
-    samples: list[RagBenchSample]
-
-    def to_json(self) -> list[dict]:
-        return [sample.to_json() for sample in self.samples]
-
-    @classmethod
-    def from_json(cls, json_dict: list[dict]) -> "RagBenchSample":
-        return cls(
-            samples=[RagBenchSample.from_json(sample) for sample in json_dict],
-        )
+PROMPT_QA = """
+Briefly answer the following question:
+{question}
+Bear in mind that your response should be strictly based on the following {num_passages} passages:
+{context}
+In case the passages do not contain the necessary information to answer the question, please reply with: "Unable to answer based on given passages."
+output:
+"""
 
 
 def load_data(hugging_dir: str) -> dict:
     """Load the RAG Bench data.
 
-    :param input_dir: Path to the input directory.
+    :param hugging_dir: Path to the HuggingFace directory.
+    :return: A dictionary of the RAG Bench data.
     """
     ragbench = {}
     for dataset in [
@@ -75,32 +44,38 @@ def load_data(hugging_dir: str) -> dict:
     return ragbench
 
 
-def create_labels(response, halucinations):
+def create_labels(response, hallucinations):
+    """Create labels for the RAGBench data.
+
+    :param response: The response from the RAG bench data.
+    :param hallucinations: The hallucinations from the RAG bench data.
+    :return: A list of labels.
+    """
     labels = []
-    resp = " ".join([sentence for label, sentence in response["response_sentences"]])
-    for hal in halucinations:
+    resp = " ".join([sentence for _, sentence in response["response_sentences"]])
+    for hal in hallucinations:
         match = re.search(re.escape(hal), resp)
         labels.append({"start": match.start(), "end": match.end(), "label": "Not supported"})
     return labels
 
 
-def create_sample(response: dict) -> RagBenchSample:
+def create_sample(response: dict, dataset_name: str, split: str) -> HallucinationSample:
     """Create a sample from the RAGBench data.
 
     :param response: The response from the RAG bench data.
+    :param dataset_name: The name of the dataset.
+    :param split: The split of the dataset.
+    :return: A sample from the RAGBench data.
     """
-    prompt = (
-        "Instruction:"
-        + "\n"
-        + " Answer the question: "
-        + response["question"]
-        + "\n"
-        + "Use only the following information:"
-        + "\n".join(response["documents"])
+    context_str = "\n".join(
+        [f"passage {i + 1}: {passage}" for i, passage in enumerate(response["documents"])]
     )
-    answer = " ".join([sentence for label, sentence in response["response_sentences"]])
-    split = response["dataset_name"].split("_")[1]
-    task_type = response["dataset_name"].split("_")[0]
+    prompt = PROMPT_QA.format(
+        question=response["question"],
+        num_passages=len(response["documents"]),
+        context=context_str,
+    )
+    answer = " ".join([sentence for _, sentence in response["response_sentences"]])
     labels = []
     hallucinations = []
     if len(response["unsupported_response_sentence_keys"]) > 0:
@@ -111,34 +86,34 @@ def create_sample(response: dict) -> RagBenchSample:
         ]
         labels = create_labels(response, hallucinations)
 
-    return RagBenchSample(prompt, answer, labels, split, task_type)
-
-
-def get_data_split(data, name, split):
-    dataset = data.get(name)
-    data_split = dataset.get(split)
-    return data_split
+    return HallucinationSample(prompt, answer, labels, split, dataset_name, "ragbench", "en")
 
 
 def main(input_dir: str, output_dir: Path):
     """Preprocess the RAGBench data.
-    param input_dir: Path to HuggingFace directory
-    param output_dir: Path to the output directory.
+
+    :param input_dir: Path to HuggingFace directory
+    :param output_dir: Path to the output directory.
     """
     output_dir = Path(output_dir)
     data = load_data(input_dir)
-    rag_bench_data = RagBenchData(samples=[])
+    hallucination_data = HallucinationData(samples=[])
 
     for dataset_name in data:
+        print(f"Processing {dataset_name} dataset")
         for split in ["train", "test", "validation"]:
-            data_split = get_data_split(data, dataset_name, split)
-            for response in data_split:
+            data_split = data[dataset_name][split]
+            split = "dev" if split == "validation" else split
+            for response in tqdm(data_split, desc=f"Processing {split} split"):
                 if not response["dataset_name"]:
                     continue
-                sample = create_sample(response)
-                rag_bench_data.samples.append(sample)
+                sample = create_sample(response, dataset_name, split)
+                hallucination_data.samples.append(sample)
 
-    (output_dir / "ragbench_data.json").write_text(json.dumps(rag_bench_data.to_json(), indent=4))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "ragbench_data.json").write_text(
+        json.dumps(hallucination_data.to_json(), indent=4)
+    )
 
 
 if __name__ == "__main__":

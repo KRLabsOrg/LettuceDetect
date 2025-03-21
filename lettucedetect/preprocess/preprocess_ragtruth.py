@@ -1,50 +1,8 @@
 import argparse
 import json
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
-
-@dataclass
-class RagTruthSample:
-    prompt: str
-    answer: str
-    labels: list[dict]
-    split: Literal["train", "dev", "test"]
-    task_type: str
-
-    def to_json(self) -> dict:
-        return {
-            "prompt": self.prompt,
-            "answer": self.answer,
-            "labels": self.labels,
-            "split": self.split,
-            "task_type": self.task_type,
-        }
-
-    @classmethod
-    def from_json(cls, json_dict: dict) -> "RagTruthSample":
-        return cls(
-            prompt=json_dict["prompt"],
-            answer=json_dict["answer"],
-            labels=json_dict["labels"],
-            split=json_dict["split"],
-            task_type=json_dict["task_type"],
-        )
-
-
-@dataclass
-class RagTruthData:
-    samples: list[RagTruthSample]
-
-    def to_json(self) -> list[dict]:
-        return [sample.to_json() for sample in self.samples]
-
-    @classmethod
-    def from_json(cls, json_dict: list[dict]) -> "RagTruthData":
-        return cls(
-            samples=[RagTruthSample.from_json(sample) for sample in json_dict],
-        )
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 
 
 def load_data(input_dir: Path) -> tuple[list[dict], list[dict]]:
@@ -62,7 +20,7 @@ def load_data(input_dir: Path) -> tuple[list[dict], list[dict]]:
     return responses, sources
 
 
-def create_sample(response: dict, source: dict) -> RagTruthSample:
+def create_sample(response: dict, source: dict) -> HallucinationSample:
     """Create a sample from the RAG truth data.
 
     :param response: The response from the RAG truth data.
@@ -86,7 +44,7 @@ def create_sample(response: dict, source: dict) -> RagTruthSample:
             }
         )
 
-    return RagTruthSample(prompt, answer, labels, split, task_type)
+    return HallucinationSample(prompt, answer, labels, split, task_type, "ragtruth", "en")
 
 
 def main(input_dir: Path, output_dir: Path):
@@ -101,13 +59,15 @@ def main(input_dir: Path, output_dir: Path):
     responses, sources = load_data(input_dir)
     sources_by_id = {source["source_id"]: source for source in sources}
 
-    rag_truth_data = RagTruthData(samples=[])
+    hallucination_data = HallucinationData(samples=[])
 
     for response in responses:
         sample = create_sample(response, sources_by_id[response["source_id"]])
-        rag_truth_data.samples.append(sample)
+        hallucination_data.samples.append(sample)
 
-    (output_dir / "ragtruth_data.json").write_text(json.dumps(rag_truth_data.to_json(), indent=4))
+    (output_dir / "ragtruth_data.json").write_text(
+        json.dumps(hallucination_data.to_json(), indent=4)
+    )
 
 
 if __name__ == "__main__":

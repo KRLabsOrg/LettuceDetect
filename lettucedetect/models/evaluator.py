@@ -1,10 +1,15 @@
 import torch
-from sklearn.metrics import classification_report, precision_recall_fscore_support
+from sklearn.metrics import (
+    auc,
+    classification_report,
+    precision_recall_fscore_support,
+    roc_curve,
+)
 from torch.nn import Module
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from lettucedetect.datasets.ragtruth import RagTruthSample
+from lettucedetect.datasets.hallucination_dataset import HallucinationSample
 from lettucedetect.models.inference import HallucinationDetector
 
 
@@ -51,6 +56,10 @@ def evaluate_model(
         all_labels, all_preds, labels=[0, 1], average=None
     )
 
+    # Calculating AUROC
+    fpr, tpr, _ = roc_curve(all_labels, all_preds)
+    auroc = auc(fpr, tpr)
+
     results: dict[str, dict[str, float]] = {
         "supported": {  # Class 0
             "precision": float(precision[0]),
@@ -63,6 +72,7 @@ def evaluate_model(
             "f1": float(f1[1]),
         },
     }
+    results["auroc"] = auroc
 
     if verbose:
         report = classification_report(
@@ -92,6 +102,8 @@ def print_metrics(metrics: dict[str, dict[str, float]]) -> None:
     print(f"  Recall: {metrics['supported']['recall']:.4f}")
     print(f"  F1: {metrics['supported']['f1']:.4f}")
 
+    print(f"\nAUROC: {metrics['auroc']:.4f}")
+
 
 def evaluate_model_example_level(
     model: Module,
@@ -118,6 +130,7 @@ def evaluate_model_example_level(
     model.eval()
     example_preds: list[int] = []
     example_labels: list[int] = []
+    example_probs: list[float] = []
 
     with torch.no_grad():
         for batch in tqdm(dataloader, desc="Evaluating (Example Level)", leave=False):
@@ -129,6 +142,7 @@ def evaluate_model_example_level(
             outputs = model(input_ids, attention_mask=attention_mask)
             logits: torch.Tensor = outputs.logits  # Shape: [batch_size, seq_len, num_labels]
             predictions: torch.Tensor = torch.argmax(logits, dim=-1)  # Shape: [batch_size, seq_len]
+            probs = torch.softmax(logits, dim=-1)
 
             # Process each example in the batch separately.
             for i in range(batch["labels"].size(0)):
@@ -137,20 +151,25 @@ def evaluate_model_example_level(
                 valid_mask = sample_labels != -100
 
                 if valid_mask.sum().item() == 0:
-                    # If no valid tokens, assign default class (supported).
                     true_example_label = 0
                     pred_example_label = 0
+                    # Add a default probability score
+                    max_prob = 0.0
                 else:
                     # Apply the valid mask and bring labels to CPU if needed.
                     sample_labels = sample_labels[valid_mask].cpu()
                     sample_preds = sample_preds[valid_mask]
+                    sample_probs = probs[i][valid_mask]
 
                     # If any token in the sample is hallucinated (1), consider the whole sample hallucinated.
                     true_example_label = 1 if (sample_labels == 1).any().item() else 0
                     pred_example_label = 1 if (sample_preds == 1).any().item() else 0
+                    # Get the max probability for class 1 (hallucinated)
+                    max_prob = sample_probs[:, 1].max().item()
 
                 example_labels.append(true_example_label)
                 example_preds.append(pred_example_label)
+                example_probs.append(max_prob)
 
     precision, recall, f1, _ = precision_recall_fscore_support(
         example_labels, example_preds, labels=[0, 1], average=None, zero_division=0
@@ -169,6 +188,11 @@ def evaluate_model_example_level(
         },
     }
 
+    # Calculating AUROC
+    fpr, tpr, _ = roc_curve(example_labels, example_probs)
+    auroc = auc(fpr, tpr)
+    results["auroc"] = auroc
+
     if verbose:
         report = classification_report(
             example_labels,
@@ -185,7 +209,7 @@ def evaluate_model_example_level(
 
 
 def evaluate_detector_char_level(
-    detector: HallucinationDetector, samples: list[RagTruthSample]
+    detector: HallucinationDetector, samples: list[HallucinationSample]
 ) -> dict[str, float]:
     """Evaluate the HallucinationDetector at the character level.
 

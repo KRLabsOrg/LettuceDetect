@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from transformers import AutoTokenizer
 
-from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData
+from lettucedetect.datasets.hallucination_dataset import HallucinationData
 
 
 def analyze_token_distribution(samples, tokenizer):
@@ -52,14 +52,14 @@ def main():
 
     # Load data
     data_path = Path(args.data_path)
-    rag_truth_data = RagTruthData.from_json(json.loads(data_path.read_text()))
+    hallucination_data = HallucinationData.from_json(json.loads(data_path.read_text()))
 
     # Initialize tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
     # Analyze all samples
     print("\nAnalyzing token distribution for all samples...")
-    token_counts, stats = analyze_token_distribution(rag_truth_data.samples, tokenizer)
+    token_counts, stats = analyze_token_distribution(hallucination_data.samples, tokenizer)
 
     # Print results
     print("\nToken Distribution Statistics:")
@@ -74,7 +74,7 @@ def main():
 
     # Print distribution by split
     for split in ["train", "validation", "test"]:
-        split_samples = [s for s in rag_truth_data.samples if s.split == split]
+        split_samples = [s for s in hallucination_data.samples if s.split == split]
         if split_samples:
             print(f"\n{split.capitalize()} split:")
             _, split_stats = analyze_token_distribution(split_samples, tokenizer)

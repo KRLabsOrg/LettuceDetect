@@ -10,7 +10,7 @@ from transformers import (
     DataCollatorForTokenClassification,
 )
 
-from lettucedetect.datasets.ragtruth import RagTruthDataset
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationDataset
 from lettucedetect.models.evaluator import (
     evaluate_detector_char_level,
     evaluate_model,
@@ -18,7 +18,6 @@ from lettucedetect.models.evaluator import (
     print_metrics,
 )
 from lettucedetect.models.inference import HallucinationDetector
-from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData
 
 
 def evaluate_task_samples(
@@ -34,7 +33,7 @@ def evaluate_task_samples(
 
     if evaluation_type in {"token_level", "example_level"}:
         # Prepare the dataset and dataloader
-        test_dataset = RagTruthDataset(samples, tokenizer)
+        test_dataset = HallucinationDataset(samples, tokenizer)
         data_collator = DataCollatorForTokenClassification(
             tokenizer=tokenizer, label_pad_token_id=-100
         )
@@ -88,10 +87,10 @@ def main():
     args = parser.parse_args()
 
     data_path = Path(args.data_path)
-    rag_truth_data = RagTruthData.from_json(json.loads(data_path.read_text()))
+    hallucination_data = HallucinationData.from_json(json.loads(data_path.read_text()))
 
     # Filter test samples from the data
-    test_samples = [sample for sample in rag_truth_data.samples if sample.split == "test"]
+    test_samples = [sample for sample in hallucination_data.samples if sample.split == "test"]
 
     # group samples by task type
     task_type_map = {}
