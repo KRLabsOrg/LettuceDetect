@@ -79,7 +79,7 @@ We evaluate our model on the test set of the [RAGTruth](https://aclanthology.org
 The results on the example-level can be seen in the table below.
 
 <p align="center">
-  <img src="/assets/example_level_results.png" alt="Example-level Results" width="800"/>
+  <img src="/assets/example_level_lettucedetect.png" alt="Example-level Results" width="800"/>
 </p>
 
 **Span-level results**
