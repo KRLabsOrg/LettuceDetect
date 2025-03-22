@@ -7,7 +7,7 @@ from datasets import load_dataset
 from openai import OpenAI
 from torch.utils.data import DataLoader
 
-from lettucedetect.preprocess.preprocess_ragtruth import RagTruthData, RagTruthSample
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 
 
 def ask_chat(sample):
@@ -100,7 +100,7 @@ def create_labels(sample, chat_response):
     return labels
 
 
-def create_sample_baseline(sample):
+def create_sample_baseline(sample, dataset_name, lang):
     """Creates a sample where the annotations / labels are based on the ChatGPT responses."""
 
     prompt = sample.prompt
@@ -115,17 +115,24 @@ def create_sample_baseline(sample):
         chat_response = {"hallucination list": []}
     labels = create_labels(sample, extracted_json)
     task_type = sample.task_type
-    return RagTruthSample(prompt, answer, labels, split, task_type)
+    return HallucinationSample(prompt, answer, labels, split, task_type, dataset_name, lang)
 
 
-def load_check_existing_data(output_file):
+def load_check_existing_data(output_file: Path) -> HallucinationData:
+    """Load existing data or create new data.
+    :param output_file: Path to the output file
+    :return: Existing HallucinationData or new empty HallucinationData
+    """
     if output_file.exists():
-        return RagTruthData.from_json(json.loads(output_file.read_text()))
+        try:
+            return HallucinationData.from_json(json.loads(output_file.read_text()))
+        except (json.JSONDecodeError, KeyError) as e:
+            return HallucinationData(samples=[])
     else:
-        return RagTruthData(samples=[])
+        return HallucinationData(samples=[])
 
 
-def main(input_dir: Path, output_dir: Path):
+def main(input_dir: Path, output_dir: Path, dataset_name: str, lang: str):
     """Prompts ChatGPT to find hallucination spans in the german samples and saves the response in a new json file.
 
     :param input_dir: Path to the input directory.
@@ -133,23 +140,23 @@ def main(input_dir: Path, output_dir: Path):
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
-    input_file = input_dir / "ragtruth_data_de.json"
-    output_file = output_dir / "ragtruth_data_chatgpt4o.json"
+    input_file = input_dir / "ragtruth_data.json"
+    output_file = output_dir / "hallu_data_gpt.json"
 
-    rag_truth_data_de = RagTruthData.from_json(json.loads(input_file.read_text()))
-    test_samples = [sample for sample in rag_truth_data_de.samples if sample.split == "test"]
+    hallu_data_de = HallucinationData.from_json(json.loads(input_file.read_text()))
+    test_samples = [sample for sample in hallu_data_de.samples if sample.split == "test"]
 
-    rag_truth_data_gpt = load_check_existing_data(output_file=output_file)
-    num_processed = len(rag_truth_data_gpt.samples)
-    total_samples = len(rag_truth_data_gpt.samples)
+    hallu_data_gpt = load_check_existing_data(output_file=output_file)
+    num_processed = len(hallu_data_gpt.samples)
+    total_samples = len(hallu_data_gpt.samples)
 
     for i, sample in enumerate(test_samples, start=num_processed):
         print("--------", i, "--------")
-        sample_gpt = create_sample_baseline(sample)
-        rag_truth_data_gpt.samples.append(sample_gpt)
+        sample_gpt = create_sample_baseline(sample, dataset_name, lang)
+        hallu_data_gpt.samples.append(sample_gpt)
         if i % 10 == 0 or i == total_samples - 1:
-            (output_dir / "ragtruth_data_chatgpt4o.json").write_text(
-                json.dumps(rag_truth_data_gpt.to_json(), indent=4)
+            (output_dir / "hallu_data_gpt.json").write_text(
+                json.dumps(hallu_data_gpt.to_json(), indent=4)
             )
 
 
@@ -157,7 +164,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
+    parser.add_argument("--dataset_name", type=str, required=True)
+    parser.add_argument("--lang", type=str, default="de")
 
     args = parser.parse_args()
 
-    main(args.input_dir, args.output_dir)
+    main(args.input_dir, args.output_dir, args.dataset_name, args.lang)
