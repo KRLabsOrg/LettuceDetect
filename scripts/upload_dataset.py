@@ -24,13 +24,11 @@ def convert_to_hf_dataset(hallucination_data: HallucinationData) -> DatasetDict:
     :param hallucination_data: The HallucinationData to convert
     :return: A DatasetDict with train, validation, and test splits
     """
-    # Group samples by split
     train_samples = []
     dev_samples = []
     test_samples = []
 
     for sample in hallucination_data.samples:
-        # Convert sample to a dictionary format suitable for datasets
         sample_dict = {
             "prompt": sample.prompt,
             "answer": sample.answer,
@@ -38,7 +36,6 @@ def convert_to_hf_dataset(hallucination_data: HallucinationData) -> DatasetDict:
             "task_type": sample.task_type,
             "dataset": sample.dataset,
             "language": sample.language,
-            # Add any other metadata you need
         }
 
         if sample.split == "train":
@@ -48,11 +45,10 @@ def convert_to_hf_dataset(hallucination_data: HallucinationData) -> DatasetDict:
         elif sample.split == "test":
             test_samples.append(sample_dict)
 
-    # Create datasets for each split
     dataset_dict = DatasetDict(
         {
             "train": Dataset.from_list(train_samples),
-            "validation": Dataset.from_list(dev_samples),
+            "dev": Dataset.from_list(dev_samples),
             "test": Dataset.from_list(test_samples),
         }
     )
@@ -89,27 +85,33 @@ def upload_dataset(
         logger.error(f"Error loading dataset: {e}")
         raise
 
-    # Convert to HF Dataset
     logger.info("Converting to HF Dataset format")
     dataset_dict = convert_to_hf_dataset(hallucination_data)
 
-    # Log dataset statistics
     for split, dataset in dataset_dict.items():
         logger.info(f"Split '{split}': {len(dataset)} samples")
 
-        # Count number of samples by language
+        # Skip empty datasets
+        if len(dataset) == 0:
+            logger.info(f"  Split '{split}' is empty, skipping statistics")
+            continue
+
         languages = dataset.unique("language")
         for lang in languages:
             count = len([s for s in dataset if s["language"] == lang])
             logger.info(f"  Language '{lang}': {count} samples")
 
-        # Count number of samples by dataset source
         datasets = dataset.unique("dataset")
         for ds in datasets:
             count = len([s for s in dataset if s["dataset"] == ds])
             logger.info(f"  Dataset '{ds}': {count} samples")
 
-    # Push to HF Hub if requested
+    # Filter out empty splits before pushing to Hub
+    non_empty_splits = {k: v for k, v in dataset_dict.items() if len(v) > 0}
+    if len(non_empty_splits) != len(dataset_dict):
+        logger.info(f"Filtered out empty splits. Keeping {len(non_empty_splits)} non-empty splits.")
+        dataset_dict = DatasetDict(non_empty_splits)
+
     if push_to_hub:
         if not repository_id:
             repository_id = f"lettucedetect/{dataset_name}"
