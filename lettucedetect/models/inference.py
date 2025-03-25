@@ -517,4 +517,3 @@ class HallucinationDetector:
             )
         else:
             raise ValueError("Unsupported method. Choose 'llm'.")
-
