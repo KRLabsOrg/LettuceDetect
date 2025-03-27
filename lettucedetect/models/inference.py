@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import json
 import re
+import os
 from pathlib import Path
 
 import torch
@@ -274,14 +275,12 @@ class TransformerDetector(BaseDetector):
 
 
 class LLMDetector(BaseDetector):
-    def __init__(self, api_key: str, model: str = "gpt-4o", temperature: int = 0):
+    def __init__(self, model: str = "gpt-4o", temperature: int = 0):
         """Initialize the LLMDetector.
 
-        :param api_key: OpenAI API Key.
         :param model: OpenAI model.
         :param temperature: model temperature.
         """
-        self.api_key = api_key
         self.model = model
         self.temperature = temperature
 
@@ -317,6 +316,20 @@ class LLMDetector(BaseDetector):
                 labels.append({"start": match.start(), "end": match.end(), "text": hal})
 
         return labels
+    
+
+    def _get_openai_client(self) -> OpenAI:
+        """Get OpenAI client configured from environment variables.
+
+        :return: Configured OpenAI client
+        :raises ValueError: If API key is not set
+        """
+        api_key = os.getenv("OPENAI_API_KEY") or "EMPTY"
+
+        return OpenAI(
+            api_key=api_key,
+        )
+
 
     def _predict(self, context: str, answer: str, output_format: str = "spans") -> list:
         """Prompts the ChatGPT model to predict hallucination spans from the provided context and answer.
@@ -325,9 +338,7 @@ class LLMDetector(BaseDetector):
         :param answer: The answer string.
         :param output_format: works only for "spans" and returns grouped spans.
         """
-        client = OpenAI(
-            api_key=self.api_key,
-        )
+        client = self._get_openai_client()
 
         if output_format == "spans":
             llm_prompt = PROMPT_LLM.format(context=context, answer=answer)
