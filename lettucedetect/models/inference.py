@@ -350,14 +350,14 @@ class LLMDetector(BaseDetector):
                 "Invalid output_format. This model can only predict hallucination spans. Use spans."
             )
 
-    def _create_sample(self, sample, dataset_name, split, language):
+    def _create_sample(self, sample, dataset_name, split, lang):
         """Creates a sample where the annotations / labels are based on the ChatGPT responses."""
 
         prompt = sample["prompt"]
         answer = sample["answer"]
         labels = self._predict(prompt, answer, "spans")
         task_type = sample["task_type"]
-        return HallucinationSample(prompt, answer, labels, split, task_type, dataset_name, language)
+        return HallucinationSample(prompt, answer, labels, split, task_type, dataset_name, lang)
 
     def _load_check_existing_data(self, output_file: Path) -> HallucinationData:
         """Load existing data or create new data.
@@ -378,7 +378,7 @@ class LLMDetector(BaseDetector):
         output_dir: str,
         dataset_name: str,
         split: str = "test",
-        language: str = "de",
+        lang: str = "de",
     ):
         """
         Create baseline for a dataset based on LLM output and save data to a new file.
@@ -386,7 +386,7 @@ class LLMDetector(BaseDetector):
         :param output_dir: Path to the output directory.
         :param dataset_name: Name of dataset, ragtruth or ragbench.
         :param split: Split of dataset the baseline should be created for.
-        :param language: Language of the dataset.
+        :param lang: Language of the dataset.
 
         """
 
@@ -402,7 +402,7 @@ class LLMDetector(BaseDetector):
 
         for i, sample in enumerate(samples, start=num_processed):
             print("--------", i, "--------")
-            sample_gpt = self._create_sample(sample, dataset_name, split, language)
+            sample_gpt = self._create_sample(sample, dataset_name, split, lang)
             hallu_data_gpt.samples.append(sample_gpt)
             if i % 10 == 0 or i == total_samples - 1:
                 output_file.write_text(json.dumps(hallu_data_gpt.to_json(), indent=4))
@@ -440,7 +440,7 @@ class LLMDetector(BaseDetector):
         output_dir: str,
         dataset_name: str,
         split: str = "test",
-        language: str = "de",
+        lang: str = "de",
     ):
         """
         Create baseline for a dataset based on LLM output and save data to a new file.
@@ -449,9 +449,9 @@ class LLMDetector(BaseDetector):
         :param output_dir: Path to the output directory.
         :param dataset_name: Name of dataset, ragtruth or ragbench.
         :param split: Split of dataset the baseline should be created for.
-        :param language: Language of the dataset.
+        :param lang: Language of the dataset.
         """
-        return self._create_gpt_baseline(input_dir, output_dir, dataset_name, split, language)
+        return self._create_gpt_baseline(input_dir, output_dir, dataset_name, split, lang)
 
 
 class HallucinationDetector:
@@ -499,7 +499,7 @@ class HallucinationDetector:
         output_dir: str,
         dataset_name: str,
         split: str = "test",
-        language: str = "de",
+        lang: str = "de",
     ):
         """
         Create baseline for a dataset based on LLM output and save data to a new file.
@@ -508,12 +508,12 @@ class HallucinationDetector:
         :param output_dir: Path to the output directory.
         :param dataset_name: Name of dataset, ragtruth or ragbench.
         :param split: Split of dataset the baseline should be created for.
-        :param language: Language of the dataset.
+        :param lang: Language of the dataset.
         """
 
         if self.method == "llm":
             return self.detector.create_gpt_baseline(
-                input_dir, output_dir, dataset_name, split, language
+                input_dir, output_dir, dataset_name, split, lang
             )
         else:
             raise ValueError("Unsupported method. Choose 'llm'.")
