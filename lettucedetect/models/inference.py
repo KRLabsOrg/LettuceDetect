@@ -316,7 +316,6 @@ class LLMDetector(BaseDetector):
                 labels.append({"start": match.start(), "end": match.end(), "text": hal})
 
         return labels
-    
 
     def _get_openai_client(self) -> OpenAI:
         """Get OpenAI client configured from environment variables.
@@ -329,7 +328,6 @@ class LLMDetector(BaseDetector):
         return OpenAI(
             api_key=api_key,
         )
-
 
     def _predict(self, context: str, answer: str, output_format: str = "spans") -> list:
         """Prompts the ChatGPT model to predict hallucination spans from the provided context and answer.
