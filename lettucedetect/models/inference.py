@@ -15,7 +15,6 @@ from lettucedetect.datasets.hallucination_dataset import (
     HallucinationSample,
 )
 
-
 PROMPT_QA = """
 Briefly answer the following question:
 {question}
@@ -30,7 +29,6 @@ Summarize the following text:
 {text}
 output:
 """
-
 
 PROMPT_LLM = """
 <task>
@@ -277,7 +275,7 @@ class TransformerDetector(BaseDetector):
 class LLMDetector(BaseDetector):
     def __init__(self, model: str = "gpt-4o", temperature: int = 0):
         """Initialize the LLMDetector.
-
+        
         :param model: OpenAI model.
         :param temperature: model temperature.
         """
@@ -359,63 +357,6 @@ class LLMDetector(BaseDetector):
                 "Invalid output_format. This model can only predict hallucination spans. Use spans."
             )
 
-    def _create_sample(self, sample, dataset_name, split, lang):
-        """Creates a sample where the annotations / labels are based on the ChatGPT responses."""
-
-        prompt = sample["prompt"]
-        answer = sample["answer"]
-        labels = self._predict(prompt, answer, "spans")
-        task_type = sample["task_type"]
-        return HallucinationSample(prompt, answer, labels, split, task_type, dataset_name, lang)
-
-    def _load_check_existing_data(self, output_file: Path) -> HallucinationData:
-        """Load existing data or create new data.
-        :param output_file: Path to the output file
-        :return: Existing HallucinationData or new empty HallucinationData
-        """
-        if output_file.exists():
-            try:
-                return HallucinationData.from_json(json.loads(output_file.read_text()))
-            except (json.JSONDecodeError, KeyError) as e:
-                return HallucinationData(samples=[])
-        else:
-            return HallucinationData(samples=[])
-
-    def _create_gpt_baseline(
-        self,
-        input_dir: str,
-        output_dir: str,
-        dataset_name: str,
-        split: str = "test",
-        lang: str = "de",
-    ):
-        """
-        Create baseline for a dataset based on LLM output and save data to a new file.
-        :param input_dir: HuggingFace directory.
-        :param output_dir: Path to the output directory.
-        :param dataset_name: Name of dataset, ragtruth or ragbench.
-        :param split: Split of dataset the baseline should be created for.
-        :param lang: Language of the dataset.
-
-        """
-
-        output_dir = Path(output_dir)
-        output_file = output_dir / f"{dataset_name}_gpt_baseline.json"
-
-        hallu_data = load_dataset(input_dir)
-        samples = [sample for sample in hallu_data[split]]
-
-        hallu_data_gpt = self._load_check_existing_data(output_file=output_file)
-        num_processed = len(hallu_data_gpt.samples)
-        total_samples = len(hallu_data_gpt.samples)
-
-        for i, sample in enumerate(samples, start=num_processed):
-            print("--------", i, "--------")
-            sample_gpt = self._create_sample(sample, dataset_name, split, lang)
-            hallu_data_gpt.samples.append(sample_gpt)
-            if i % 10 == 0 or i == total_samples - 1:
-                output_file.write_text(json.dumps(hallu_data_gpt.to_json(), indent=4))
-
     def predict_prompt(self, prompt: str, answer: str, output_format: str = "tokens") -> list:
         """Predict hallucination spans from the provided prompt and answer.
 
@@ -443,25 +384,6 @@ class LLMDetector(BaseDetector):
         prompt = self._form_prompt(context, question)
         return self._predict(prompt, answer, output_format=output_format)
 
-    def create_gpt_baseline(
-        self,
-        input_dir: str,
-        output_dir: str,
-        dataset_name: str,
-        split: str = "test",
-        lang: str = "de",
-    ):
-        """
-        Create baseline for a dataset based on LLM output and save data to a new file.
-
-        :param input_dir: HuggingFace directory.
-        :param output_dir: Path to the output directory.
-        :param dataset_name: Name of dataset, ragtruth or ragbench.
-        :param split: Split of dataset the baseline should be created for.
-        :param lang: Language of the dataset.
-        """
-        return self._create_gpt_baseline(input_dir, output_dir, dataset_name, split, lang)
-
 
 class HallucinationDetector:
     def __init__(self, method: str = "transformer", **kwargs):
@@ -470,13 +392,12 @@ class HallucinationDetector:
         :param method: "transformer" for the model-based approach.
         :param kwargs: Additional keyword arguments passed to the underlying detector.
         """
-        self.method = method
         if method == "transformer":
             self.detector = TransformerDetector(**kwargs)
         elif method == "llm":
             self.detector = LLMDetector(**kwargs)
         else:
-            raise ValueError("Unsupported method. Choose either 'transformer' or 'llm'.")
+            raise ValueError("Unsupported method. Choose 'transformer'.")
 
     def predict(
         self,
@@ -501,28 +422,3 @@ class HallucinationDetector:
         :param answer: The answer string.
         """
         return self.detector.predict_prompt(prompt, answer, output_format)
-
-    def create_gpt_baseline(
-        self,
-        input_dir: str,
-        output_dir: str,
-        dataset_name: str,
-        split: str = "test",
-        lang: str = "de",
-    ):
-        """
-        Create baseline for a dataset based on LLM output and save data to a new file.
-
-        :param input_dir: HuggingFace directory.
-        :param output_dir: Path to the output directory.
-        :param dataset_name: Name of dataset, ragtruth or ragbench.
-        :param split: Split of dataset the baseline should be created for.
-        :param lang: Language of the dataset.
-        """
-
-        if self.method == "llm":
-            return self.detector.create_gpt_baseline(
-                input_dir, output_dir, dataset_name, split, lang
-            )
-        else:
-            raise ValueError("Unsupported method. Choose 'llm'.")
