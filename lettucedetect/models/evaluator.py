@@ -260,3 +260,75 @@ def evaluate_detector_char_level(
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
     return {"precision": precision, "recall": recall, "f1": f1}
+
+
+def evaluate_detector_example_level(
+    detector: HallucinationDetector,
+    samples: list[HallucinationSample],
+    verbose: bool = True,
+) -> dict[str, dict[str, float]]:
+    """Evaluate the HallucinationDetector at the example level.
+
+    This function assumes that each sample is a dictionary containing:
+      - "prompt": the prompt text.
+      - "answer": the answer text.
+      - "gold_spans": a list of dictionaries where each dictionary has "start" and "end" keys
+                      indicating the character indices of the gold (human-labeled) span.
+
+    It uses the detector (which should have been initialized with the appropriate model)
+    to obtain predicted spans, if any span is predicted the example is marked as hallucinated (label = 1)
+    then the whole example is considered hallucinated. Otherwise, it is supported.
+    :param detector: The detector to evaluate.
+    :param samples: A list of samples to evaluate.
+    :return: A dict containing example-level metrics:
+        {
+            "supported": {"precision": float, "recall": float, "f1": float},
+            "hallucinated": {"precision": float, "recall": float, "f1": float}
+        }
+    """
+
+    example_preds: list[int] = []
+    example_labels: list[int] = []
+
+    for sample in tqdm(samples, desc="Evaluating", leave=False):
+        prompt = sample.prompt
+        answer = sample.answer
+        gold_spans = sample.labels
+        predicted_spans = detector.predict_prompt(prompt, answer, output_format="spans")
+        print(predicted_spans)
+        true_example_label = 1 if gold_spans else 0
+        pred_example_label = 1 if predicted_spans else 0
+
+        example_labels.append(true_example_label)
+        example_preds.append(pred_example_label)
+
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        example_labels, example_preds, labels=[0, 1], average=None, zero_division=0
+    )
+
+    results: dict[str, dict[str, float]] = {
+        "supported": {  # Class 0
+            "precision": float(precision[0]),
+            "recall": float(recall[0]),
+            "f1": float(f1[0]),
+        },
+        "hallucinated": {  # Class 1
+            "precision": float(precision[1]),
+            "recall": float(recall[1]),
+            "f1": float(f1[1]),
+        },
+    }
+
+    if verbose:
+        report = classification_report(
+            example_labels,
+            example_preds,
+            target_names=["Supported", "Hallucinated"],
+            digits=4,
+            zero_division=0,
+        )
+        print("\nDetailed Example-Level Classification Report:")
+        print(report)
+        results["classification_report"] = report
+
+    return results
