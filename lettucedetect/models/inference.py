@@ -275,7 +275,7 @@ class TransformerDetector(BaseDetector):
 class LLMDetector(BaseDetector):
     def __init__(self, model: str = "gpt-4o", temperature: int = 0):
         """Initialize the LLMDetector.
-        
+
         :param model: OpenAI model.
         :param temperature: model temperature.
         """
