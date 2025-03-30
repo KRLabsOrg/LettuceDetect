@@ -71,11 +71,10 @@ def create_sample_baseline(sample, dataset_name, language, llm):
     answer = sample["answer"]
 
     ragas_metrics = evaluate_metrics(sample, llm)
-    print(ragas_metrics)
-    ragas_metrics["hallucination_04"] = 1 if ragas_metrics["faithfulness"] < 0.4 else 0
-    ragas_metrics["hallucination_05"] = 1 if ragas_metrics["faithfulness"] < 0.5 else 0
-    ragas_metrics["hallucination_06"] = 1 if ragas_metrics["faithfulness"] < 0.6 else 0
-    ragas_metrics["hallucination_07"] = 1 if ragas_metrics["faithfulness"] < 0.7 else 0
+    for threshold in [0.4, 0.5, 0.6, 0.7]:
+        ragas_metrics[f"hallucination_{threshold}"] = (
+            1 if ragas_metrics["faithfulness"] < threshold else 0
+        )
     task_type = sample["task_type"]
     return HallucinationSample(
         prompt, answer, [ragas_metrics], "test", task_type, dataset_name, language
