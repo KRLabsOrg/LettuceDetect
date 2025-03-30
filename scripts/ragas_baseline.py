@@ -1,23 +1,20 @@
 import argparse
 import asyncio
 import json
+import os
 import re
 from pathlib import Path
-import os
 
 from datasets import load_dataset
 from langchain.chat_models import ChatOpenAI
 from openai import OpenAI
-from torch.utils.data import DataLoader
-
 from ragas.dataset_schema import SingleTurnSample
 from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import Faithfulness, FaithfulnesswithHHEM
+from torch.utils.data import DataLoader
 
-from lettucedetect.datasets.hallucination_dataset import (
-    HallucinationData,
-    HallucinationSample,
-)
+from lettucedetect.datasets.hallucination_dataset import (HallucinationData,
+                                                          HallucinationSample)
 
 
 def get_api_key() -> str:
