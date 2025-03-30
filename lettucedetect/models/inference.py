@@ -1,17 +1,17 @@
-from abc import ABC, abstractmethod
 import json
-import re
 import os
+import re
+from abc import ABC, abstractmethod
 from pathlib import Path
 
 import torch
+from datasets import load_dataset
 from openai import OpenAI
 from transformers import AutoModelForTokenClassification, AutoTokenizer
-from datasets import load_dataset
 
 from lettucedetect.datasets.hallucination_dataset import (
-    HallucinationDataset,
     HallucinationData,
+    HallucinationDataset,
     HallucinationSample,
 )
 

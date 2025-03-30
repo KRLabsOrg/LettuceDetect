@@ -13,8 +13,7 @@ from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import Faithfulness, FaithfulnesswithHHEM
 from torch.utils.data import DataLoader
 
-from lettucedetect.datasets.hallucination_dataset import (HallucinationData,
-                                                          HallucinationSample)
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 
 
 def get_api_key() -> str:
