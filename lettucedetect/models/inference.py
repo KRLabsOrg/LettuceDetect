@@ -9,11 +9,7 @@ from datasets import load_dataset
 from openai import OpenAI
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
-from lettucedetect.datasets.hallucination_dataset import (
-    HallucinationData,
-    HallucinationDataset,
-    HallucinationSample,
-)
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationDataset, HallucinationSample
 
 PROMPT_QA = """
 Briefly answer the following question:
