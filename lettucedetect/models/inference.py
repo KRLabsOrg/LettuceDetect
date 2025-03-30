@@ -5,7 +5,6 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 import torch
-from datasets import load_dataset
 from openai import OpenAI
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
