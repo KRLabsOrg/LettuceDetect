@@ -7,8 +7,6 @@ from lettucedetect.datasets.hallucination_dataset import HallucinationData, Hall
 
 from datasets import load_dataset
 
-ds = load_dataset("KRLabsOrg/ragtruth-de-translated")
-
 
 def create_sample(sample, split):
     prompt = sample["prompt"]
