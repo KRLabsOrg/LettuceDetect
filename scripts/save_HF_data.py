@@ -27,9 +27,6 @@ def create_samples_list(ds):
     return hallucination_data
 
 
-samples = create_samples_list(ds)
-
-
 def main(input_dir: str, output_dir: Path):
     """Loads data from HuggingFace and saves it locally.
 
