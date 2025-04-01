@@ -396,7 +396,7 @@ class HallucinationDetector:
         elif method == "llm":
             self.detector = LLMDetector(**kwargs)
         else:
-            raise ValueError("Unsupported method. Choose 'transformer'.")
+            raise ValueError("Unsupported method. Choose 'transformer' or 'llm'.")
 
     def predict(
         self,
