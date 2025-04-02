@@ -237,8 +237,7 @@ def main():
 
         for task_type, samples in task_type_map.items():
             for task_type_llm, samples_llm in task_type_map_llm.items():
-                print(task_type_llm)
-                print(f"\nTask type: {task_type_llm}")
+                print(f"\nTask type: {task_type}")
                 evaluate_task_samples_llm(
                     samples,
                     args.evaluation_type,
