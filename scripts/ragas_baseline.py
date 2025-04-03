@@ -109,7 +109,7 @@ def main(
         print("--------", i, "--------")
         sample_ragas = create_sample_baseline(sample, llm)
         hallucination_data_ragas.samples.append(sample_ragas)
-        if i % 1 == 0 or i == total_samples - 1:
+        if i % 50 == 0 or i == total_samples - 1:
             (output_file).write_text(json.dumps(hallucination_data_ragas.to_json(), indent=4))
 
 
