@@ -1,6 +1,4 @@
 import torch
-import json
-from pathlib import Path
 from sklearn.metrics import (
     auc,
     classification_report,
@@ -11,8 +9,7 @@ from torch.nn import Module
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from lettucedetect.datasets.hallucination_dataset import HallucinationSample, HallucinationData
-
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 from lettucedetect.models.inference import HallucinationDetector
 
 
@@ -320,7 +317,6 @@ def evaluate_detector_example_level(
             "hallucinated": {"precision": float, "recall": float, "f1": float}
         }
     """
-
     example_preds: list[int] = []
     example_labels: list[int] = []
     hallucination_data_llm = HallucinationData(samples=[])

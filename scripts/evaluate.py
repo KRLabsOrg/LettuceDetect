@@ -111,7 +111,6 @@ def load_data(data_path):
 
 def save_baseline_data(data_path_llm, hallucination_data_llm):
     """This function saves the LLM baseline data into a file."""
-
     data_path_llm = Path(data_path_llm)
     (data_path_llm).write_text(json.dumps(hallucination_data_llm.to_json(), indent=4))
 

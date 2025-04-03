@@ -10,10 +10,8 @@ from sklearn.metrics import (
 )
 from tqdm.auto import tqdm
 
-
 from lettucedetect.datasets.hallucination_dataset import (
     HallucinationData,
-    HallucinationDataset,
     HallucinationSample,
 )
 
@@ -50,7 +48,6 @@ def evaluate_ragas(
             "hallucinated": {"precision": float, "recall": float, "f1": float}
         }
     """
-
     example_preds: list[int] = []
     example_labels: list[int] = []
 
@@ -138,7 +135,6 @@ def main(ground_truth_file: Path, ragas_baseline: Path, threshold):
     :param ragas_baseline: Path to the output file.
     :param threshold: Threshold user is interested in for the evaluation.
     """
-
     test_samples, task_type_map = load_data(ground_truth_file)
     test_samples_ragas, task_type_map_ragas = load_data(ragas_baseline)
 

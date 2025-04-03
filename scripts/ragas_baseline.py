@@ -1,16 +1,12 @@
 import argparse
-import asyncio
 import json
 import os
-import re
 from pathlib import Path
 
-from datasets import load_dataset
 from langchain_community.chat_models import ChatOpenAI
 from ragas.dataset_schema import SingleTurnSample
 from ragas.llms import LangchainLLMWrapper
-from ragas.metrics import Faithfulness, FaithfulnesswithHHEM
-from torch.utils.data import DataLoader
+from ragas.metrics import Faithfulness
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 
@@ -79,7 +75,7 @@ def load_check_existing_data(output_file: Path) -> HallucinationData:
     if output_file.exists():
         try:
             return HallucinationData.from_json(json.loads(output_file.read_text()))
-        except (json.JSONDecodeError, KeyError) as e:
+        except (json.JSONDecodeError, KeyError):
             return HallucinationData(samples=[])
     else:
         return HallucinationData(samples=[])
@@ -95,7 +91,6 @@ def main(
     :param output_dir: Path to the output file.
 
     """
-
     input_file = Path(input_file)
     output_file = Path(output_file)
 

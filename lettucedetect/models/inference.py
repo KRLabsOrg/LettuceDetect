@@ -2,16 +2,13 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
-from pathlib import Path
 
 import torch
 from openai import OpenAI
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
 from lettucedetect.datasets.hallucination_dataset import (
-    HallucinationData,
     HallucinationDataset,
-    HallucinationSample,
 )
 
 PROMPT_QA = """
