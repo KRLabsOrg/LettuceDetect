@@ -1,9 +1,15 @@
+import json
+import os
+import re
 from abc import ABC, abstractmethod
 
 import torch
+from openai import OpenAI
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
-from lettucedetect.datasets.hallucination_dataset import HallucinationDataset
+from lettucedetect.datasets.hallucination_dataset import (
+    HallucinationDataset,
+)
 
 PROMPT_QA = """
 Briefly answer the following question:
@@ -19,6 +25,70 @@ Summarize the following text:
 {text}
 output:
 """
+
+PROMPT_LLM = """
+<task>
+You will act as an expert annotator to evaluate an answer against a provided source text.
+The source text will be given within <source>... </source> XML tags.
+The answer  will be given within <answer>... </answer> XML tags.
+
+For each answer, follow these steps:
+Step 1: Read and fully understand the answer in german. The answer is a text containing information related to the source text.
+Step 2: Thoroughly analyze how the answer relates to the information in the source text. Determine whether the answer contains hallucinations. Hallucinations are sentences that contain one of the following information:
+    a. conflict: instances where the answer presents direct contraction or opposition to the original source.
+    b. baseless info: instances where the generated answer includes information which is not inferred from the original source.
+Step 3: Determine whether the answer contains any hallucinations. If no hallucinations are found, return an empty list.
+Step 4: Compile the labeled hallucinated spans found into a JSON dict, with a key "hallucination list" and its value is a list of
+hallucinated spans. If there exist potential hallucinations, the output should be in the following JSON format: {{"hallucination
+list": [hallucination span1, hallucination span2, ...]}}. In case of no hallucinations, please output an empty list : {{"hallucination
+list": []}}.
+Output only the JSON dict.
+
+</task>
+
+Given below are three examples for you to comprehend the task.
+<example1>
+
+
+Source: Was ist die Hauptstadt von Frankreich? Wie hoch ist die Bevölkerung Frankreichs? Frankreich ist ein Land in Europa. Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung Frankreichs beträgt 67 Millionen.
+Answer: Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung Frankreichs beträgt 69 Millionen.
+
+1.The answer states that Paris is capital of France. This matches the source and is correct.
+2.The answer states that the population of France is 69 million. This condradicts the source that the population is actually 67 million. 
+Hallucination -> "Die Bevölkerung von Frankreich beträgt 69 Millionen."
+Therefore, output only {{"hallucination list": ["Die Bevölkerung Frankreichs beträgt 69 Millionen." ]}}
+</example1>
+
+<example2>
+Source: Was ist die Hauptstadt von Frankreich? Wie hoch ist die Bevölkerung Frankreichs?  Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung von Frankreich beträgt 67 Millionen.
+Answer: Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung von Frankreich beträgt 67 Millionen, und die Amtssprache ist Spanisch.
+
+1.The answer states that Paris is capital of France. This matches the source and is correct.
+2.The answer states that the population of France is 69 million. This matches the source and is correct.
+3. The answer states that the language spoken in France is Spanish. This is incorrect and not supported by the source.
+Hallucination -> "die Amtssprache ist Spanisch"
+Therefore, output only {{"hallucination list": ["die Amtssprache ist Spanisch" ]}}
+
+</example2>
+
+<example3>
+Source: Was ist die Hauptstadt von Österreich? Wie hoch ist die Bevölkerung Österreich? Österreich ist ein Land in Europa. Die Hauptstadt von Österreich ist Wien. Die Bevölkerung Österreichs beträgt 9.1 Millionen.
+Answer: Die Hauptstadt von Österreich ist Wien. Die Bevölkerung Österreichs beträgt 9.1 Millionen.
+1.The answer states that Vienna is capital of Austria. This matches the source and is correct.
+2.The answer states that the population of Austria is 9.1 million. This matches the source and is correct.
+Hallucination -> No hallucinations found
+Therefore, output only {{"hallucination list": []}}
+</example3>
+
+\n 
+<source>
+{context}
+</source>
+\n 
+<answer>
+{answer}
+</answer>
+)"""
 
 
 class BaseDetector(ABC):
@@ -198,6 +268,119 @@ class TransformerDetector(BaseDetector):
         return self._predict(prompt, answer, output_format)
 
 
+class LLMDetector(BaseDetector):
+    def __init__(self, model: str = "gpt-4o", temperature: int = 0):
+        """Initialize the LLMDetector.
+
+        :param model: OpenAI model.
+        :param temperature: model temperature.
+        """
+        self.model = model
+        self.temperature = temperature
+
+    def _form_prompt(self, context: list[str], question: str | None) -> str:
+        """Form a prompt from the provided context and question. We use different prompts for summary and QA tasks.
+        :param context: A list of context strings.
+        :param question: The question string.
+        :return: The formatted prompt.
+        """
+        context_str = "\n".join(
+            [f"passage {i + 1}: {passage}" for i, passage in enumerate(context)]
+        )
+        if question is None:
+            return PROMPT_SUMMARY.format(text=context_str)
+        else:
+            return PROMPT_QA.format(
+                question=question, num_passages=len(context), context=context_str
+            )
+
+    def _create_labels(self, llm_content: str, answer: str) -> list:
+        """Create hallucination labels for each answer."""
+        labels = []
+        match_dict = re.search(r"\{.*?\}", llm_content, re.DOTALL)
+        try:
+            hal_dict = match_dict.group(0)
+            hal_dict = json.loads(hal_dict)
+        except json.JSONDecodeError:
+            return labels
+
+        for hal in hal_dict["hallucination list"]:
+            match = re.search(re.escape(hal), answer)
+            if match:
+                labels.append({"start": match.start(), "end": match.end(), "text": hal})
+
+        return labels
+
+    def _get_openai_client(self) -> OpenAI:
+        """Get OpenAI client configured from environment variables.
+
+        :return: Configured OpenAI client
+        :raises ValueError: If API key is not set
+        """
+        api_key = os.getenv("OPENAI_API_KEY") or "EMPTY"
+
+        return OpenAI(
+            api_key=api_key,
+        )
+
+    def _predict(self, context: str, answer: str, output_format: str = "spans") -> list:
+        """Prompts the ChatGPT model to predict hallucination spans from the provided context and answer.
+
+        :param context: The context string.
+        :param answer: The answer string.
+        :param output_format: works only for "spans" and returns grouped spans.
+        """
+        client = self._get_openai_client()
+
+        if output_format == "spans":
+            llm_prompt = PROMPT_LLM.format(context=context, answer=answer)
+            llm_response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant.",
+                    },
+                    {"role": "user", "content": llm_prompt},
+                ],
+                temperature=self.temperature,
+            )
+            llm_content = llm_response.choices[0].message.content
+            predictions = self._create_labels(llm_content, answer)
+            return predictions
+        else:
+            raise ValueError(
+                "Invalid output_format. This model can only predict hallucination spans. Use spans."
+            )
+
+    def predict_prompt(self, prompt: str, answer: str, output_format: str = "tokens") -> list:
+        """Predict hallucination spans from the provided prompt and answer.
+
+        :param prompt: The prompt string.
+        :param answer: The answer string.
+        :param output_format: "spans" to return grouped spans.
+        """
+        return self._predict(prompt, answer, output_format)
+
+    def predict(
+        self,
+        context: list[str],
+        answer: str,
+        question: str | None = None,
+        output_format: str = "spans",
+    ) -> list:
+        """Predict hallucination spans from the provided context, answer, and question.
+        This is a useful interface when we don't want to predict a specific prompt, but rather we have a list of contexts, answers, and questions. Useful to interface with RAG systems.
+
+        :param context: A list of context strings.
+        :param answer: The answer string.
+        :param question: The question string.
+        :param output_format: "spans" to return grouped spans.
+        """
+        prompt = self._form_prompt(context, question)
+        return self._predict(prompt, answer, output_format=output_format)
+
+
 class HallucinationDetector:
     def __init__(self, method: str = "transformer", **kwargs):
         """Facade for the hallucination detector.
@@ -207,8 +390,10 @@ class HallucinationDetector:
         """
         if method == "transformer":
             self.detector = TransformerDetector(**kwargs)
+        elif method == "llm":
+            self.detector = LLMDetector(**kwargs)
         else:
-            raise ValueError("Unsupported method. Choose 'transformer'.")
+            raise ValueError("Unsupported method. Choose 'transformer' or 'llm'.")
 
     def predict(
         self,
