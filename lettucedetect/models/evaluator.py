@@ -9,7 +9,7 @@ from torch.nn import Module
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
-from lettucedetect.datasets.hallucination_dataset import HallucinationSample
+from lettucedetect.datasets.hallucination_dataset import HallucinationData, HallucinationSample
 from lettucedetect.models.inference import HallucinationDetector
 
 
@@ -208,8 +208,24 @@ def evaluate_model_example_level(
     return results
 
 
+def create_sample_llm(sample, labels):
+    """Creates a sample where the annotations / labels are based on the LLM responses."""
+    return HallucinationSample(
+        sample.prompt,
+        sample.answer,
+        labels,
+        sample.split,
+        sample.task_type,
+        sample.dataset,
+        sample.language,
+    )
+
+
 def evaluate_detector_char_level(
-    detector: HallucinationDetector, samples: list[HallucinationSample]
+    detector: HallucinationDetector,
+    samples: list[HallucinationSample],
+    samples_llm: list[HallucinationSample] = None,
+    baseline_file_exists: bool = False,
 ) -> dict[str, float]:
     """Evaluate the HallucinationDetector at the character level.
 
@@ -219,23 +235,30 @@ def evaluate_detector_char_level(
       - "gold_spans": a list of dictionaries where each dictionary has "start" and "end" keys
                       indicating the character indices of the gold (human-labeled) span.
 
-    It uses the detector (which should have been initialized with the appropriate model)
+    It uses the detector (xwhich should have been initialized with the appropriate model)
     to obtain predicted spans, compares those spans with the gold spans, and computes global
     precision, recall, and F1 based on character overlap.
 
     :param detector: The detector to evaluate.
     :param samples: A list of samples to evaluate.
+    :param samples_llm : A list of samples containing LLM generated labels, is used if baseline file exists.
+    :param baseline_file_exists: Gives information if baseline file exists or should be created.
     :return: A dictionary with global metrics: {"char_precision": ..., "char_recall": ..., "char_f1": ...}
     """
     total_overlap = 0
     total_predicted = 0
     total_gold = 0
+    hallucination_data_llm = HallucinationData(samples=[])
 
-    for sample in tqdm(samples, desc="Evaluating", leave=False):
+    for i, sample in enumerate(tqdm(samples, desc="Evaluating", leave=False)):
         prompt = sample.prompt
         answer = sample.answer
         gold_spans = sample.labels
-        predicted_spans = detector.predict_prompt(prompt, answer, output_format="spans")
+        predicted_spans = (
+            samples_llm[i].labels
+            if baseline_file_exists
+            else detector.predict_prompt(prompt, answer, output_format="spans")
+        )
 
         # Compute total predicted span length for this sample.
         sample_predicted_length = sum(pred["end"] - pred["start"] for pred in predicted_spans)
@@ -255,8 +278,113 @@ def evaluate_detector_char_level(
                     sample_overlap += overlap_end - overlap_start
         total_overlap += sample_overlap
 
+        if not baseline_file_exists:
+            sample_llm = create_sample_llm(sample, predicted_spans)
+            hallucination_data_llm.samples.append(sample_llm)
+
     precision = total_overlap / total_predicted if total_predicted > 0 else 0
     recall = total_overlap / total_gold if total_gold > 0 else 0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
 
-    return {"precision": precision, "recall": recall, "f1": f1}
+    return {"precision": precision, "recall": recall, "f1": f1}, hallucination_data_llm
+
+
+def evaluate_detector_example_level(
+    detector: HallucinationDetector,
+    samples: list[HallucinationSample],
+    samples_llm: list[HallucinationSample] = None,
+    baseline_file_exists: bool = None,
+    verbose: bool = True,
+) -> dict[str, dict[str, float]]:
+    """Evaluate the HallucinationDetector at the example level.
+
+    This function assumes that each sample is a dictionary containing:
+      - "prompt": the prompt text.
+      - "answer": the answer text.
+      - "gold_spans": a list of dictionaries where each dictionary has "start" and "end" keys
+                      indicating the character indices of the gold (human-labeled) span.
+
+    It uses the detector (which should have been initialized with the appropriate model) or gets samples from the baseline file if it exists
+    to obtain predicted spans, if any span is predicted the example is marked as hallucinated (label = 1)
+    then the whole example is considered hallucinated. Otherwise, it is supported.
+    :param detector: The detector to evaluate.
+    :param samples: A list of samples to evaluate containing the ground truth labels.
+    :param samples_llm : A list of samples containing LLM generated labels, is used if baseline file exists.
+    :param baseline_file_exists: Gives information if baseline file exists or should be created.
+    :return: A dict containing example-level metrics:
+        {
+            "supported": {"precision": float, "recall": float, "f1": float},
+            "hallucinated": {"precision": float, "recall": float, "f1": float}
+        }
+    """
+    example_preds: list[int] = []
+    example_labels: list[int] = []
+    hallucination_data_llm = HallucinationData(samples=[])
+
+    for i, sample in enumerate(tqdm(samples, desc="Evaluating", leave=False)):
+        prompt = sample.prompt
+        answer = sample.answer
+        gold_spans = sample.labels
+        predicted_spans = (
+            samples_llm.__getitem__(i).labels
+            if baseline_file_exists
+            else detector.predict_prompt(prompt, answer, output_format="spans")
+        )
+        true_example_label = 1 if gold_spans else 0
+        pred_example_label = 1 if predicted_spans else 0
+
+        example_labels.append(true_example_label)
+        example_preds.append(pred_example_label)
+
+        if not baseline_file_exists:
+            sample_llm = create_sample_llm(sample, predicted_spans)
+            hallucination_data_llm.samples.append(sample_llm)
+
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        example_labels, example_preds, labels=[0, 1], average=None, zero_division=0
+    )
+
+    results: dict[str, dict[str, float]] = {
+        "supported": {  # Class 0
+            "precision": float(precision[0]),
+            "recall": float(recall[0]),
+            "f1": float(f1[0]),
+        },
+        "hallucinated": {  # Class 1
+            "precision": float(precision[1]),
+            "recall": float(recall[1]),
+            "f1": float(f1[1]),
+        },
+    }
+
+    # Calculating AUROC
+    fpr, tpr, _ = roc_curve(example_labels, example_preds)
+    auroc = auc(fpr, tpr)
+
+    results: dict[str, dict[str, float]] = {
+        "supported": {  # Class 0
+            "precision": float(precision[0]),
+            "recall": float(recall[0]),
+            "f1": float(f1[0]),
+        },
+        "hallucinated": {  # Class 1
+            "precision": float(precision[1]),
+            "recall": float(recall[1]),
+            "f1": float(f1[1]),
+        },
+    }
+    results["auroc"] = auroc
+
+    if verbose:
+        report = classification_report(
+            example_labels,
+            example_preds,
+            target_names=["Supported", "Hallucinated"],
+            digits=4,
+            zero_division=0,
+        )
+        print("\nDetailed Example-Level Classification Report:")
+        print(report)
+        results["classification_report"] = report
+
+    return results, hallucination_data_llm
