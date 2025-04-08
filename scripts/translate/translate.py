@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +36,23 @@ Translate the following prompt from {source_lang} to {target_lang}.
 - Translate only the given prompt.
 - Do not include any additional sentences summarizing or explaining the translation. 
 - Your output should be just the translated prompt, nothing else.
+- Structured JSON objects should be translated as well by translating both the keys and values.
+
+{source_lang}:
+======START-PROMPT======
+{text}
+======END-PROMPT======
+
+Output in {target_lang}:
+"""
+
+
+TRANSLATION_PROMPT_DATA2TXT = """
+Translate the following prompt from {source_lang} to {target_lang}.
+- Translate only the given prompt.
+- Do not include any additional sentences summarizing or explaining the translation. 
+- Your output should be just the translated prompt, nothing else.
+- Always translate JSON object as well by translating both the keys and values, e.g. "review_text": "..." -> should be translated to the language of the target language (e.g. "Bewertungstext": "...")
 
 {source_lang}:
 ======START-PROMPT======
@@ -103,6 +120,7 @@ def translate_text(
     text: str,
     client: OpenAI,
     model: str,
+    task_type: str,
     source_lang: str = "EN",
     target_lang: str = "DE",
     prompt: bool = False,
@@ -122,7 +140,13 @@ def translate_text(
         return ""
 
     try:
-        translation_prompt = TRANSLATION_ANSWER if prompt else TRANSLATION_PROMPT
+        translation_prompt = (
+            TRANSLATION_ANSWER
+            if prompt
+            else TRANSLATION_PROMPT_DATA2TXT
+            if task_type == "Data2txt"
+            else TRANSLATION_PROMPT
+        )
         translation_prompt = translation_prompt.format(
             source_lang=source_lang, target_lang=target_lang, text=text
         )
@@ -291,12 +315,14 @@ def translate_sample(
             logger.warning(f"Sample {sample_index} has empty prompt or answer. Skipping.")
             return None
 
-        translated_prompt = translate_text(sample.prompt, client, model, source_lang, target_lang)
+        translated_prompt = translate_text(
+            sample.prompt, client, model, sample.task_type, source_lang, target_lang
+        )
 
         tagged_answer, labels = put_hallucination_tags(sample, sample.answer)
 
         translated_answer = translate_text(
-            tagged_answer, client, model, source_lang, target_lang, prompt=True
+            tagged_answer, client, model, sample.task_type, source_lang, target_lang, prompt=True
         )
 
         # Default to the translated answer (will be replaced if there are hallucination spans)
@@ -391,7 +417,7 @@ def process_batch(
         futures.append(future)
 
     results = []
-    for future in as_completed(futures):
+    for future in futures:
         try:
             result = future.result()
             if result:
