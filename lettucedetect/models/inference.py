@@ -11,6 +11,7 @@ from lettucedetect.datasets.hallucination_dataset import (
     HallucinationDataset,
 )
 
+
 PROMPT_QA = """
 Briefly answer the following question:
 {question}
@@ -153,7 +154,11 @@ class TransformerDetector(BaseDetector):
         labels = torch.full_like(encoding.input_ids[0], -100, device=self.device)
         labels[answer_start_token:] = 0
         # Move encoding to the device
-        encoding = {key: value.to(self.device) for key, value in encoding.items()}
+        encoding = {
+            key: value.to(self.device)
+            for key, value in encoding.items()
+            if key in ["input_ids", "attention_mask", "labels"]
+        }
         labels = torch.tensor(labels, device=self.device)
 
         # Run model inference
