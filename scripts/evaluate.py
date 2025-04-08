@@ -178,7 +178,9 @@ def main():
     if args.method == "transformer":
         if args.evaluation_type in {"token_level", "example_level"}:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            model = AutoModelForTokenClassification.from_pretrained(args.model_path).to(device)
+            model = AutoModelForTokenClassification.from_pretrained(
+                args.model_path, trust_remote_code=True
+            ).to(device)
             tokenizer = AutoTokenizer.from_pretrained(args.model_path)
             detector = None
         else:  # char_level
