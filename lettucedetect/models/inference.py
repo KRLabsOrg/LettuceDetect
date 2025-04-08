@@ -11,7 +11,6 @@ from lettucedetect.datasets.hallucination_dataset import (
     HallucinationDataset,
 )
 
-
 PROMPT_QA = """
 Briefly answer the following question:
 {question}
