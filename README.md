@@ -224,7 +224,7 @@ positional arguments:
                         environments. The serve script uses "fastapi dev" for "dev" or
                         "fastapi run" for "prod" to start the web server. Additionally
                         when choosing the "dev" mode, python modules can be directly
-                        imported from the repositroy without installing the package.
+                        imported from the repository without installing the package.
 
 options:
   -h, --help            show this help message and exit
