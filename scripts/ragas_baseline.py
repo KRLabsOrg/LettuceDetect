@@ -102,7 +102,7 @@ def main(
     total_samples = len(hallucination_data_ragas.samples)
 
     llm = LangchainLLMWrapper(
-        ChatOpenAI(model="gpt-3.5-turbo", openai_api_key=get_api_key(), temperature=0)
+        ChatOpenAI(model="gpt-4o", openai_api_key=get_api_key(), temperature=0)
     )
 
     for i, sample in enumerate(samples, start=num_processed):
