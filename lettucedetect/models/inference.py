@@ -88,7 +88,7 @@ class TransformerDetector(BaseDetector):
             for key, value in encoding.items()
             if key in ["input_ids", "attention_mask", "labels"]
         }
-        labels = torch.tensor(labels, device=self.device)
+        labels = labels.clone().detach().to(self.device)
 
         # Run model inference
         with torch.no_grad():
