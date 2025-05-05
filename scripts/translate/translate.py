@@ -156,7 +156,7 @@ def translate_text(
             messages=[
                 {"role": "user", "content": translation_prompt},
             ],
-            temperature=0.3,
+            temperature=0.4,
         )
 
         # Strip lines starting with the character '='
@@ -630,10 +630,10 @@ if __name__ == "__main__":
         "--dataset", type=str, default="ragtruth", help="Dataset name (ragtruth, ragbench, etc.)"
     )
     parser.add_argument(
-        "--batch-size", type=int, default=5, help="Number of samples to process in each batch"
+        "--batch-size", type=int, default=30, help="Number of samples to process in each batch"
     )
     parser.add_argument(
-        "--max-workers", type=int, default=5, help="Maximum number of worker threads"
+        "--max-workers", type=int, default=30, help="Maximum number of worker threads"
     )
     parser.add_argument(
         "--no-resume", action="store_true", help="Don't resume from previous run, start fresh"

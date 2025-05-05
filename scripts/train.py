@@ -3,6 +3,8 @@ import json
 import random
 from pathlib import Path
 
+import numpy as np
+import torch
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForTokenClassification,
@@ -16,6 +18,22 @@ from lettucedetect.datasets.hallucination_dataset import (
     HallucinationSample,
 )
 from lettucedetect.models.trainer import Trainer
+
+
+def set_seed(seed: int = 42):
+    """Set all seeds for reproducibility.
+
+    Args:
+        seed: The seed to use
+
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    # For complete determinism at cost of performance:
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
 
 
 def parse_args():
@@ -72,6 +90,9 @@ def split_train_dev(
 
 
 def main():
+    # Set seeds for reproducibility
+    set_seed(123)
+
     args = parse_args()
     ragtruth_path = Path(args.ragtruth_path)
     ragtruth_data = HallucinationData.from_json(json.loads(ragtruth_path.read_text()))

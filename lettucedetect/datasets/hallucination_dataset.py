@@ -109,12 +109,19 @@ class HallucinationDataset(Dataset):
 
         offsets = encoding.pop("offset_mapping")[0]  # shape: (seq_length, 2)
 
-        # Compute start token index.
+        # Simple approach: encode just the context with special tokens
+        # For most tokenizers, the answer starts right after this
+        context_only = tokenizer(context, add_special_tokens=True, return_tensors="pt")
+        # The answer starts after the context sequence (with its special tokens)
+        answer_start_token = context_only["input_ids"].shape[1]
 
-        prompt_tokens = tokenizer.encode(context, add_special_tokens=False)
-
-        # Tokenization adds [CLS] at the start and [SEP] after the prompt.
-        answer_start_token = 1 + len(prompt_tokens) + 1  # [CLS] + prompt tokens + [SEP]
+        # Handle any edge cases where this might land on a special token
+        if (
+            answer_start_token < offsets.size(0)
+            and offsets[answer_start_token][0] == offsets[answer_start_token][1]
+        ):
+            # If we landed on a special token, move forward
+            answer_start_token += 1
 
         # Initialize labels: -100 for tokens before the asnwer, 0 for tokens in the answer.
         labels = [-100] * encoding["input_ids"].shape[1]

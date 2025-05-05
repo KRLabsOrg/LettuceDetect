@@ -170,7 +170,11 @@ def main():
 
     test_samples, task_type_map = load_data(args.data_path)
 
-    baseline_file_exists = exists_baseline_data(args.data_path, args.data_path_llm)
+    baseline_file_exists = (
+        False
+        if args.data_path_llm is None
+        else exists_baseline_data(args.data_path, args.data_path_llm)
+    )
 
     print(f"\nEvaluating model on test samples: {len(test_samples)}")
 
