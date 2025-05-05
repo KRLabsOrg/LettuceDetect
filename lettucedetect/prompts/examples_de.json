@@ -1,0 +1,21 @@
+[
+    {
+        "source": "Was ist die Hauptstadt von Frankreich? Wie hoch ist die Bevölkerung Frankreichs? Frankreich ist ein Land in Europa. Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung Frankreichs beträgt 67 Millionen.",
+        "answer": "Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung Frankreichs beträgt 69 Millionen.",
+        "hallucination_list": [
+            "Die Bevölkerung Frankreichs beträgt 69 Millionen."
+        ]
+    },
+    {
+        "source": "Was ist die Hauptstadt von Frankreich? Wie hoch ist die Bevölkerung Frankreichs? Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung von Frankreich beträgt 67 Millionen.",
+        "answer": "Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung von Frankreich beträgt 67 Millionen, und die Amtssprache ist Spanisch.",
+        "hallucination_list": [
+            "die Amtssprache ist Spanisch"
+        ]
+    },
+    {
+        "source": "Was ist die Hauptstadt von Österreich? Wie hoch ist die Bevölkerung Österreich? Österreich ist ein Land in Europa. Die Hauptstadt von Österreich ist Wien. Die Bevölkerung Österreichs beträgt 9.1 Millionen.",
+        "answer": "Die Hauptstadt von Österreich ist Wien. Die Bevölkerung Österreichs beträgt 9.1 Millionen.",
+        "hallucination_list": []
+    }
+]

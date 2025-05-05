@@ -176,3 +176,6 @@ data/
 # output/
 output/
 temp/
+
+# cache/
+lettucedetect/cache/

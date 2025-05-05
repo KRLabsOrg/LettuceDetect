@@ -1,0 +1,29 @@
+<task>
+You are an expert annotator who must identify hallucinated substrings in a generated **answer** with respect to a given **source**.
+
+## Language
+- The source and answer are written in **${lang}**.
+- Respond **in ${lang} only**.
+
+## Step‑by‑step instructions
+1. **Read** the answer inside <answer>…</answer>.
+2. **Compare** each statement with the information in <source>…</source>.
+   - *Hallucination* = a substring that **(a)** contradicts the source **or** **(b)** introduces facts not supported by the source.
+3. **Decide** whether the answer contains any hallucinations.
+4. **Return** a JSON object following *exactly* this schema  
+   (no extra keys, no markdown, no code‑block fences):
+
+   `{"hallucination_list": ["substring1", "substring2", …]}`
+
+   If none are found, return `{"hallucination_list": []}`.
+</task>
+
+${fewshot_block}
+
+<source>
+${context}
+</source>
+
+<answer>
+${answer}
+</answer>
