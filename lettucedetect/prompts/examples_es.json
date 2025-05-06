@@ -1,0 +1,35 @@
+[
+    {
+        "source": "¿Cuál es la capital de Francia? ¿Cuál es la población de Francia? Francia es un país en Europa. La capital de Francia es París. La población de Francia es de 67 millones.",
+        "answer": "La capital de Francia es París. La población de Francia es de 69 millones.",
+        "hallucination_list": [
+            "La población de Francia es de 69 millones."
+        ]
+    },
+    {
+        "source": "¿Cuál es la capital de Francia? ¿Cuál es la población de Francia? La capital de Francia es París. La población de Francia es de 67 millones.",
+        "answer": "La capital de Francia es París. La población de Francia es de 67 millones, y el idioma oficial es el italiano.",
+        "hallucination_list": [
+            "el idioma oficial es el italiano"
+        ]
+    },
+    {
+        "source": "¿Cuál es la capital de Austria? ¿Cuál es la población de Austria? Austria es un país en Europa. La capital de Austria es Viena. La población de Austria es de 9,1 millones.",
+        "answer": "La capital de Austria es Viena. La población de Austria es de 9,1 millones.",
+        "hallucination_list": []
+    },
+    {
+        "source": "¿Quién fue la primera persona en caminar sobre la luna? ¿Cuándo sucedió esto? Neil Armstrong fue la primera persona en caminar sobre la luna. Este histórico evento tuvo lugar el 20 de julio de 1969, durante la misión Apolo 11.",
+        "answer": "Neil Armstrong fue la primera persona en caminar sobre la luna. Este histórico evento tuvo lugar el 16 de julio de 1969, durante la misión Apolo 11.",
+        "hallucination_list": [
+            "Este histórico evento tuvo lugar el 16 de julio de 1969"
+        ]
+    },
+    {
+        "source": "¿Cuál es la montaña más alta del mundo? El Monte Everest es la montaña más alta del mundo, con una altura de 8.848 metros sobre el nivel del mar. Está ubicado en la subcordillera Mahalangur Himal del Himalaya, en la frontera entre Nepal y Tíbet.",
+        "answer": "El Monte Everest es la montaña más alta del mundo, con una altura de 8.848 metros sobre el nivel del mar. Está ubicado en la subcordillera Mahalangur Himal del Himalaya, en la frontera entre India y China.",
+        "hallucination_list": [
+            "Está ubicado en la subcordillera Mahalangur Himal del Himalaya, en la frontera entre India y China."
+        ]
+    }
+] 

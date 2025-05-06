@@ -1,0 +1,3 @@
+Streść następujący tekst:
+${text}
+Wynik: 

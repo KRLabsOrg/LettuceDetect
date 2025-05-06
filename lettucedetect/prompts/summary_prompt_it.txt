@@ -1,0 +1,3 @@
+Riassumi il seguente testo:
+${text}
+Risposta: 

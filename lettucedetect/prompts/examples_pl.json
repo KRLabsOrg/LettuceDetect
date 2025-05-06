@@ -1,0 +1,35 @@
+[
+    {
+        "source": "Jaka jest stolica Francji? Jaka jest populacja Francji? Francja jest krajem w Europie. Stolicą Francji jest Paryż. Populacja Francji wynosi 67 milionów.",
+        "answer": "Stolicą Francji jest Paryż. Populacja Francji wynosi 69 milionów.",
+        "hallucination_list": [
+            "Populacja Francji wynosi 69 milionów."
+        ]
+    },
+    {
+        "source": "Jaka jest stolica Francji? Jaka jest populacja Francji? Stolicą Francji jest Paryż. Populacja Francji wynosi 67 milionów.",
+        "answer": "Stolicą Francji jest Paryż. Populacja Francji wynosi 67 milionów, a językiem urzędowym jest hiszpański.",
+        "hallucination_list": [
+            "językiem urzędowym jest hiszpański"
+        ]
+    },
+    {
+        "source": "Jaka jest stolica Austrii? Jaka jest populacja Austrii? Austria jest krajem w Europie. Stolicą Austrii jest Wiedeń. Populacja Austrii wynosi 9,1 miliona.",
+        "answer": "Stolicą Austrii jest Wiedeń. Populacja Austrii wynosi 9,1 miliona.",
+        "hallucination_list": []
+    },
+    {
+        "source": "Kto był pierwszym człowiekiem, który chodził po księżycu? Kiedy to się stało? Neil Armstrong był pierwszym człowiekiem, który chodził po księżycu. To historyczne wydarzenie miało miejsce 20 lipca 1969 roku, podczas misji Apollo 11.",
+        "answer": "Neil Armstrong był pierwszym człowiekiem, który chodził po księżycu. To historyczne wydarzenie miało miejsce 16 lipca 1969 roku, podczas misji Apollo 11.",
+        "hallucination_list": [
+            "To historyczne wydarzenie miało miejsce 16 lipca 1969 roku"
+        ]
+    },
+    {
+        "source": "Jaka jest najwyższa góra na świecie? Mount Everest jest najwyższą górą na świecie, z wysokością 8848 metrów nad poziomem morza. Znajduje się w paśmie Mahalangur Himal w Himalajach, na granicy między Nepalem a Tybetem.",
+        "answer": "Mount Everest jest najwyższą górą na świecie, z wysokością 8848 metrów nad poziomem morza. Znajduje się w paśmie Mahalangur Himal w Himalajach, na granicy między Indiami a Chinami.",
+        "hallucination_list": [
+            "Znajduje się w paśmie Mahalangur Himal w Himalajach, na granicy między Indiami a Chinami."
+        ]
+    }
+] 

@@ -1,0 +1,35 @@
+[
+    {
+        "source": "Qual è la capitale della Francia? Qual è la popolazione della Francia? La Francia è un paese in Europa. La capitale della Francia è Parigi. La popolazione della Francia è di 67 milioni.",
+        "answer": "La capitale della Francia è Parigi. La popolazione della Francia è di 69 milioni.",
+        "hallucination_list": [
+            "La popolazione della Francia è di 69 milioni."
+        ]
+    },
+    {
+        "source": "Qual è la capitale della Francia? Qual è la popolazione della Francia? La capitale della Francia è Parigi. La popolazione della Francia è di 67 milioni.",
+        "answer": "La capitale della Francia è Parigi. La popolazione della Francia è di 67 milioni, e la lingua ufficiale è lo spagnolo.",
+        "hallucination_list": [
+            "la lingua ufficiale è lo spagnolo"
+        ]
+    },
+    {
+        "source": "Qual è la capitale dell'Austria? Qual è la popolazione dell'Austria? L'Austria è un paese in Europa. La capitale dell'Austria è Vienna. La popolazione dell'Austria è di 9,1 milioni.",
+        "answer": "La capitale dell'Austria è Vienna. La popolazione dell'Austria è di 9,1 milioni.",
+        "hallucination_list": []
+    },
+    {
+        "source": "Chi è stato il primo uomo a camminare sulla luna? Quando è successo? Neil Armstrong è stato il primo uomo a camminare sulla luna. Questo evento storico è avvenuto il 20 luglio 1969, durante la missione Apollo 11.",
+        "answer": "Neil Armstrong è stato il primo uomo a camminare sulla luna. Questo evento storico è avvenuto il 16 luglio 1969, durante la missione Apollo 11.",
+        "hallucination_list": [
+            "Questo evento storico è avvenuto il 16 luglio 1969"
+        ]
+    },
+    {
+        "source": "Qual è la montagna più alta del mondo? Il Monte Everest è la montagna più alta del mondo, con un'altitudine di 8.848 metri sul livello del mare. Si trova nella sottocatena Mahalangur Himal dell'Himalaya, al confine tra Nepal e Tibet.",
+        "answer": "Il Monte Everest è la montagna più alta del mondo, con un'altitudine di 8.848 metri sul livello del mare. Si trova nella sottocatena Mahalangur Himal dell'Himalaya, al confine tra India e Cina.",
+        "hallucination_list": [
+            "Si trova nella sottocatena Mahalangur Himal dell'Himalaya, al confine tra India e Cina."
+        ]
+    }
+] 

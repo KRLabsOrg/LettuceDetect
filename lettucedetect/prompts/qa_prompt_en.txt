@@ -1,0 +1,6 @@
+Briefly answer the following question:
+${question}
+Bear in mind that your response should be strictly based on the following ${num_passages} passages:
+${context}
+In case the passages do not contain the necessary information to answer the question, please reply with: "Unable to answer based on given passages."
+output:

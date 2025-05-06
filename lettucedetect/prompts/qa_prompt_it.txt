@@ -1,0 +1,6 @@
+Rispondi alla seguente domanda in modo breve:
+${question}
+Tieni presente che la tua risposta deve basarsi solo sui seguenti ${num_passages} passaggi:
+${context}
+Se i passaggi non contengono le informazioni necessarie per rispondere alla domanda, per favore rispondi con: "Non può essere risposto in base ai passaggi forniti."
+Risposta:

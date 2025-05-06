@@ -1,0 +1,6 @@
+Odpowiedz krótko na następujące pytanie:
+${question}
+Pamiętaj, że Twoja odpowiedź powinna opierać się wyłącznie na następujących ${num_passages} fragmentach:
+${context}
+Jeśli fragmenty nie zawierają informacji niezbędnych do udzielenia odpowiedzi na pytanie, odpowiedz: "Nie można odpowiedzieć na podstawie podanych fragmentów."
+Wynik: 

@@ -1,0 +1,6 @@
+Beantworte die folgende Frage kurz:
+${question}
+Beachte, dass deine Antwort nur auf den folgenden ${num_passages} Passagen basieren soll:
+${context}
+Falls die Passagen nicht die notwendigen Informationen zur Beantwortung der Frage enthalten, antworte bitte mit: "Kann aufgrund der gegebenen Passagen nicht beantwortet werden."
+Ausgabe:

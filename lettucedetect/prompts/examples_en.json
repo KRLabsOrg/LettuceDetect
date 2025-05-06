@@ -1,0 +1,35 @@
+[
+    {
+        "source": "What is the capital of France? What is the population of France? France is a country in Europe. The capital of France is Paris. The population of France is 67 million.",
+        "answer": "The capital of France is Paris. The population of France is 69 million.",
+        "hallucination_list": [
+            "The population of France is 69 million."
+        ]
+    },
+    {
+        "source": "What is the capital of France? What is the population of France? The capital of France is Paris. The population of France is 67 million.",
+        "answer": "The capital of France is Paris. The population of France is 67 million, and the official language is Spanish.",
+        "hallucination_list": [
+            "the official language is Spanish"
+        ]
+    },
+    {
+        "source": "What is the capital of Austria? What is the population of Austria? Austria is a country in Europe. The capital of Austria is Vienna. The population of Austria is 9.1 million.",
+        "answer": "The capital of Austria is Vienna. The population of Austria is 9.1 million.",
+        "hallucination_list": []
+    },
+    {
+        "source": "Who was the first person to walk on the moon? When did this happen? Neil Armstrong was the first person to walk on the moon. This historic event took place on July 20, 1969, during the Apollo 11 mission.",
+        "answer": "Neil Armstrong was the first person to walk on the moon. This historic event took place on July 16, 1969, during the Apollo 11 mission.",
+        "hallucination_list": [
+            "This historic event took place on July 16, 1969"
+        ]
+    },
+    {
+        "source": "What is the tallest mountain in the world? Mount Everest is the tallest mountain in the world, with a height of 8,848 meters above sea level. It is located in the Mahalangur Himal sub-range of the Himalayas on the border between Nepal and Tibet.",
+        "answer": "Mount Everest is the tallest mountain in the world, with a height of 8,848 meters above sea level. It is located in the Mahalangur Himal sub-range of the Himalayas on the border between India and China.",
+        "hallucination_list": [
+            "It is located in the Mahalangur Himal sub-range of the Himalayas on the border between India and China."
+        ]
+    }
+]

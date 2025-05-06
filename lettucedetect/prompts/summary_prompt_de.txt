@@ -1,0 +1,3 @@
+Fasse den folgenden Text zusammen:
+${text}
+Ausgabe:

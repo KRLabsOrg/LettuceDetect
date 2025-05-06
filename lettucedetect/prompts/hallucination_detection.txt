@@ -9,7 +9,9 @@ You are an expert annotator who must identify hallucinated substrings in a gener
 1. **Read** the answer inside <answer>…</answer>.
 2. **Compare** each statement with the information in <source>…</source>.
    - *Hallucination* = a substring that **(a)** contradicts the source **or** **(b)** introduces facts not supported by the source.
-3. **Decide** whether the answer contains any hallucinations.
+   - *Not hallucination* = a substring that is consistent with the source.
+   - *Boileplate substring* = a substring that is not a hallucination but is not relevant to the question (e.g. introductory phrases, etc.)
+3. **Decide** whether the answer contains any hallucinations, be precise, in your answer only include substrings that are hallucinations.
 4. **Return** a JSON object following *exactly* this schema  
    (no extra keys, no markdown, no code‑block fences):
 

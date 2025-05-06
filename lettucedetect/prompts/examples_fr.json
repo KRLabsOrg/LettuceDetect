@@ -1,0 +1,35 @@
+[
+    {
+        "source": "Quelle est la capitale de la France ? Quelle est la population de la France ? La France est un pays d'Europe. La capitale de la France est Paris. La population de la France est de 67 millions.",
+        "answer": "La capitale de la France est Paris. La population de la France est de 69 millions.",
+        "hallucination_list": [
+            "La population de la France est de 69 millions."
+        ]
+    },
+    {
+        "source": "Quelle est la capitale de la France ? Quelle est la population de la France ? La capitale de la France est Paris. La population de la France est de 67 millions.",
+        "answer": "La capitale de la France est Paris. La population de la France est de 67 millions, et la langue officielle est l'espagnol.",
+        "hallucination_list": [
+            "la langue officielle est l'espagnol"
+        ]
+    },
+    {
+        "source": "Quelle est la capitale de l'Autriche ? Quelle est la population de l'Autriche ? L'Autriche est un pays d'Europe. La capitale de l'Autriche est Vienne. La population de l'Autriche est de 9,1 millions.",
+        "answer": "La capitale de l'Autriche est Vienne. La population de l'Autriche est de 9,1 millions.",
+        "hallucination_list": []
+    },
+    {
+        "source": "Qui a été le premier homme à marcher sur la lune ? Quand cela s'est-il produit ? Neil Armstrong a été le premier homme à marcher sur la lune. Cet événement historique a eu lieu le 20 juillet 1969, lors de la mission Apollo 11.",
+        "answer": "Neil Armstrong a été le premier homme à marcher sur la lune. Cet événement historique a eu lieu le 16 juillet 1969, lors de la mission Apollo 11.",
+        "hallucination_list": [
+            "Cet événement historique a eu lieu le 16 juillet 1969"
+        ]
+    },
+    {
+        "source": "Quelle est la plus haute montagne du monde ? Le mont Everest est la plus haute montagne du monde, avec une altitude de 8 848 mètres au-dessus du niveau de la mer. Il est situé dans la sous-chaîne de Mahalangur Himal de l'Himalaya, à la frontière entre le Népal et le Tibet.",
+        "answer": "Le mont Everest est la plus haute montagne du monde, avec une altitude de 8 848 mètres au-dessus du niveau de la mer. Il est situé dans la sous-chaîne de Mahalangur Himal de l'Himalaya, à la frontière entre l'Inde et la Chine.",
+        "hallucination_list": [
+            "Il est situé dans la sous-chaîne de Mahalangur Himal de l'Himalaya, à la frontière entre l'Inde et la Chine."
+        ]
+    }
+] 

@@ -1,0 +1,3 @@
+Résume le texte suivant :
+${text}
+Sortie : 

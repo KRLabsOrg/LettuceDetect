@@ -5,6 +5,7 @@ import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from string import Template
+from typing import Literal
 
 import torch
 from openai import OpenAI
@@ -14,22 +15,14 @@ from lettucedetect.datasets.hallucination_dataset import (
     HallucinationDataset,
 )
 
-# ==== For formatting user input to the right format ====
-PROMPT_QA = """
-Briefly answer the following question:
-{question}
-Bear in mind that your response should be strictly based on the following {num_passages} passages:
-{context}
-In case the passages do not contain the necessary information to answer the question, please reply with: "Unable to answer based on given passages."
-output:
-"""
-
-PROMPT_SUMMARY = """
-Summarize the following text:
-{text}
-output:
-"""
-# =====================================================
+LANG_TO_PASSAGE = {
+    "en": "passage",
+    "de": "Passage",
+    "fr": "passage",
+    "es": "pasaje",
+    "it": "brano",
+    "pl": "fragment",
+}
 
 
 # ==== Base class for all detectors ====
@@ -47,19 +40,38 @@ class BaseDetector(ABC):
 
 # ==== Transformer-based detector ====
 class TransformerDetector(BaseDetector):
-    def __init__(self, model_path: str, max_length: int = 4096, device=None, **kwargs):
+    def __init__(
+        self,
+        model_path: str,
+        max_length: int = 4096,
+        device=None,
+        lang: Literal["en", "de", "fr", "es", "it", "pl"] = "en",
+        **kwargs,
+    ):
         """Initialize the TransformerDetector.
 
         :param model_path: The path to the model.
         :param max_length: The maximum length of the input sequence.
         :param device: The device to run the model on.
+        :param lang: The language of the model.
         """
+        if lang not in LANG_TO_PASSAGE:
+            raise ValueError(f"Invalid language. Use one of: {', '.join(LANG_TO_PASSAGE.keys())}")
+
+        self.lang = lang
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, **kwargs)
         self.model = AutoModelForTokenClassification.from_pretrained(model_path, **kwargs)
         self.max_length = max_length
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.model.eval()
+
+        prompt_path = Path(__file__).parent.parent / "prompts" / f"qa_prompt_{lang.lower()}.txt"
+        self.prompt_qa = Template(prompt_path.read_text(encoding="utf-8"))
+        prompt_path = (
+            Path(__file__).parent.parent / "prompts" / f"summary_prompt_{lang.lower()}.txt"
+        )
+        self.prompt_summary = Template(prompt_path.read_text(encoding="utf-8"))
 
     def _form_prompt(self, context: list[str], question: str | None) -> str:
         """Form a prompt from the provided context and question. We use different prompts for summary and QA tasks.
@@ -69,12 +81,15 @@ class TransformerDetector(BaseDetector):
         :return: The formatted prompt.
         """
         context_str = "\n".join(
-            [f"passage {i + 1}: {passage}" for i, passage in enumerate(context)]
+            [
+                f"{LANG_TO_PASSAGE[self.lang]} {i + 1}: {passage}"
+                for i, passage in enumerate(context)
+            ]
         )
         if question is None:
-            return PROMPT_SUMMARY.format(text=context_str)
+            return self.prompt_summary.substitute(text=context_str)
         else:
-            return PROMPT_QA.format(
+            return self.prompt_qa.substitute(
                 question=question, num_passages=len(context), context=context_str
             )
 
@@ -243,7 +258,8 @@ class LLMDetector(BaseDetector):
         self,
         model: str = "gpt-4o",
         temperature: int = 0,
-        lang: str = "en",
+        lang: Literal["en", "de", "fr", "es", "it", "pl"] = "en",
+        zero_shot: bool = False,
         fewshot_path: str | None = None,
         prompt_path: str | None = None,
         cache_file: str | None = None,
@@ -253,6 +269,7 @@ class LLMDetector(BaseDetector):
         :param model: OpenAI model.
         :param temperature: model temperature.
         :param lang: language of the examples.
+        :param zero_shot: whether to use zero-shot prompting.
         :param fewshot_path: path to the fewshot examples.
         :param prompt_path: path to the prompt template.
         :param cache_file: path to the cache file.
@@ -260,8 +277,11 @@ class LLMDetector(BaseDetector):
         self.model = model
         self.temperature = temperature
 
-        self.lang = lang
+        if lang not in LANG_TO_PASSAGE:
+            raise ValueError(f"Invalid language. Use one of: {', '.join(LANG_TO_PASSAGE.keys())}")
 
+        self.lang = lang
+        self.zero_shot = zero_shot
         if fewshot_path is None:
             print(
                 f"No fewshot path provided, using default path: {Path(__file__).parent.parent / 'prompts' / f'examples_{lang.lower()}.json'}"
@@ -283,7 +303,15 @@ class LLMDetector(BaseDetector):
         else:
             template_path = Path(prompt_path)
 
+        prompt_qa_path = Path(__file__).parent.parent / "prompts" / f"qa_prompt_{lang.lower()}.txt"
+        prompt_summary_path = (
+            Path(__file__).parent.parent / "prompts" / f"summary_prompt_{lang.lower()}.txt"
+        )
+
         self.template = Template(template_path.read_text(encoding="utf-8"))
+        self.prompt_qa = Template(prompt_qa_path.read_text(encoding="utf-8"))
+        self.prompt_summary = Template(prompt_summary_path.read_text(encoding="utf-8"))
+
         self.fewshot = json.loads(fewshot_path.read_text(encoding="utf-8"))
         self.cache_path = cache_file
 
@@ -292,7 +320,13 @@ class LLMDetector(BaseDetector):
                 Path(__file__).parent.parent / "cache" / f"cache_{self.model}_{self.lang}.json"
             )
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
-            self.cache = {}
+
+            # Read in cache
+            if self.cache_path.exists():
+                self.cache = json.loads(self.cache_path.read_text(encoding="utf-8"))
+            else:
+                self.cache = {}
+
             print(f"Cache file not provided, using default path: {self.cache_path}")
         else:
             self.cache_path = Path(cache_file)
@@ -309,7 +343,7 @@ class LLMDetector(BaseDetector):
         Uses `${placeholder}` tokens in the .txt file.
         """
         fewshot_block = ""
-        if self.fewshot:
+        if self.fewshot and not self.zero_shot:
             lines: list[str] = []
             for idx, ex in enumerate(self.fewshot, 1):
                 lines.append(
@@ -339,9 +373,9 @@ class LLMDetector(BaseDetector):
             [f"passage {i + 1}: {passage}" for i, passage in enumerate(context)]
         )
         if question is None:
-            return PROMPT_SUMMARY.format(text=context_str)
+            return self.prompt_summary.substitute(text=context_str)
         else:
-            return PROMPT_QA.format(
+            return self.prompt_qa.substitute(
                 question=question, num_passages=len(context), context=context_str
             )
 
@@ -352,9 +386,11 @@ class LLMDetector(BaseDetector):
         :raises ValueError: If API key is not set
         """
         api_key = os.getenv("OPENAI_API_KEY") or "EMPTY"
+        api_base = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/v1"
 
         return OpenAI(
             api_key=api_key,
+            base_url=api_base,
         )
 
     def _hash(self, prompt: str) -> str:
@@ -371,7 +407,10 @@ class LLMDetector(BaseDetector):
         resp = client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
+                {
+                    "role": "system",
+                    "content": "You are an expert in detecting hallucinations in LLM outputs.",
+                },
                 {"role": "user", "content": prompt},
             ],
             tools=ANNOTATE_SCHEMA,
