@@ -8,7 +8,7 @@ from lettucedetect.datasets.hallucination_dataset import (
 )
 from lettucedetect.models.evaluator import (
     evaluate_detector_char_level,
-    evaluate_detector_example_level,
+    evaluate_detector_example_level_batch,
     print_metrics,
 )
 from lettucedetect.models.inference import HallucinationDetector
@@ -28,7 +28,7 @@ def evaluate_task_samples_llm(
 
     if evaluation_type == "example_level":
         print("\n---- Example-Level Span Evaluation ----")
-        metrics = evaluate_detector_example_level(detector, samples)
+        metrics = evaluate_detector_example_level_batch(detector, samples)
         print_metrics(metrics)
         return metrics
     elif evaluation_type == "char_level":

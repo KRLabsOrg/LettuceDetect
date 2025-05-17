@@ -2,7 +2,9 @@ import hashlib
 import json
 import os
 import re
+import threading
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from string import Template
 from typing import Literal
@@ -22,6 +24,8 @@ LANG_TO_PASSAGE = {
     "es": "pasaje",
     "it": "brano",
     "pl": "fragment",
+    # chinese
+    "cn": "段落",
 }
 
 
@@ -45,7 +49,7 @@ class TransformerDetector(BaseDetector):
         model_path: str,
         max_length: int = 4096,
         device=None,
-        lang: Literal["en", "de", "fr", "es", "it", "pl"] = "en",
+        lang: Literal["en", "de", "fr", "es", "it", "pl", "cn"] = "en",
         **kwargs,
     ):
         """Initialize the TransformerDetector.
@@ -258,7 +262,7 @@ class LLMDetector(BaseDetector):
         self,
         model: str = "gpt-4o",
         temperature: int = 0,
-        lang: Literal["en", "de", "fr", "es", "it", "pl"] = "en",
+        lang: Literal["en", "de", "fr", "es", "it", "pl", "cn"] = "en",
         zero_shot: bool = False,
         fewshot_path: str | None = None,
         prompt_path: str | None = None,
@@ -276,6 +280,7 @@ class LLMDetector(BaseDetector):
         """
         self.model = model
         self.temperature = temperature
+        self.cache_lock = threading.Lock()  # Add lock for thread safety
 
         if lang not in LANG_TO_PASSAGE:
             raise ValueError(f"Invalid language. Use one of: {', '.join(LANG_TO_PASSAGE.keys())}")
@@ -331,8 +336,14 @@ class LLMDetector(BaseDetector):
         else:
             self.cache_path = Path(cache_file)
             if not self.cache_path.exists():
-                raise FileNotFoundError(f"Cache file not found at {self.cache_path}")
-            self.cache = json.loads(self.cache_path.read_text(encoding="utf-8"))
+                print(f"Cache file not found at {self.cache_path}, creating empty cache.")
+                self.cache = {}
+                self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+                self.cache_path.write_text(
+                    json.dumps(self.cache, ensure_ascii=False), encoding="utf-8"
+                )
+            else:
+                self.cache = json.loads(self.cache_path.read_text(encoding="utf-8"))
 
     def _build_prompt(
         self,
@@ -422,6 +433,7 @@ class LLMDetector(BaseDetector):
 
     def _save_cache(self):
         """Save the cache to the cache file."""
+        # Note: This is called within the cache_lock context in _predict
         self.cache_path.write_text(json.dumps(self.cache, ensure_ascii=False), encoding="utf-8")
 
     def _to_spans(self, subs: list[str], answer: str) -> list[dict]:
@@ -447,15 +459,20 @@ class LLMDetector(BaseDetector):
         """
         if output_format == "spans":
             llm_prompt = self._build_prompt(context, answer)
-
             key = self._hash("||".join([llm_prompt, self.model, str(self.temperature)]))
 
-            # Check if the response is cached
-            cached_response = self.cache.get(key)
+            # First check if response is in cache (with lock)
+            cached_response = None
+            with self.cache_lock:
+                cached_response = self.cache.get(key)
+
+            # If not in cache, make API call (without lock)
             if cached_response is None:
                 cached_response = self._call_openai(llm_prompt)
-                self.cache[key] = cached_response
-                self._save_cache()
+                # Update cache (with lock)
+                with self.cache_lock:
+                    self.cache[key] = cached_response
+                    self._save_cache()
 
             payload = json.loads(cached_response)
             return self._to_spans(payload["hallucination_list"], answer)
@@ -472,6 +489,16 @@ class LLMDetector(BaseDetector):
         :param output_format: "spans" to return grouped spans.
         """
         return self._predict(prompt, answer, output_format)
+
+    def predict_prompt_batch(
+        self, prompts: list[str], answers: list[str], output_format: str = "spans"
+    ) -> list:
+        """Predict hallucination spans from the provided prompts and answers.
+
+        :param prompts: A list of prompt strings.
+        :param answers: A list of answer strings.
+        """
+        return self._predict_batch(prompts, answers, output_format)
 
     def predict(
         self,
@@ -490,6 +517,32 @@ class LLMDetector(BaseDetector):
         """
         prompt = self._form_context(context, question)
         return self._predict(prompt, answer, output_format=output_format)
+
+    def _predict_batch(
+        self, prompts: list[str], answers: list[str], output_format: str = "spans"
+    ) -> list:
+        """Predict hallucination spans from the provided prompts and answers.
+
+        :param prompts: A list of prompt strings.
+        :param answers: A list of answer strings.
+        :param output_format: works only for "spans" and returns grouped spans.
+        """
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            futures = [
+                executor.submit(self._predict, prompt, answer, output_format)
+                for prompt, answer in zip(prompts, answers)
+            ]
+            return [future.result() for future in futures]
+
+    def predict_batch(
+        self, prompts: list[str], answers: list[str], output_format: str = "spans"
+    ) -> list:
+        """Predict hallucination spans from the provided prompts and answers.
+
+        :param prompts: A list of prompt strings.
+        :param answers: A list of answer strings.
+        """
+        return self._predict_batch(prompts, answers, output_format)
 
 
 class HallucinationDetector:
@@ -529,3 +582,13 @@ class HallucinationDetector:
         :param answer: The answer string.
         """
         return self.detector.predict_prompt(prompt, answer, output_format)
+
+    def predict_prompt_batch(
+        self, prompts: list[str], answers: list[str], output_format: str = "tokens"
+    ) -> list:
+        """Predict hallucination tokens or spans from the provided prompts and answers.
+
+        :param prompts: A list of prompt strings.
+        :param answers: A list of answer strings.
+        """
+        return self.detector.predict_prompt_batch(prompts, answers, output_format)

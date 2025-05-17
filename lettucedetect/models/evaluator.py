@@ -276,6 +276,74 @@ def evaluate_detector_char_level(
     return {"precision": precision, "recall": recall, "f1": f1}
 
 
+def evaluate_detector_example_level_batch(
+    detector: HallucinationDetector,
+    samples: list[HallucinationSample],
+    batch_size: int = 10,
+    verbose: bool = True,
+) -> dict[str, dict[str, float]]:
+    """Evaluate the HallucinationDetector at the example level.
+
+    This function assumes that each sample is a dictionary containing:
+      - "prompt": the prompt text.
+      - "answer": the answer text.
+      - "gold_spans": a list of dictionaries where each dictionary has "start" and "end" keys
+                      indicating the character indices of the gold (human-labeled) span.
+
+    """
+    example_preds: list[int] = []
+    example_labels: list[int] = []
+
+    for i in tqdm(range(0, len(samples), batch_size), desc="Evaluating", leave=False):
+        batch = samples[i : i + batch_size]
+        prompts = [sample.prompt for sample in batch]
+        answers = [sample.answer for sample in batch]
+        predicted_spans = detector.predict_prompt_batch(prompts, answers, output_format="spans")
+
+        for sample, pred_spans in zip(batch, predicted_spans):
+            true_example_label = 1 if sample.labels else 0
+            pred_example_label = 1 if pred_spans else 0
+
+            example_labels.append(true_example_label)
+            example_preds.append(pred_example_label)
+
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        example_labels, example_preds, labels=[0, 1], average=None, zero_division=0
+    )
+
+    results: dict[str, dict[str, float]] = {
+        "supported": {  # Class 0
+            "precision": float(precision[0]),
+            "recall": float(recall[0]),
+            "f1": float(f1[0]),
+        },
+        "hallucinated": {  # Class 1
+            "precision": float(precision[1]),
+            "recall": float(recall[1]),
+            "f1": float(f1[1]),
+        },
+    }
+
+    # Calculating AUROC
+    fpr, tpr, _ = roc_curve(example_labels, example_preds)
+    auroc = auc(fpr, tpr)
+    results["auroc"] = auroc
+
+    if verbose:
+        report = classification_report(
+            example_labels,
+            example_preds,
+            target_names=["Supported", "Hallucinated"],
+            digits=4,
+            zero_division=0,
+        )
+        print("\nDetailed Example-Level Classification Report:")
+        print(report)
+        results["classification_report"] = report
+
+    return results
+
+
 def evaluate_detector_example_level(
     detector: HallucinationDetector,
     samples: list[HallucinationSample],
