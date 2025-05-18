@@ -31,12 +31,6 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 - 🏎️ **EuroBERT models**: We've trained base/210M (faster) and large/610M (more accurate) variants
 - 📦 You can now also use **LLM baselines** for hallucination detection (see below)
 
-For detailed performance metrics and evaluations:
-- [English model documentation](docs/README.md)
-- [Multilingual model documentation](docs/EUROBERT.md)
-- [Paper](https://arxiv.org/abs/2502.17125)
-- [Model cards](https://huggingface.co/KRLabsOrg)
-
 ## Get going  
 
 ### Features
@@ -133,11 +127,11 @@ We've evaluated our models against both encoder-based and LLM-based approaches. 
 - Our multilingual models are better than baseline LLM judges like GPT-4.1-mini
 - Our models are also significantly faster and smaller than the LLM-based judges
 
-For full performance details including language-specific metrics and evaluations, please refer to:
-- Our [english model documentation](docs/README.md)
-- Our [multilingual documentation](docs/EUROBERT.md)
-- Our [arXiv paper](https://arxiv.org/abs/2502.17125)
-- Individual [model cards](https://huggingface.co/KRLabsOrg) for each language variant
+For detailed performance metrics and evaluations of our models:
+- [English model documentation](docs/README.md)
+- [Multilingual model documentation](docs/EUROBERT.md)
+- [Paper](https://arxiv.org/abs/2502.17125)
+- [Model cards](https://huggingface.co/KRLabsOrg)
 
 ## How does it work?
 
