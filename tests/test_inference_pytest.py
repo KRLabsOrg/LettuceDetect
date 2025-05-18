@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from lettucedetect.models.inference import HallucinationDetector, TransformerDetector
+from lettucedetect.models.inference import HallucinationDetector
+from lettucedetect.detectors.transformer import TransformerDetector
 
 
 @pytest.fixture
