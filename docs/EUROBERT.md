@@ -103,9 +103,6 @@ Our pipeline works as follows:
 
 4. **Fine-tuning**: We train EuroBERT models for token classification to identify hallucinated content in each language.
 
-<p align="center">
-  <img src="https://github.com/KRLabsOrg/LettuceDetect/blob/feature/cn_llm_eval/assets/translation_pipeline.png?raw=true" alt="Translation Pipeline" width="720"/>
-</p>
 
 ### Supported Languages
 

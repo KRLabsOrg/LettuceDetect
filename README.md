@@ -67,7 +67,7 @@ Check out our models published to Huggingface:
 We've trained 210m and 610m variants of EuroBERT, see our HuggingFace collection: [HF models](https://huggingface.co/collections/KRLabsOrg/multilingual-hallucination-detection-682a2549c18ecd32689231ce)
 
 
-*See the full list of models and smaller variants in our [documentation](docs/EUROBERT.md).*
+*See the full list of models and smaller variants in our [HuggingFace page](https://huggingface.co/KRLabsOrg).*
 
 You can get started right away with just a few lines of code.
 
@@ -76,9 +76,9 @@ from lettucedetect.models.inference import HallucinationDetector
 
 # For English:
 detector = HallucinationDetector(
-    method="transformer", model_path="KRLabsOrg/lettucedect-base-modernbert-en-v1"
+    method="transformer", 
+    model_path="KRLabsOrg/lettucedect-base-modernbert-en-v1",
 )
-
 
 # For other languages (e.g., German):
 # detector = HallucinationDetector(
