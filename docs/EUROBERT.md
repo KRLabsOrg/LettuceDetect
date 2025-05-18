@@ -55,7 +55,7 @@ question = "Was ist die Hauptstadt von Frankreich? Wie groß ist die Bevölkerun
 answer = "Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung Frankreichs beträgt 69 Millionen."
 
 predictions = detector.predict(context=contexts, question=question, answer=answer, output_format="spans")
-print("Vorhersagen:", predictions)
+print("Predictions:", predictions)
 ```
 
 ### LLM-based Hallucination Detection (Our Baseline)
@@ -72,7 +72,7 @@ question = "Was ist die Hauptstadt von Frankreich? Wie hoch ist die Bevölkerung
 answer = "Die Hauptstadt von Frankreich ist Paris. Die Bevölkerung Frankreichs beträgt 82222 Millionen."
 
 predictions = detector.predict(context=contexts, question=question, answer=answer, output_format="spans")
-print("Vorhersagen:", predictions)
+print("Predictions:", predictions)
 ```
 
 
