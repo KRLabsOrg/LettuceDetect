@@ -27,8 +27,8 @@ def main():
     args = parser.parse_args()
 
     print(f"Loading model and tokenizer from {args.model_path} ...")
-    model = AutoModelForTokenClassification.from_pretrained(args.model_path)
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    model = AutoModelForTokenClassification.from_pretrained(args.model_path, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
 
     print(f"Uploading model to Hugging Face Hub at repo: {args.repo_id} ...")
     model.push_to_hub(args.repo_id, use_auth_token=args.use_auth_token)

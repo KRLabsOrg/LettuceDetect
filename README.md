@@ -6,7 +6,7 @@
   <br><em>Because even AI needs a reality check! 🥬</em>
 </p>
 
-LettuceDetect is a lightweight and efficient tool for detecting hallucinations in Retrieval-Augmented Generation (RAG) systems. It identifies unsupported parts of an answer by comparing it to the provided context. The tool is trained and evaluated on the [RAGTruth](https://aclanthology.org/2024.acl-long.585/) dataset and leverages [ModernBERT](https://github.com/AnswerDotAI/ModernBERT) for long-context processing, making it ideal for tasks requiring extensive context windows.
+LettuceDetect is a lightweight and efficient tool for detecting hallucinations in Retrieval-Augmented Generation (RAG) systems. It identifies unsupported parts of an answer by comparing it to the provided context. The tool is trained and evaluated on the [RAGTruth](https://aclanthology.org/2024.acl-long.585/) dataset and leverages [ModernBERT](https://github.com/AnswerDotAI/ModernBERT) for English and [EuroBERT](https://huggingface.co/blog/EuroBERT/release) for multilingual support, making it ideal for tasks requiring extensive context windows.
 
 Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-industry.34/) paper which is an encoder-based model and uses a similar token-level approach.
 
@@ -21,9 +21,20 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 - LettuceDetect addresses two critical limitations of existing hallucination detection models:
   - Context window constraints of traditional encoder-based methods
   - Computational inefficiency of LLM-based approaches
-- Our models currently **outperforms** all other encoder-based and prompt-based models on the RAGTruth dataset and are significantly faster and smaller 
+- Our models currently **outperform** all other encoder-based and prompt-based models on the RAGTruth dataset and are significantly faster and smaller 
 - Achieves higher score than some fine-tuned LLMs e.g. LLAMA-2-13B presented in [RAGTruth](https://aclanthology.org/2024.acl-long.585/), coming up just short of the LLM fine-tuned in the [RAG-HAT paper](https://aclanthology.org/2024.emnlp-industry.113.pdf)
-- We release the code, the model and the tool under the **MIT license**
+
+## 🚀 Latest Updates
+
+- 🌍 **May 18, 2025**: Multilingual support for 7 languages: English, German, French, Spanish, Italian, Polish, and Chinese!
+- 📈 Up to **17 F1 points improvement** over baseline LLM judges like GPT-4.1-mini across different languages
+- 🏎️ **EuroBERT models**: We've trained base/210M (faster) and large/610M (more accurate) variants
+
+For detailed performance metrics and evaluations:
+- [English model documentation](docs/README.md)
+- [Multilingual model documentation](docs/EUROBERT.md)
+- [Paper](https://arxiv.org/abs/2502.17125)
+- [Model cards](https://huggingface.co/KRLabsOrg)
 
 ## Get going  
 
@@ -31,7 +42,8 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 
 - ✨ **Token-level precision**: detect exact hallucinated spans
 - 🚀 **Optimized for inference**: smaller model size and faster inference
-- 🧠 **4K context window** via ModernBERT
+- 🧠 **Long context window** support (4K for ModernBERT, 8K for EuroBERT)
+- 🌍 **Multilingual support**: 7 languages covered
 - ⚖️ **MIT-licensed** models & code
 - 🤖 **HF Integration**: one-line model loading
 - 📦 **Easy to use python API**: can be downloaded from pip and few lines of code to integrate into your RAG system
@@ -45,24 +57,41 @@ pip install -e .
 
 From pip:
 ```bash
-pip install lettucedetect
+pip install lettucedetect -U
 ```
 
 ### Quick Start
 
 Check out our models published to Huggingface: 
-- lettucedetect-base: https://huggingface.co/KRLabsOrg/lettucedect-base-modernbert-en-v1
-- lettucedetect-large: https://huggingface.co/KRLabsOrg/lettucedect-large-modernbert-en-v1
+
+**English Models**:
+- Base: [KRLabsOrg/lettucedetect-base-modernbert-en-v1](https://huggingface.co/KRLabsOrg/lettucedetect-base-modernbert-en-v1)
+- Large: [KRLabsOrg/lettucedetect-large-modernbert-en-v1](https://huggingface.co/KRLabsOrg/lettucedetect-large-modernbert-en-v1)
+
+**Multilingual Models**:
+We've trained 210m and 610m variants of EuroBERT, see our HuggingFace collection: [HF models](https://huggingface.co/collections/KRLabsOrg/multilingual-hallucination-detection-682a2549c18ecd32689231ce)
+
+
+*See the full list of models and smaller variants in our [documentation](docs/EUROBERT.md).*
 
 You can get started right away with just a few lines of code.
 
 ```python
 from lettucedetect.models.inference import HallucinationDetector
 
-# For a transformer-based approach:
+# For English:
 detector = HallucinationDetector(
     method="transformer", model_path="KRLabsOrg/lettucedect-base-modernbert-en-v1"
 )
+
+
+# For other languages (e.g., German):
+# detector = HallucinationDetector(
+#     method="transformer", 
+#     model_path="KRLabsOrg/lettucedect-210m-eurobert-de-v1",
+#     lang="de",
+#     trust_remote_code=True
+# )
 
 contexts = ["France is a country in Europe. The capital of France is Paris. The population of France is 67 million.",]
 question = "What is the capital of France? What is the population of France?"
@@ -75,26 +104,33 @@ print("Predictions:", predictions)
 # Predictions: [{'start': 31, 'end': 71, 'confidence': 0.9944414496421814, 'text': ' The population of France is 69 million.'}]
 ```
 
+Check out our [HF collection](https://huggingface.co/collections/KRLabsOrg/multilingual-hallucination-detection-682a2549c18ecd32689231ce) for more examples.
+
+We also implemented LLM-based baselines, for that use:
+
+```python
+from lettucedetect.models.inference import HallucinationDetector
+
+# For German:
+detector = HallucinationDetector(method="llm", lang="de")
+
+# Then predict the same way
+predictions = detector.predict(context=contexts, question=question, answer=answer, output_format="spans")
+```
+
 ## Performance
 
-**Example level results**
+We've evaluated our models against both encoder-based and LLM-based approaches. The key findings include:
 
-We evaluate our model on the test set of the [RAGTruth](https://aclanthology.org/2024.acl-long.585/) dataset. Our large model, **lettucedetect-large-v1**, achieves an overall F1 score of 79.22%, outperforming prompt-based methods like GPT-4 (63.4%) and encoder-based models like [Luna](https://aclanthology.org/2025.coling-industry.34.pdf) (65.4%). It also surpasses fine-tuned LLAMA-2-13B (78.7%) (presented in [RAGTruth](https://aclanthology.org/2024.acl-long.585/)) and is competitive with the SOTA fine-tuned LLAMA-3-8B (83.9%) (presented in the [RAG-HAT paper](https://aclanthology.org/2024.emnlp-industry.113.pdf)). Overall, **lettucedetect-large-v1** and **lettucedect-base-v1** are very performant models, while being very effective in inference settings.
+- In English, our model **outperform** all other encoder-based and prompt-based models on the RAGTruth dataset and are significantly faster and smaller 
+- Our multilingual models are better than baseline LLM judges like GPT-4.1-mini
+- Our models are also significantly faster and smaller than the LLM-based judges
 
-The results on the example-level can be seen in the table below.
-
-<p align="center">
-  <img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/example_level_lettucedetect.png?raw=true" alt="Example-level Results" width="800"/>
-</p>
-
-**Span-level results**
-
-At the span level, our model achieves the best scores across all data types, significantly outperforming previous models. The results can be seen in the table below. Note that here we don't compare to models, like [RAG-HAT](https://aclanthology.org/2024.emnlp-industry.113.pdf), since they have no span-level evaluation presented.
-
-<p align="center">
-  <img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/span_level_lettucedetect.png?raw=true" alt="Span-level Results" width="800"/>
-</p>
-
+For full performance details including language-specific metrics and evaluations, please refer to:
+- Our [english model documentation](docs/README.md)
+- Our [multilingual documentation](docs/EUROBERT.md)
+- Our [arXiv paper](https://arxiv.org/abs/2502.17125)
+- Individual [model cards](https://huggingface.co/KRLabsOrg) for each language variant
 
 ## How does it work?
 
@@ -229,11 +265,11 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --model MODEL         Path or huggingface URL to the model. The default value is
-                        "KRLabsOrg/lettucedect-base-modernbert-en-v1".
+                        "KRLabsOrg/lettucedetect-base-modernbert-en-v1".
   --method {transformer}
                         Hallucination detection method. The default value is
                         "transformer".
-````
+```
 
 Example using the python client library:
 

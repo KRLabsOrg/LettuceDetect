@@ -152,7 +152,6 @@ class TransformerDetector(BaseDetector):
         :returns: List of predictions in requested format.
         """
         formatted_prompt = PromptUtils.format_context(context, question, self.lang)
-        print(formatted_prompt)
         return self._predict(formatted_prompt, answer, output_format)
 
     def predict_prompt(self, prompt, answer, output_format="tokens") -> list:
