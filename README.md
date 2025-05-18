@@ -26,7 +26,7 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 
 ## 🚀 Latest Updates
 
-- 🌍 **May 18, 2025**: Multilingual suppor (thanks to EuroBERT) for 7 languages: English, German, French, Spanish, Italian, Polish, and Chinese!
+- 🌍 **May 18, 2025** - Released version **0.1.7**: Multilingual support (thanks to EuroBERT) for 7 languages: English, German, French, Spanish, Italian, Polish, and Chinese!
 - 📈 Up to **17 F1 points improvement** over baseline LLM judges like GPT-4.1-mini across different languages
 - 🏎️ **EuroBERT models**: We've trained base/210M (faster) and large/610M (more accurate) variants
 - 📦 You can now also use **LLM baselines** for hallucination detection (see below)
