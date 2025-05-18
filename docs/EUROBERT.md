@@ -186,7 +186,7 @@ Across all languages, the EuroBERT-610M model consistently outperforms both the 
 
 ### Manual Validation (German)
 
-For a more rigorous evaluation, we manually reviewed 100 examples covering diverse task types from RAGTruth (QA, summarization, data-to-text). After correcting any annotation errors, we found that performance remained strong, validating our translation approach:
+For a more rigorous evaluation, we manually reviewed 300 examples covering all task types from RAGTruth (QA, summarization, data-to-text). After correcting any annotation errors, we found that performance remained strong, validating our translation approach:
 
 | Model            | Precision (%) | Recall (%) | F1 (%) |
 |------------------|---------------|------------|--------|
@@ -194,7 +194,7 @@ For a more rigorous evaluation, we manually reviewed 100 examples covering diver
 | EuroBERT-610M    | **74.47**     | 69.31      | **71.79** |
 | GPT-4.1-mini     | 44.50         | **92.08**  | 60.00  |
 
-An interesting pattern emerges: GPT-4.1-mini shows high recall but poor precision - it identifies most hallucinations but produces many false positives, making it less reliable in production settings.
+An interesting pattern: GPT-4.1-mini shows high recall but poor precision - it identifies most hallucinations but produces many false positives, making it less reliable in production settings.
 
 ## Trade-offs: Model Size vs Performance
 
@@ -205,9 +205,9 @@ When choosing between model variants, consider these trade-offs:
 
 ## Key Takeaways
 
-- **Annotation projection is effective**: Preserving hallucination tags through translation enables rapid creation of multilingual detection datasets.
-- **EuroBERT excels at hallucination detection**: Its long-context capabilities and efficient attention mechanisms make it ideal for RAG verification.
-- **Open framework for multilingual RAG safety**: All components are available under MIT license, enabling immediate adoption.
+- **Translating annotation can be effective**: Preserving hallucination tags through translation enables rapid creation of multilingual detection datasets when sufficient data is not available.
+- **EuroBERT is a good choice for multilingual hallucination detection**: Its long-context capabilities and efficient attention mechanisms make it ideal for RAG verification.
+- **Open framework for multilingual RAG**: All components are available under MIT license: translation, training, and inference.
 
 
 ## Citation
