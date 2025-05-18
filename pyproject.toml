@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lettucedetect"
-version = "0.1.6"
+version = "0.1.7"
 description = "Lettucedetect is a framework for detecting hallucinations in RAG applications."
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.10"
