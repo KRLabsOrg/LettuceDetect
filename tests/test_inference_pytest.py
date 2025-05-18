@@ -5,8 +5,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 import torch
 
-from lettucedetect.models.inference import HallucinationDetector
+from lettucedetect.detectors.prompt_utils import PromptUtils
 from lettucedetect.detectors.transformer import TransformerDetector
+from lettucedetect.models.inference import HallucinationDetector
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ class TestHallucinationDetector:
 
     def test_init_with_transformer_method(self):
         """Test initialization with transformer method."""
-        with patch("lettucedetect.models.inference.TransformerDetector") as mock_transformer:
+        with patch("lettucedetect.detectors.transformer.TransformerDetector") as mock_transformer:
             detector = HallucinationDetector(method="transformer", model_path="dummy_path")
             mock_transformer.assert_called_once_with(model_path="dummy_path")
             assert isinstance(detector.detector, MagicMock)
@@ -49,7 +50,7 @@ class TestHallucinationDetector:
         mock_detector.predict.return_value = []
 
         with patch(
-            "lettucedetect.models.inference.TransformerDetector", return_value=mock_detector
+            "lettucedetect.detectors.transformer.TransformerDetector", return_value=mock_detector
         ):
             detector = HallucinationDetector(method="transformer")
             context = ["This is a test context."]
@@ -73,7 +74,7 @@ class TestHallucinationDetector:
         mock_detector.predict_prompt.return_value = []
 
         with patch(
-            "lettucedetect.models.inference.TransformerDetector", return_value=mock_detector
+            "lettucedetect.detectors.transformer.TransformerDetector", return_value=mock_detector
         ):
             detector = HallucinationDetector(method="transformer")
             prompt = "This is a test prompt."
@@ -100,11 +101,11 @@ class TestTransformerDetector:
 
         # Patch the AutoTokenizer and AutoModelForTokenClassification
         self.tokenizer_patcher = patch(
-            "lettucedetect.models.inference.AutoTokenizer.from_pretrained",
+            "lettucedetect.detectors.transformer.AutoTokenizer.from_pretrained",
             return_value=self.mock_tokenizer,
         )
         self.model_patcher = patch(
-            "lettucedetect.models.inference.AutoModelForTokenClassification.from_pretrained",
+            "lettucedetect.detectors.transformer.AutoModelForTokenClassification.from_pretrained",
             return_value=self.mock_model,
         )
 
@@ -157,7 +158,7 @@ class TestTransformerDetector:
         context = ["This is passage 1.", "This is passage 2."]
         question = "What is the test?"
 
-        prompt = detector._form_prompt(context, question)
+        prompt = PromptUtils.format_context(context, question, "en")
 
         # Check that the prompt contains the question and passages
         assert question in prompt
@@ -169,7 +170,7 @@ class TestTransformerDetector:
         detector = TransformerDetector(model_path="dummy_path")
         context = ["This is a text to summarize."]
 
-        prompt = detector._form_prompt(context, None)
+        prompt = PromptUtils.format_context(context, None, "en")
 
         # Check that the prompt contains the text to summarize
         assert "This is a text to summarize." in prompt
