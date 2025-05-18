@@ -106,7 +106,13 @@ print("Predictions:", predictions)
 
 Check out our [HF collection](https://huggingface.co/collections/KRLabsOrg/multilingual-hallucination-detection-682a2549c18ecd32689231ce) for more examples.
 
-We also implemented LLM-based baselines, for that use:
+We also implemented LLM-based baselines, for that add your OpenAI API key:
+
+```bash
+export OPENAI_API_KEY=your_api_key
+```
+
+Then in code:
 
 ```python
 from lettucedetect.models.inference import HallucinationDetector
