@@ -19,6 +19,10 @@ def make_detector(method: str, **kwargs) -> BaseDetector:
         from lettucedetect.detectors.transformer import TransformerDetector
 
         return TransformerDetector(**kwargs)
+    elif method == "sentencetransformer":
+        from lettucedetect.detectors.sentence_transformer import SentenceTransformer
+
+        return SentenceTransformer(**kwargs)
     elif method == "llm":
         from lettucedetect.detectors.llm import LLMDetector
 
