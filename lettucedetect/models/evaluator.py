@@ -423,8 +423,6 @@ def evaluate_detector_example_level(
     return results
 
 
-
-
 def evaluate_sentence_model(
     model: nn.Module, test_loader: DataLoader, device: torch.device, criterion, verbose: bool = True
 ) -> dict[str, dict[str, float]]:
