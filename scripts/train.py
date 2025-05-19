@@ -17,7 +17,8 @@ from lettucedetect.datasets.hallucination_dataset import (
     HallucinationDataset,
     HallucinationSample,
 )
-from lettucedetect.models.trainer import Trainer
+from lettucedetect.models.sentence_model import SentenceModel
+from lettucedetect.models.trainer import SentenceTrainer, Trainer, qa_collate_fn
 
 
 def set_seed(seed: int = 42):
@@ -68,6 +69,12 @@ def parse_args():
     parser.add_argument(
         "--learning-rate", type=float, default=1e-5, help="Learning rate for training"
     )
+    parser.add_argument(
+        "--method",
+        type=str,
+        default="trasformer",
+        help="Do you want to train a token(transformer) or sentence level model (sentence transformer)?",
+    )
     return parser.parse_args()
 
 
@@ -116,10 +123,14 @@ def main():
         dev_samples.extend(ragbench_dev_samples)
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name, trust_remote_code=True)
-    data_collator = DataCollatorForTokenClassification(tokenizer=tokenizer, label_pad_token_id=-100)
+    data_collator = (
+        DataCollatorForTokenClassification(tokenizer=tokenizer, label_pad_token_id=-100)
+        if args.method == "transformer"
+        else qa_collate_fn
+    )
 
-    train_dataset = HallucinationDataset(train_samples, tokenizer)
-    dev_dataset = HallucinationDataset(dev_samples, tokenizer)
+    train_dataset = HallucinationDataset(train_samples, tokenizer, method=args.method)
+    dev_dataset = HallucinationDataset(dev_samples, tokenizer, method=args.method)
 
     train_loader = DataLoader(
         train_dataset,
@@ -134,19 +145,34 @@ def main():
         collate_fn=data_collator,
     )
 
-    model = AutoModelForTokenClassification.from_pretrained(
-        args.model_name, num_labels=2, trust_remote_code=True
-    )
+    if args.method == "transformer":
+        model = AutoModelForTokenClassification.from_pretrained(
+            args.model_name, num_labels=2, trust_remote_code=True
+        )
 
-    trainer = Trainer(
-        model=model,
-        tokenizer=tokenizer,
-        train_loader=train_loader,
-        test_loader=dev_loader,
-        epochs=args.epochs,
-        learning_rate=args.learning_rate,
-        save_path=args.output_dir,
-    )
+        trainer = Trainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_loader=train_loader,
+            test_loader=dev_loader,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            save_path=args.output_dir,
+        )
+    else:
+        model = SentenceModel(model_name=args.model_name)
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        trainer = SentenceTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            train_loader=train_loader,
+            test_loader=dev_loader,
+            batch_size=args.batch_size,
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            save_path=args.output_dir,
+        )
 
     trainer.train()
 

@@ -1,5 +1,6 @@
 import torch
 from sklearn.metrics import (
+    accuracy_score,
     auc,
     classification_report,
     precision_recall_fscore_support,
@@ -416,6 +417,168 @@ def evaluate_detector_example_level(
             zero_division=0,
         )
         print("\nDetailed Example-Level Classification Report:")
+        print(report)
+        results["classification_report"] = report
+
+    return results
+
+
+
+
+def evaluate_sentence_model(
+    model: nn.Module, test_loader: DataLoader, device: torch.device, criterion, verbose: bool = True
+) -> dict[str, dict[str, float]]:
+    """Evaluate the model on the test dataset"""
+    model.eval()
+    total_loss = 0.0
+    step_count = 0
+
+    all_preds = []
+    all_labels = []
+    try:
+        with torch.no_grad():
+            progress_bar = tqdm(test_loader, desc="Evaluating", leave=False)
+            for batch in progress_bar:
+                try:
+                    input_ids = batch["input_ids"].to(device)
+                    attention_mask = batch["attention_mask"].to(device)
+                    sentence_boundaries = batch["sentence_boundaries"]
+                    labels_list = batch["labels"]
+
+                    logits_list = model(input_ids, attention_mask, sentence_boundaries)
+
+                    batch_loss = 0.0
+                    doc_count = 0
+
+                    for i, logits in enumerate(logits_list):
+                        # skip if we have a mismatch in lists
+                        if i >= len(labels_list):
+                            logger.warning(
+                                f"Mismatch between logits and labels list lengths: {len(logits_list)} vs {len(labels_list)}"
+                            )
+                            continue
+
+                        labels_i = labels_list[i].to(device)
+                        if logits.size(0) == 0:
+                            continue
+
+                        # Make sure sizes match
+
+                        effective_size = min(logits.size(0), labels_i.size(0))
+                        if logits.size(0) != labels_i.size(0):
+                            logger.warning(
+                                f"Mismatch between logits and labels sizes: {logits.size(0)} vs {labels_i.size(0)}"
+                            )
+                            logits = logits[:effective_size]
+                            labels_i = labels_i[:effective_size]
+
+                        # Calculate loss
+                        loss_i = criterion(logits, labels_i)
+                        batch_loss += loss_i
+                        doc_count += 1
+
+                        # Get predictions for metrics
+                        preds_i = torch.argmax(logits, dim=1).cpu().numpy()
+                        labels_i_np = labels_i.cpu().numpy()
+
+                        # Extend lists with batch predictions and labels
+                        all_preds.extend(preds_i)
+                        all_labels.extend(labels_i_np)
+
+                    if doc_count > 0:
+                        batch_loss = batch_loss / doc_count
+                        total_loss += batch_loss.item()
+                        step_count += 1
+
+                        # Update progress bar with loss
+                        progress_bar.set_postfix({"loss": f"{batch_loss.item():.4f}"})
+                except Exception as e:
+                    logger.error(f"Error evaluating batch: {e}")
+                    continue
+    except Exception as e:
+        logger.error(f"Error during evaluation: {e}")
+        # if we have no results still try to return partial metrics
+
+    # Calculate metrics
+    results = {}
+
+    if step_count == 0:
+        logger.warning("No evaluation steps completed")
+
+        results["supported"] = {  # Class 0
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+        }
+        results["hallucinated"] = {  # Class 1
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+        }
+        results["auroc"] = 0.0
+        results["accuracy"] = 0.0
+        return results
+
+    results["loss"] = total_loss / step_count
+
+    try:
+        if len(all_preds) > 0:
+            precision, recall, f1, _ = precision_recall_fscore_support(
+                all_labels, all_preds, average=None, labels=[0, 1], zero_division=0
+            )
+            accuracy = accuracy_score(all_labels, all_preds)
+
+            # Calculating AUROC
+            fpr, tpr, _ = roc_curve(all_labels, all_preds)
+            auroc = auc(fpr, tpr)
+
+            results["supported"] = {  # Class 0
+                "precision": float(precision[0]),
+                "recall": float(recall[0]),
+                "f1": float(f1[0]),
+            }
+            results["hallucinated"] = {  # Class 1
+                "precision": float(precision[1]),
+                "recall": float(recall[1]),
+                "f1": float(f1[1]),
+            }
+            results["auroc"] = auroc
+            results["accuracy"] = accuracy
+
+        else:
+            logger.warning("No predictions collected during evaluation")
+            results["supported"] = {  # Class 0
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+            }
+            results["hallucinated"] = {  # Class 1
+                "precision": 0.0,
+                "recall": 0.0,
+                "f1": 0.0,
+            }
+            results["auroc"] = 0.0
+            results["accuracy"] = 0.0
+    except Exception as e:
+        logger.error(f"Error calculating metrics: {e}")
+        results["supported"] = {  # Class 0
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+        }
+        results["hallucinated"] = {  # Class 1
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+        }
+        results["auroc"] = 0.0
+        results["accuracy"] = 0.0
+
+    if verbose:
+        report = classification_report(
+            all_labels, all_preds, target_names=["Supported", "Hallucinated"], digits=4
+        )
+        print("\nDetailed Classification Report:")
         print(report)
         results["classification_report"] = report
 
