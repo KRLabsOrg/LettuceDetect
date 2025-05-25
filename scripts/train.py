@@ -73,7 +73,7 @@ def parse_args():
         "--method",
         type=str,
         default="trasformer",
-        help="Do you want to train a token(transformer) or sentence level model (sentence transformer)?",
+        help="Do you want to train a token(transformer) or sentence level model (sentencetransformer)?",
     )
     return parser.parse_args()
 

@@ -197,36 +197,34 @@ def qa_collate_fn(batch: list[dict]) -> dict:
             sentence_boundaries.append([])
             sentence_offset_mappings.append([])
             labels_list.append(torch.tensor([], dtype=torch.long))
-        # If all lists are empty after processing, return empty dict
-        if not input_ids_list:
-            logger.warning("All items in batch were invalid")
-            return {}
+    # If all lists are empty after processing, return empty dict
+    if not input_ids_list:
+        logger.warning("All items in batch were invalid")
+        return {}
 
-        try:
-            # Pad input_ids and attention_mask
-            padded_input_ids = pad_sequence(input_ids_list, batch_first=True, padding_value=0)
-            padded_attention_mask = pad_sequence(
-                attention_mask_list, batch_first=True, padding_value=0
-            )
+    try:
+        # Pad input_ids and attention_mask
+        padded_input_ids = pad_sequence(input_ids_list, batch_first=True, padding_value=0)
+        padded_attention_mask = pad_sequence(attention_mask_list, batch_first=True, padding_value=0)
 
-            return {
-                "input_ids": padded_input_ids,  # [batch_size, max_seq_len_in_batch]
-                "attention_mask": padded_attention_mask,  # [batch_size, max_seq_len_in_batch]
-                "offset_mapping": offset_mappings,  # list of length batch_size
-                "sentence_boundaries": sentence_boundaries,  # list of length batch_size
-                "sentence_offset_mappings": sentence_offset_mappings,
-                "labels": labels_list,  # list of length batch_size (each is a 1D Tensor)
-            }
-        except Exception as e:
-            logger.error(f"Error padding sequences in collate_fn: {e}")
-            return {
-                "input_ids": torch.zeros((len(input_ids_list), 1), dtype=torch.long),
-                "attention_mask": torch.zeros((len(attention_mask_list), 1), dtype=torch.long),
-                "offset_mapping": [[] for _ in input_ids_list],
-                "sentence_boundaries": [[] for _ in input_ids_list],
-                "sentence_offset_mappings": [[] for _ in input_ids_list],
-                "labels": [torch.tensor([], dtype=torch.long) for _ in input_ids_list],
-            }
+        return {
+            "input_ids": padded_input_ids,  # [batch_size, max_seq_len_in_batch]
+            "attention_mask": padded_attention_mask,  # [batch_size, max_seq_len_in_batch]
+            "offset_mapping": offset_mappings,  # list of length batch_size
+            "sentence_boundaries": sentence_boundaries,  # list of length batch_size
+            "sentence_offset_mappings": sentence_offset_mappings,
+            "labels": labels_list,  # list of length batch_size (each is a 1D Tensor)
+        }
+    except Exception as e:
+        logger.error(f"Error padding sequences in collate_fn: {e}")
+        return {
+            "input_ids": torch.zeros((len(input_ids_list), 1), dtype=torch.long),
+            "attention_mask": torch.zeros((len(attention_mask_list), 1), dtype=torch.long),
+            "offset_mapping": [[] for _ in input_ids_list],
+            "sentence_boundaries": [[] for _ in input_ids_list],
+            "sentence_offset_mappings": [[] for _ in input_ids_list],
+            "labels": [torch.tensor([], dtype=torch.long) for _ in input_ids_list],
+        }
 
 
 class SentenceTrainer:
@@ -294,7 +292,7 @@ class SentenceTrainer:
 
                     # Forward pass
                     logits_list = self.model(input_ids, attention_mask, sentence_boundaries)
-                    print("logits_list is None", logits_list == None)
+
                     # Compute loss
                     batch_loss = 0.0
                     doc_count = 0
@@ -307,7 +305,6 @@ class SentenceTrainer:
                             continue
 
                         labels_i = labels_list[i].to(self.device)  # shape: [num_sentences_i]
-                        print("logits is none", logits == None)
 
                         if logits.size(0) == 0:
                             # if no sentences in the document, skip
@@ -327,7 +324,6 @@ class SentenceTrainer:
                     if doc_count > 0:
                         # average the doc losses in the batch
                         batch_loss = batch_loss / doc_count
-                        print(batch_loss)
                         batch_loss.backward()
                         self.optimizer.step()
 

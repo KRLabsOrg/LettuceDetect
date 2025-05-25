@@ -1,4 +1,8 @@
+import json
+import logging
+
 import torch
+import torch.nn as nn
 from sklearn.metrics import (
     accuracy_score,
     auc,
@@ -12,6 +16,9 @@ from tqdm.auto import tqdm
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationSample
 from lettucedetect.models.inference import HallucinationDetector
+
+# Set up logger
+logger = logging.getLogger(__name__)
 
 
 def evaluate_model(
@@ -461,7 +468,6 @@ def evaluate_sentence_model(
                             continue
 
                         # Make sure sizes match
-
                         effective_size = min(logits.size(0), labels_i.size(0))
                         if logits.size(0) != labels_i.size(0):
                             logger.warning(
