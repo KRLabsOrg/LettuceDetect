@@ -10,7 +10,7 @@ from transformers import (
     DataCollatorForTokenClassification,
 )
 
-import lettucedetect.detectors.factory
+from lettucedetect.detectors.factory import *
 from lettucedetect.datasets.hallucination_dataset import (
     HallucinationData,
     HallucinationDataset,
@@ -19,7 +19,7 @@ from lettucedetect.models.evaluator import (
     evaluate_detector_example_level_batch,
     print_metrics,
 )
-from lettucedetect.models.sentece_model import SentenceModel
+from lettucedetect.models.sentence_model import SentenceModel
 
 
 def evaluate_task_samples_sentence(

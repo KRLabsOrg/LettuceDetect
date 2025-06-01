@@ -11,7 +11,7 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer
 from lettucedetect.datasets.hallucination_dataset import HallucinationDataset
 from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
-from lettucedetect.models.sentece_model import SentenceModel
+from lettucedetect.models.sentence_model import SentenceModel
 
 __all__ = ["SentenceTransformer"]
 
