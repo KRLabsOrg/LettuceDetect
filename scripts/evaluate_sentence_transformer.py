@@ -10,11 +10,11 @@ from transformers import (
     DataCollatorForTokenClassification,
 )
 
-from lettucedetect.detectors.factory import *
 from lettucedetect.datasets.hallucination_dataset import (
     HallucinationData,
     HallucinationDataset,
 )
+from lettucedetect.detectors.factory import *
 from lettucedetect.models.evaluator import (
     evaluate_detector_example_level_batch,
     print_metrics,
