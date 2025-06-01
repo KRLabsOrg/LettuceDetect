@@ -10,7 +10,7 @@ from transformers import (
     DataCollatorForTokenClassification,
 )
 
-import lettucedetect.models.detector.factory
+import lettucedetect.detectors.factory
 from lettucedetect.datasets.hallucination_dataset import (
     HallucinationData,
     HallucinationDataset,
