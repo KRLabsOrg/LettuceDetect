@@ -305,7 +305,10 @@ def evaluate_detector_example_level_batch(
     for i in tqdm(range(0, len(samples), batch_size), desc="Evaluating", leave=False):
         batch = samples[i : i + batch_size]
         prompts = [sample.prompt for sample in batch]
-        answers = [sample.answer for sample in batch]
+        answers = [
+            sample.answer_sentences if sample.answer_sentences else sample.answer
+            for sample in batch
+        ]
         predicted_spans = detector.predict_prompt_batch(prompts, answers, output_format="spans")
 
         for sample, pred_spans in zip(batch, predicted_spans):
@@ -383,7 +386,7 @@ def evaluate_detector_example_level(
 
     for sample in tqdm(samples, desc="Evaluating", leave=False):
         prompt = sample.prompt
-        answer = sample.answer
+        answer = sample.answer_sentences if sample.answer_sentences else sample.answer
         gold_spans = sample.labels
         predicted_spans = detector.predict_prompt(prompt, answer, output_format="spans")
         true_example_label = 1 if gold_spans else 0

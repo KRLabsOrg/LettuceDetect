@@ -16,6 +16,12 @@ from lettucedetect.models.sentence_model import SentenceModel
 __all__ = ["SentenceTransformer"]
 
 
+def to_sentences(answer):
+    if isinstance(answer, list):
+        return answer
+    return nltk.sent_tokenize(answer)
+
+
 class SentenceTransformer(BaseDetector):
     """Detect hallucinations with a fine‑tuned sentence classifier."""
 
@@ -54,7 +60,7 @@ class SentenceTransformer(BaseDetector):
         """
 
         if output_format == "spans":
-            sentences = nltk.sent_tokenize(answer)
+            sentences = to_sentences(answer)
             # Use the shared tokenization logic from HallucinationDataset
             (
                 input_ids,
@@ -72,11 +78,11 @@ class SentenceTransformer(BaseDetector):
             # Run model inference
             with torch.no_grad():
                 outputs = self.model(input_ids, attention_mask, [sentence_boundaries])
-
+            # print(outputs)
             # Extract hallucinated sentences
             hallucinated_sentences = []
-
-            if len(outputs) > 0 and len(outputs[0]) > 0:
+            # print(outputs)
+            if len(outputs) > 0 and outputs[0] is not None and len(outputs[0]) > 0:
                 sentence_preds = torch.nn.functional.softmax(outputs[0], dim=1)
                 for i, pred in enumerate(sentence_preds):
                     if i < len(sentences) and pred[1] > self.threshold:
