@@ -10,11 +10,11 @@ from transformers import (
     DataCollatorForTokenClassification,
 )
 
+from lettucedetect.detectors.factory import *
 from lettucedetect.datasets.hallucination_dataset import (
     HallucinationData,
     HallucinationDataset,
 )
-from lettucedetect.detectors.factory import *
 from lettucedetect.models.evaluator import (
     evaluate_detector_example_level_batch,
     print_metrics,
@@ -64,13 +64,9 @@ def main():
     test_samples, task_type_map = load_data(args.data_path)
 
     print(f"\nEvaluating model on test samples: {len(test_samples)}")
-
-    model = SentenceModel.from_pretrained(args.model_path)
-    base_model = getattr(model.config, "model_name", "answerdotai/ModernBERT-base")
-
     detector = make_detector(
         method="sentencetransformer",
-        model_path=base_model,
+        model_path=args.model_path,
     )
 
     # Evaluate the whole dataset
