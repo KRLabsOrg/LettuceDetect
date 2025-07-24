@@ -138,6 +138,8 @@ def main(ground_truth_file: Path, ragas_baseline: Path, threshold):
     test_samples, task_type_map = load_data(ground_truth_file)
     test_samples_ragas, task_type_map_ragas = load_data(ragas_baseline)
 
+    print(len(test_samples))
+    print(len(test_samples_ragas))
     # Evaluate the whole dataset
     print("\nTask type: whole dataset")
     evaluate_ragas(
@@ -146,15 +148,14 @@ def main(ground_truth_file: Path, ragas_baseline: Path, threshold):
         threshold=threshold,
     )
 
-    for task_type, samples in task_type_map.items():
-        for task_type_llm, samples_llm in task_type_map_ragas.items():
-            print(task_type_llm)
-            print(f"\nTask type: {task_type_llm}")
-            evaluate_ragas(
-                test_samples,
-                test_samples_ragas,
-                threshold=threshold,
-            )
+    for task_type_llm, samples_llm in task_type_map_ragas.items():
+        print(task_type_llm)
+        print(f"\nTask type: {task_type_llm}")
+        evaluate_ragas(
+            test_samples,
+            test_samples_ragas,
+            threshold=threshold,
+        )
 
 
 if __name__ == "__main__":
