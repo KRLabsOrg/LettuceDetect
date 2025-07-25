@@ -14,6 +14,7 @@ from lettucedetect.datasets.hallucination_dataset import (
     HallucinationData,
     HallucinationSample,
 )
+from lettucedetect.models.evaluator import print_metrics
 
 
 def evaluate_ragas(
@@ -96,7 +97,7 @@ def evaluate_ragas(
         },
     }
     results["auroc"] = auroc
-
+    print_metrics(results)
     if verbose:
         report = classification_report(
             example_labels,
