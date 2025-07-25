@@ -85,8 +85,11 @@ def create_sample(response: dict, dataset_name: str, split: str) -> Hallucinatio
             if label in response["unsupported_response_sentence_keys"]
         ]
         labels = create_labels(response, hallucinations)
-
-    return HallucinationSample(prompt, answer, labels, split, dataset_name, "ragbench", "en")
+    
+    mapping = {"customer_support": ["delucionqa", "emanual","techqa"],"finance_numerical_reasoning": ["finqa","tatqa"],"biomed": ["pubmedqa","covidqa"],"legal":["cuad"], "general_knowledge":["hotpotqa","msmarco","hagrid","experqa"]}
+    task_type = next((k for k, v in mapping.items() if dataset_name in v), None)
+        
+    return HallucinationSample(prompt, answer, labels, split, task_type, "ragbench", "en")
 
 
 def main(input_dir: str, output_dir: Path):
