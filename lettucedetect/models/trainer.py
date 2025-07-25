@@ -419,7 +419,7 @@ class SentenceTrainer:
                             "recall": float(metrics["supported"]["recall"]),
                             "f1": float(metrics["supported"]["f1"]),
                         },
-                        "auroc": float(metrics["accuracy"]),
+                        "auroc": float(metrics["auroc"]),
                         "accuracy": float(metrics["accuracy"]),
                         "epoch": self.current_epoch,
                         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
