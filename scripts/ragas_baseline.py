@@ -47,6 +47,7 @@ def evaluate_metrics(sample, llm):
         results["faithfulness"] = metric.single_turn_score(sample)
     except Exception as e:
         results["faithfulness"] = f"Error: {e}"
+    print(results)
     return results
 
 
@@ -96,20 +97,21 @@ def main(
 
     hallucination_data = HallucinationData.from_json(json.loads(input_file.read_text()))
     samples = [sample for sample in hallucination_data.samples if sample.split == "test"]
-
+    print(len(samples))
     hallucination_data_ragas = load_check_existing_data(output_file=output_file)
     num_processed = len(hallucination_data_ragas.samples)
     total_samples = len(hallucination_data_ragas.samples)
-
+    print(num_processed)
     llm = LangchainLLMWrapper(
-        ChatOpenAI(model="gpt-4o", openai_api_key=get_api_key(), temperature=0)
+        ChatOpenAI(model="gpt-4o-mini", openai_api_key=get_api_key(), temperature=0)
     )
 
-    for i, sample in enumerate(samples, start=num_processed):
+    samples_to_process = samples[num_processed:]
+    for i, sample in enumerate(samples_to_process, start=num_processed):
         print("--------", i, "--------")
         sample_ragas = create_sample_baseline(sample, llm)
         hallucination_data_ragas.samples.append(sample_ragas)
-        if i % 50 == 0 or i == total_samples - 1:
+        if (i + 1) % 50 == 0 or (i + 1) == total_samples:
             (output_file).write_text(json.dumps(hallucination_data_ragas.to_json(), indent=4))
 
 
