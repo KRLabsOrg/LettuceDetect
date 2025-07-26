@@ -91,11 +91,14 @@ def create_sample(response: dict, dataset_name: str, split: str) -> Hallucinatio
         "finance_numerical_reasoning": ["finqa", "tatqa"],
         "biomed": ["pubmedqa", "covidqa"],
         "legal": ["cuad"],
-        "general_knowledge": ["hotpotqa", "msmarco", "hagrid", "experqa"],
+        "general_knowledge": ["hotpotqa", "msmarco", "hagrid", "expertqa"],
     }
     task_type = next((k for k, v in mapping.items() if dataset_name in v), None)
+    answer_sentences = [sentence for _, sentence in response["response_sentences"]]
 
-    return HallucinationSample(prompt, answer, labels, split, task_type, "ragbench", "en")
+    return HallucinationSample(
+        prompt, answer, labels, split, task_type, "ragbench", "en", answer_sentences
+    )
 
 
 def main(input_dir: str, output_dir: Path):
