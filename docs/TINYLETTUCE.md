@@ -320,7 +320,7 @@ print(triplets)  # e.g., [["Paris", "is_capital_of", "France"]]
 
 Compare triplets against each other:
 ```python
-compare = fact_checker.analyze_text_pair(
+compare = rag.analyze_text_pair(
     "France is a country in Europe.", "France is a country in Asia."
 )
 print(compare)
