@@ -1,10 +1,17 @@
+from __future__ import annotations
+
 import argparse
+import difflib
 import json
 import os
 import random
 import re
 import textwrap
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from lettucedetect.models.generation import HallucinationGenerator
 
 from datasets import load_dataset
 from openai import OpenAI
@@ -495,6 +502,68 @@ def _process_result(result, original_answer, hall_type, model):
     }
 
 
+def inject_hallucination_rag(
+    generator: HallucinationGenerator,
+    clean_answer: str,
+    hall_type: str,
+    user_query: str = "",
+    context: str = "",
+    max_retries: int = 3,
+    retry_delay: int = 2,
+) -> dict | None:
+    """Use HallucinationGenerator to inject hallucinations."""
+    for attempt in range(max_retries):
+        try:
+            result = generator.generate(
+                context=[context],
+                question=user_query,
+                answer=clean_answer,
+                error_types=[hall_type],
+            )
+            if result and result.get("hallucinated_answer"):
+                return result
+            if attempt < max_retries - 1:
+                continue
+            return None
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = retry_delay * (attempt + 1)
+                print(f"  RAG injection error (attempt {attempt + 1}): {e}. Retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                return None
+    return None
+
+
+def _process_rag_result(
+    result: dict | None, original_answer: str, hall_type: str, model: str
+) -> dict | None:
+    """Process a HallucinationGenerator result into a JSONL entry using difflib span labels."""
+    if result is None:
+        return None
+    hallucinated_answer = result.get("hallucinated_answer", "")
+    if not hallucinated_answer or hallucinated_answer == original_answer:
+        return None
+
+    labels = []
+    matcher = difflib.SequenceMatcher(None, original_answer, hallucinated_answer, autojunk=False)
+    for tag, _, __, j1, j2 in matcher.get_opcodes():
+        if tag in ("replace", "insert"):
+            labels.append({"start": j1, "end": j2, "label": hall_type})
+
+    valid, _ = _validate_labels(original_answer, hallucinated_answer, labels)
+    if not valid:
+        return None
+
+    return {
+        "hallucinated_answer": hallucinated_answer,
+        "labels": labels,
+        "hallucination_type": hall_type,
+        "injector_model": model,
+        "changes": [],
+    }
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -571,6 +640,15 @@ def parse_args() -> argparse.Namespace:
         default=42,
         help="Random seed for reproducibility (default: %(default)s)",
     )
+    parser.add_argument(
+        "--injector",
+        choices=["custom", "rag_fact_checker"],
+        default="custom",
+        help=(
+            "Injection backend: 'custom' uses the built-in PAPER_INJECTION_SYSTEM_PROMPT pipeline; "
+            "'rag_fact_checker' uses HallucinationGenerator from lettucedetect. (default: %(default)s)"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -583,6 +661,17 @@ def main() -> None:
         raise SystemExit("Error: API key required. Set OPENAI_API_KEY or use --api-key.")
 
     client = OpenAI(api_key=args.api_key, base_url=args.api_base_url)
+
+    generator = None
+    if args.injector == "rag_fact_checker":
+        from lettucedetect.models.generation import HallucinationGenerator
+
+        generator = HallucinationGenerator(
+            openai_api_key=args.api_key,
+            model=args.model,
+            base_url=args.api_base_url,
+            temperature=args.temperature,
+        )
 
     ds = load_dataset("KRLabsOrg/acl-verbatim-spans", "canonical", split="train", streaming=True)
     ds = ds.filter(lambda x: x["answerable"])
@@ -631,18 +720,30 @@ def main() -> None:
             should_hallucinate = random.random() < args.hallucination_ratio  # nosec B311
             processed = None
             if should_hallucinate or hall_debt:
-                injection_result = inject_hallucination(
-                    client=client,
-                    model=args.model,
-                    clean_answer=llm_answer,
-                    hall_type=hall_type,
-                    user_query=row["question"],
-                    context=row["chunk"],
-                    max_retries=args.max_retries,
-                    retry_delay=args.retry_delay,
-                    temperature=args.temperature,
-                )
-                processed = _process_result(injection_result, llm_answer, hall_type, args.model)
+                if args.injector == "rag_fact_checker":
+                    injection_result = inject_hallucination_rag(
+                        generator=generator,
+                        clean_answer=llm_answer,
+                        hall_type=hall_type,
+                        user_query=row["question"],
+                        context=row["chunk"],
+                        max_retries=args.max_retries,
+                        retry_delay=args.retry_delay,
+                    )
+                    processed = _process_rag_result(injection_result, llm_answer, hall_type, args.model)
+                else:
+                    injection_result = inject_hallucination(
+                        client=client,
+                        model=args.model,
+                        clean_answer=llm_answer,
+                        hall_type=hall_type,
+                        user_query=row["question"],
+                        context=row["chunk"],
+                        max_retries=args.max_retries,
+                        retry_delay=args.retry_delay,
+                        temperature=args.temperature,
+                    )
+                    processed = _process_result(injection_result, llm_answer, hall_type, args.model)
                 if processed is not None:
                     answer = processed["hallucinated_answer"]
                     labels = processed["labels"]
