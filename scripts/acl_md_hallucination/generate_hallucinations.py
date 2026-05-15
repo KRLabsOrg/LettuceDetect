@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import difflib
 import json
 import os
@@ -8,13 +9,13 @@ import random
 import re
 import textwrap
 import time
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from lettucedetect.models.generation import HallucinationGenerator
 
-from datasets import load_dataset
-from openai import OpenAI
+from datasets import IterableDataset, load_dataset
+from openai import AsyncOpenAI, OpenAI
 from tqdm import tqdm
 
 PAPER_INJECTION_SYSTEM_PROMPT = textwrap.dedent("""\
@@ -257,6 +258,202 @@ def rephrase_verbatim_answer(
         temperature=0.8,
     )
     return response.choices[0].message.content.strip()
+
+
+async def _rephrase_one_async(
+    aclient: AsyncOpenAI,
+    model: str,
+    text: str,
+    temperature: float,
+) -> str | None:
+    prompt = textwrap.dedent(f"""Rephrase the following answer in different words while preserving its
+    exact meaning. Do not add, modify or remove any (factually accurate) information, just change the wording and sentence
+    structure. The answer's style should be quite similar like a typical LLM-generated answer.
+    \n\n Context:{text}
+    Return only the rephrased answer, without any additional commentary or formatting.""")
+    try:
+        response = await aclient.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return None
+
+
+async def _inject_one_async(
+    aclient: AsyncOpenAI,
+    model: str,
+    clean_answer: str,
+    hall_type: str,
+    user_query: str,
+    context: str,
+    max_retries: int,
+    retry_delay: int,
+    temperature: float,
+) -> dict | None:
+    user_msg = f"""Hallucination type to inject: {hall_type.upper()}
+
+User's original request: {user_query}
+
+Context (paper contents):
+{context}
+
+Correct answer to modify:
+{clean_answer}
+
+Return ONLY replacement edits for {hall_type} error(s). Do not return the full rewritten answer."""
+
+    for attempt in range(max_retries):
+        try:
+            response = await aclient.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": PAPER_INJECTION_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=temperature,
+            )
+            raw = response.choices[0].message.content.strip()
+            json_match = re.search(r"\{[\s\S]*\}", raw)
+            if not json_match:
+                continue
+            result = json.loads(json_match.group())
+            if "changes" not in result or not isinstance(result["changes"], list):
+                continue
+            if not result["changes"]:
+                continue
+            return result
+        except Exception:
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay * (attempt + 1))
+            else:
+                return None
+    return None
+
+
+async def _process_sample_async(
+    aclient: AsyncOpenAI,
+    args: argparse.Namespace,
+    idx: int,
+    row: dict,
+    hall_type: str,
+    should_hallucinate: bool,
+) -> tuple[str | None, dict | None]:
+    """Rephrase and optionally inject a hallucination for one sample."""
+    llm_answer = await _rephrase_one_async(
+        aclient, args.model, "\n\n".join(row["predicted_texts"]), args.temperature
+    )
+    if not llm_answer:
+        return None, None
+
+    if not should_hallucinate:
+        return llm_answer, None
+
+    result = await _inject_one_async(
+        aclient,
+        args.model,
+        llm_answer,
+        hall_type,
+        row["question"],
+        row["chunk"],
+        args.max_retries,
+        args.retry_delay,
+        args.temperature,
+    )
+    processed = _process_result(result, llm_answer, hall_type, args.model)
+    return llm_answer, processed
+
+
+def _run_batched(
+    args: argparse.Namespace,
+    ds: IterableDataset,
+    done_indices: set[int],
+    out_f: IO[str],
+    meta_f: IO[str],
+) -> int:
+    """Async batch processing for high-throughput endpoints (local vLLM, etc.)."""
+    aclient = AsyncOpenAI(api_key=args.api_key, base_url=args.api_base_url)
+    written = 0
+
+    async def process_batches() -> None:
+        nonlocal written
+        batch_rows: list[dict] = []
+        batch_meta: list[tuple[int, str, bool]] = []
+
+        async def flush_batch() -> None:
+            nonlocal written
+            tasks = [
+                _process_sample_async(aclient, args, idx, row, hall_type, should_hallucinate)
+                for (idx, hall_type, should_hallucinate), row in zip(batch_meta, batch_rows)
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for (idx, hall_type, should_hallucinate), row, result in zip(
+                batch_meta, batch_rows, results
+            ):
+                if isinstance(result, Exception) or result is None:
+                    continue
+                llm_answer, processed = result
+                if llm_answer is None:
+                    continue
+
+                if processed is not None:
+                    answer = processed["hallucinated_answer"]
+                    labels = processed["labels"]
+                elif not should_hallucinate:
+                    answer = llm_answer
+                    labels = []
+                else:
+                    continue
+
+                sample = {
+                    "prompt": build_prompt(row["chunk"], row["question"], args.max_prompt_chars),
+                    "answer": answer,
+                    "labels": labels,
+                    "split": "train",
+                    "task_type": "markdown_generation",
+                    "dataset": "acl_anthology_md",
+                    "language": "en",
+                }
+                out_f.write(json.dumps(sample, ensure_ascii=False) + "\n")
+                out_f.flush()
+
+                meta_entry = {
+                    "idx": idx,
+                    "llm_answer": llm_answer,
+                    "row": dict(row),
+                    "processed": processed,
+                }
+                meta_f.write(json.dumps(meta_entry, ensure_ascii=False) + "\n")
+                meta_f.flush()
+
+                written += 1
+
+        for idx, row in enumerate(tqdm(ds, desc="verb-spans")):
+            if args.limit is not None and idx >= args.limit:
+                break
+            if done_indices and idx < max(done_indices):
+                continue
+            if idx in done_indices:
+                continue
+
+            hall_type = HALLUCINATION_TYPES[idx % len(HALLUCINATION_TYPES)]
+            should_hallucinate = random.random() < args.hallucination_ratio  # nosec B311
+            batch_rows.append(row)
+            batch_meta.append((idx, hall_type, should_hallucinate))
+
+            if len(batch_rows) >= args.batch_size:
+                await flush_batch()
+                batch_rows = []
+                batch_meta = []
+
+        if batch_rows:
+            await flush_batch()
+
+    asyncio.run(process_batches())
+    return written
 
 
 def inject_hallucination(
@@ -641,6 +838,16 @@ def parse_args() -> argparse.Namespace:
         help="Random seed for reproducibility (default: %(default)s)",
     )
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help=(
+            "Number of samples to process concurrently with asyncio. "
+            "Set >1 for local vLLM or other high-throughput endpoints. "
+            "Only supported with --injector custom. (default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
         "--injector",
         choices=["custom", "rag_fact_checker"],
         default="custom",
@@ -697,12 +904,17 @@ def main() -> None:
             print(f"Resuming: skipping {len(done_indices)} already-computed instance(s).")
 
     written = 0
-    hall_debt = False  # unpaid hallucinations from previous failed injections
     open_mode = "a" if done_indices else "w"
     with (
         open(args.output, open_mode, encoding="utf-8") as out_f,
         open(meta_path, "a", encoding="utf-8") as meta_f,
     ):
+        if args.batch_size > 1 and args.injector == "custom":
+            written = _run_batched(args, ds, done_indices, out_f, meta_f)
+            print(f"Wrote {written} samples to {args.output}")
+            return
+
+        hall_debt = False  # unpaid hallucinations from previous failed injections
         for idx, row in enumerate(tqdm(ds, desc="verb-spans")):
             if args.limit is not None and idx >= args.limit:
                 break
