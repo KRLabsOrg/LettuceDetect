@@ -19,6 +19,7 @@ from .config import (
     HALLUCINATED_PATH,
     HALLUCINATION_TEMPERATURE,
     HALLUCINATION_TYPES,
+    INJECTION_FAILURES_PATH,
     MAX_PROMPT_CHARS,
     MAX_RETRIES,
     MODEL,
@@ -161,7 +162,7 @@ PROMPT_RESIDUE = (
     "left_context",
     "right_context",
 )
-MAX_LABEL_COVERAGE = 0.30
+MAX_LABEL_COVERAGE = 0.40
 MAX_LABEL_SPAN_CHARS = 500
 MIN_LABEL_SPAN_CHARS = 12
 
@@ -361,19 +362,27 @@ def apply_changes_to_answer(
     located = []
     for change in changes:
         if len(change.get("hallucinated", "")) < MIN_LABEL_SPAN_CHARS:
-            return None, None
+            continue
         located_change = _locate_original_change(original_answer, change)
         if located_change is None:
-            return None, None
+            continue
         located.append(located_change)
 
-    # Reject overlapping edits in the original answer.
+    if not located:
+        return None, None
+
+    # Skip overlapping edits, keeping the earlier one.
     located.sort(key=lambda item: (item["start"], item["end"]))
     previous_end = -1
+    filtered = []
     for item in located:
-        if item["start"] < previous_end:
-            return None, None
-        previous_end = item["end"]
+        if item["start"] >= previous_end:
+            filtered.append(item)
+            previous_end = item["end"]
+    located = filtered
+
+    if not located:
+        return None, None
 
     hallucinated_parts = []
     labels = []
@@ -393,6 +402,60 @@ def apply_changes_to_answer(
     hallucinated_parts.append(original_answer[cursor:])
     hallucinated_answer = "".join(hallucinated_parts)
     return hallucinated_answer, labels
+
+
+def replay_failures(
+    formats: dict[str, dict],
+    failures_path=INJECTION_FAILURES_PATH,
+    model: str = MODEL,
+) -> int:
+    """Re-run post-processing on saved failures without calling the LLM again.
+
+    Useful after fixing _process_result logic. Appends new successes to
+    HALLUCINATED_PATH and removes them from INJECTION_FAILURES_PATH.
+    Returns number of newly recovered samples.
+    """
+    if not failures_path.exists():
+        return 0
+
+    failures = []
+    with open(failures_path) as f:
+        for line in f:
+            try:
+                failures.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    existing = load_existing_hallucinations()
+    recovered = 0
+    remaining = []
+
+    with open(HALLUCINATED_PATH, "a") as out:
+        for failure in failures:
+            instance_id = failure["instance_id"]
+            if instance_id in existing:
+                continue
+            fmt_data = formats.get(instance_id, {})
+            if not fmt_data:
+                remaining.append(failure)
+                continue
+            entry, reason = _process_result(
+                failure["llm_result"], instance_id, failure["hall_type"], fmt_data, model
+            )
+            if entry is not None:
+                out.write(json.dumps(entry) + "\n")
+                existing[instance_id] = entry
+                recovered += 1
+            else:
+                failure["failure_reason"] = reason
+                remaining.append(failure)
+
+    with open(failures_path, "w") as f:
+        for r in remaining:
+            f.write(json.dumps(r) + "\n")
+
+    print(f"Replay: {recovered} recovered, {len(remaining)} still failing")
+    return recovered
 
 
 def load_existing_hallucinations(path=HALLUCINATED_PATH) -> dict[str, dict]:
@@ -523,22 +586,31 @@ def _validate_labels(
 
 
 def _process_result(result, instance_id, hall_type, fmt_data, model):
-    """Process a single injection result into a JSONL entry."""
+    """Process a single injection result into a JSONL entry.
+
+    Returns (entry, failure_reason) where entry is None on failure.
+    """
     if result is None:
-        return None
+        return None, "llm_no_response"
     original_answer = fmt_data.get("answer", "")
     changes = result.get("changes", [])
+    if not changes:
+        return None, "llm_empty_changes"
     hallucinated_code, labels = apply_changes_to_answer(original_answer, changes, hall_type)
     if hallucinated_code is None or labels is None:
-        return None
+        return None, "substring_not_unique_or_too_short"
     ordered_changes = _sort_changes_by_original_position(original_answer, changes)
     if ordered_changes is None:
-        return None
+        return None, "substring_not_unique_or_too_short"
     format_type = fmt_data.get("format_type", "fragment")
+
+    # Repair unbalanced fences before validation (appending doesn't shift label offsets).
+    if format_type == "code_with_explanation" and hallucinated_code.count("```") % 2 != 0:
+        hallucinated_code = hallucinated_code.rstrip() + "\n```"
 
     valid, reason = _validate_labels(original_answer, hallucinated_code, labels, format_type)
     if not valid:
-        return None
+        return None, f"validation:{reason}"
 
     return {
         "instance_id": instance_id,
@@ -548,7 +620,7 @@ def _process_result(result, instance_id, hall_type, fmt_data, model):
         "injector_model": model,
         "format_type": format_type,
         "changes": ordered_changes,
-    }
+    }, None
 
 
 def run(
@@ -625,12 +697,15 @@ def _run_sequential(to_process, formats, queries, docs, source_cache, api_key, b
     no_spans = 0
     results = []
 
-    with open(HALLUCINATED_PATH, "a") as f:
+    failure_reasons: dict[str, int] = {}
+
+    with open(HALLUCINATED_PATH, "a") as f, open(INJECTION_FAILURES_PATH, "a") as ff:
         for i, inst in enumerate(to_process):
             instance_id = inst["instance_id"]
             fmt_data = formats.get(instance_id, {})
             clean_answer = fmt_data.get("answer", "")
             if not clean_answer:
+                failure_reasons["no_answer"] = failure_reasons.get("no_answer", 0) + 1
                 failed += 1
                 continue
 
@@ -644,8 +719,9 @@ def _run_sequential(to_process, formats, queries, docs, source_cache, api_key, b
             )
             instance_docs = docs.get(instance_id, {})
 
-            # Try injection with up to 2 quality retries
             entry = None
+            last_reason = None
+            last_result = None
             for attempt in range(3):
                 result = inject_hallucination(
                     client,
@@ -656,14 +732,30 @@ def _run_sequential(to_process, formats, queries, docs, source_cache, api_key, b
                     context,
                     documentation=instance_docs,
                 )
-                entry = _process_result(result, instance_id, hall_type, fmt_data, model)
+                entry, last_reason = _process_result(
+                    result, instance_id, hall_type, fmt_data, model
+                )
                 if entry is not None:
                     break
+                if result is not None:
+                    last_result = result
 
             if entry is None:
-                if result is not None:
-                    no_spans += 1
+                failure_reasons[last_reason] = failure_reasons.get(last_reason, 0) + 1
                 failed += 1
+                if last_result is not None:
+                    ff.write(
+                        json.dumps(
+                            {
+                                "instance_id": instance_id,
+                                "hall_type": hall_type,
+                                "format_type": fmt_data.get("format_type"),
+                                "failure_reason": last_reason,
+                                "llm_result": last_result,
+                            }
+                        )
+                        + "\n"
+                    )
                 continue
 
             f.write(json.dumps(entry) + "\n")
@@ -674,7 +766,11 @@ def _run_sequential(to_process, formats, queries, docs, source_cache, api_key, b
             if processed % 100 == 0:
                 print(f"  Phase 6: {processed}/{len(to_process)} (failed: {failed})")
 
-    print(f"\nDone: {processed} injected, {failed} failed ({no_spans} had no matchable spans)")
+    print(f"\nDone: {processed} injected, {failed} failed")
+    if failure_reasons:
+        print("Failure breakdown:")
+        for reason, count in sorted(failure_reasons.items(), key=lambda x: -x[1]):
+            print(f"  {reason}: {count}")
     return results
 
 
@@ -683,13 +779,13 @@ def _run_batched(to_process, formats, queries, docs, source_cache, api_key, base
     aclient = AsyncOpenAI(api_key=api_key, base_url=base_url)
     processed = 0
     failed = 0
-    no_spans = 0
     results = []
+    failure_reasons: dict[str, int] = {}
 
     async def process_batches():
-        nonlocal processed, failed, no_spans
+        nonlocal processed, failed
 
-        with open(HALLUCINATED_PATH, "a") as f:
+        with open(HALLUCINATED_PATH, "a") as f, open(INJECTION_FAILURES_PATH, "a") as ff:
             for batch_start in range(0, len(to_process), BATCH_SIZE):
                 batch = to_process[batch_start : batch_start + BATCH_SIZE]
 
@@ -737,14 +833,29 @@ def _run_batched(to_process, formats, queries, docs, source_cache, api_key, base
                 # Process results and write immediately
                 for result, (instance_id, hall_type, fmt_data) in zip(batch_results, batch_meta):
                     if isinstance(result, Exception):
+                        failure_reasons["llm_exception"] = (
+                            failure_reasons.get("llm_exception", 0) + 1
+                        )
                         failed += 1
                         continue
 
-                    entry = _process_result(result, instance_id, hall_type, fmt_data, model)
+                    entry, reason = _process_result(result, instance_id, hall_type, fmt_data, model)
                     if entry is None:
-                        if result is not None:
-                            no_spans += 1
+                        failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
                         failed += 1
+                        if result is not None:
+                            ff.write(
+                                json.dumps(
+                                    {
+                                        "instance_id": instance_id,
+                                        "hall_type": hall_type,
+                                        "format_type": fmt_data.get("format_type"),
+                                        "failure_reason": reason,
+                                        "llm_result": result,
+                                    }
+                                )
+                                + "\n"
+                            )
                         continue
 
                     f.write(json.dumps(entry) + "\n")
@@ -757,7 +868,11 @@ def _run_batched(to_process, formats, queries, docs, source_cache, api_key, base
                     print(f"  Phase 6: {total}/{len(to_process)} ({processed} ok, {failed} failed)")
 
     asyncio.run(process_batches())
-    print(f"\nDone: {processed} injected, {failed} failed ({no_spans} had no matchable spans)")
+    print(f"\nDone: {processed} injected, {failed} failed")
+    if failure_reasons:
+        print("Failure breakdown:")
+        for reason, count in sorted(failure_reasons.items(), key=lambda x: -x[1]):
+            print(f"  {reason}: {count}")
     return results
 
 

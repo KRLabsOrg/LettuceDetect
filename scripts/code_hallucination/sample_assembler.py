@@ -2,7 +2,13 @@
 
 import json
 
-from .config import DATASET_PATH, MAX_PROMPT_CHARS, METADATA_PATH, SOURCE_CACHE_DIR
+from .config import (
+    DATASET_PATH,
+    MAX_ANSWER_CHARS,
+    MAX_PROMPT_CHARS,
+    METADATA_PATH,
+    SOURCE_CACHE_DIR,
+)
 
 
 def build_prompt(
@@ -67,6 +73,8 @@ def assemble_samples(
         if instance_id in hallucination_instance_ids and instance_id in hallucinations:
             # Hallucinated sample
             hall_data = hallucinations[instance_id]
+            if len(hall_data.get("hallucinated_answer", "")) > MAX_ANSWER_CHARS:
+                continue
             sample = {
                 "prompt": prompt,
                 "answer": hall_data["hallucinated_answer"],
@@ -90,6 +98,8 @@ def assemble_samples(
             # Clean sample
             answer = fmt_data.get("answer", "")
             if not answer.strip():
+                continue
+            if len(answer) > MAX_ANSWER_CHARS:
                 continue
 
             # Reject code_with_explanation with unbalanced fences

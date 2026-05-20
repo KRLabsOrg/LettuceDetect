@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 import torch
@@ -14,11 +14,16 @@ class HallucinationSample:
         prompt: Context text (source documents, code files, documentation, user query).
         answer: The LLM-generated answer to check for hallucinations.
         labels: List of span annotations. Each dict has ``start``, ``end`` (character offsets
-            within ``answer``), and ``label`` keys. Empty list for clean samples.
+            within ``answer``), ``label`` (native source label), and optionally ``category``
+            and ``subcategory`` (v2 unified taxonomy fields). Empty list for clean samples.
         split: Dataset split (``train``, ``dev``, or ``test``).
         task_type: Task type (e.g. ``summarization``, ``qa``, ``code_generation``).
-        dataset: Source dataset (``ragtruth``, ``ragbench``, or ``swebench_code``).
+        dataset: Source dataset name.
         language: Language code.
+        context_modality: Modality of the retrieved context (``prose``, ``code``, ``markdown``).
+        category: Top-level taxonomy category for the sample (v2). ``None`` for clean samples.
+        subcategory: Optional fine-grained sub-type within the category (v2).
+        metadata: Arbitrary source-specific provenance fields (e.g. ``instance_id``, ``repo``).
 
     """
 
@@ -27,8 +32,13 @@ class HallucinationSample:
     labels: list[dict]
     split: Literal["train", "dev", "test"]
     task_type: str
-    dataset: Literal["ragtruth", "ragbench", "swebench_code"]
+    dataset: str
     language: Literal["en", "de", "fr", "es", "it", "pl", "cn", "hu"]
+    # v2 fields (optional for backwards compatibility)
+    context_modality: Literal["prose", "code", "markdown"] = "prose"
+    category: str | None = None
+    subcategory: str | None = None
+    metadata: dict = field(default_factory=dict)
 
     def to_json(self) -> dict:
         """Serialize to a JSON-compatible dict."""
@@ -40,6 +50,10 @@ class HallucinationSample:
             "task_type": self.task_type,
             "dataset": self.dataset,
             "language": self.language,
+            "context_modality": self.context_modality,
+            "category": self.category,
+            "subcategory": self.subcategory,
+            "metadata": self.metadata,
         }
 
     @classmethod
@@ -53,6 +67,10 @@ class HallucinationSample:
             task_type=json_dict["task_type"],
             dataset=json_dict["dataset"],
             language=json_dict["language"],
+            context_modality=json_dict.get("context_modality", "prose"),
+            category=json_dict.get("category"),
+            subcategory=json_dict.get("subcategory"),
+            metadata=json_dict.get("metadata", {}),
         )
 
 
