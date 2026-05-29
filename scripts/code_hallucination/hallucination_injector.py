@@ -12,6 +12,12 @@ import time
 
 from openai import AsyncOpenAI, OpenAI
 
+from lettucedetect.generation.injection import (
+    _sort_changes_by_original_position,
+    apply_changes_to_answer,
+    validate_labels,
+)
+
 from .config import (
     API_BASE_URL,
     API_KEY,
@@ -150,28 +156,6 @@ INJECTION_SYSTEM_PROMPT = textwrap.dedent("""\
     - Return ONLY valid JSON, nothing else
 """)
 
-LEAKY_TERMS = (
-    "bug",
-    "wrong",
-    "incorrect",
-    "incorrectly",
-    "deprecated",
-    "hallucination",
-    "helper method",
-    "should be replaced",
-)
-PROMPT_RESIDUE = (
-    "Generate a hallucinated version",
-    "Return JSON only",
-    "hallucinated_code",
-    "target_zone",
-    "left_context",
-    "right_context",
-)
-MAX_LABEL_COVERAGE = 0.40
-MAX_LABEL_SPAN_CHARS = 500
-MIN_LABEL_SPAN_CHARS = 12
-
 
 def build_source_context(source_data: dict) -> str:
     """Build source code context string from cached source data.
@@ -257,157 +241,6 @@ Return ONLY replacement edits for {hall_type} error(s). Do not return the full r
                 time.sleep(wait)
             else:
                 return None
-
-
-def _find_all_occurrences(text: str, pattern: str) -> list[dict]:
-    """Return all exact matches of pattern in text."""
-    if not pattern:
-        return []
-    offsets = []
-    start = 0
-    while True:
-        idx = text.find(pattern, start)
-        if idx == -1:
-            break
-        offsets.append({"start": idx, "end": idx + len(pattern)})
-        start = idx + 1
-    return offsets
-
-
-def _extract_code_regions(answer: str) -> list[tuple[int, int]]:
-    """Return ranges that correspond to markdown fenced code blocks.
-
-    If no fenced blocks are present, treat the whole answer as code.
-    """
-    regions = []
-    idx = 0
-    while True:
-        start = answer.find("```", idx)
-        if start == -1:
-            break
-        code_start = answer.find("\n", start + 3)
-        if code_start == -1:
-            break
-        code_start += 1
-        end = answer.find("```", code_start)
-        if end == -1:
-            break
-        regions.append((code_start, end))
-        idx = end + 3
-    if not regions:
-        return [(0, len(answer))]
-    return regions
-
-
-def _span_is_in_code(answer: str, start: int, end: int) -> bool:
-    """Check whether a span lies fully inside a code region."""
-    for code_start, code_end in _extract_code_regions(answer):
-        if start >= code_start and end <= code_end:
-            return True
-    return False
-
-
-def _contains_leakage(text: str) -> bool:
-    """Detect obvious synthetic giveaway text inside a label span."""
-    lowered = text.lower()
-    return any(term in lowered for term in LEAKY_TERMS)
-
-
-def _max_allowed_coverage(answer_len: int) -> float:
-    """Use a looser coverage cap for short answers and fragments."""
-    if answer_len <= 400:
-        return 0.40
-    if answer_len <= 800:
-        return 0.35
-    return MAX_LABEL_COVERAGE
-
-
-def _locate_original_change(original_answer: str, change: dict) -> dict | None:
-    """Locate a replacement span in the original answer by exact unique match."""
-    original_span = change.get("original", "")
-    hallucinated_span = change.get("hallucinated", "")
-    if not original_span or not hallucinated_span:
-        return None
-    if change.get("target_zone") not in (None, "code"):
-        return None
-
-    offsets = _find_all_occurrences(original_answer, original_span)
-    if len(offsets) != 1:
-        return None
-
-    return {
-        "start": offsets[0]["start"],
-        "end": offsets[0]["end"],
-        "original": original_span,
-        "hallucinated": hallucinated_span,
-    }
-
-
-def _sort_changes_by_original_position(
-    original_answer: str, changes: list[dict]
-) -> list[dict] | None:
-    """Return changes ordered by their matched position in the original answer."""
-    located = []
-    for change in changes:
-        loc = _locate_original_change(original_answer, change)
-        if loc is None:
-            return None
-        located.append((loc["start"], loc["end"], change))
-    located.sort(key=lambda item: (item[0], item[1]))
-    return [change for _, _, change in located]
-
-
-def apply_changes_to_answer(
-    original_answer: str, changes: list[dict], hall_type: str
-) -> tuple[str, list[dict]] | tuple[None, None]:
-    """Apply structured replacement edits to the original answer and build labels.
-
-    The model returns edits only. This function deterministically constructs the
-    hallucinated answer and the corresponding label offsets.
-    """
-    located = []
-    for change in changes:
-        if len(change.get("hallucinated", "")) < MIN_LABEL_SPAN_CHARS:
-            continue
-        located_change = _locate_original_change(original_answer, change)
-        if located_change is None:
-            continue
-        located.append(located_change)
-
-    if not located:
-        return None, None
-
-    # Skip overlapping edits, keeping the earlier one.
-    located.sort(key=lambda item: (item["start"], item["end"]))
-    previous_end = -1
-    filtered = []
-    for item in located:
-        if item["start"] >= previous_end:
-            filtered.append(item)
-            previous_end = item["end"]
-    located = filtered
-
-    if not located:
-        return None, None
-
-    hallucinated_parts = []
-    labels = []
-    cursor = 0
-    for item in located:
-        start = item["start"]
-        end = item["end"]
-        hallucinated_span = item["hallucinated"]
-
-        hallucinated_parts.append(original_answer[cursor:start])
-        label_start = sum(len(part) for part in hallucinated_parts)
-        hallucinated_parts.append(hallucinated_span)
-        label_end = label_start + len(hallucinated_span)
-        labels.append({"start": label_start, "end": label_end, "label": hall_type})
-        cursor = end
-
-    hallucinated_parts.append(original_answer[cursor:])
-    hallucinated_answer = "".join(hallucinated_parts)
-    return hallucinated_answer, labels
 
 
 def replay_failures(
@@ -540,55 +373,19 @@ Return ONLY replacement edits for {hall_type} error(s). Do not return the full r
 def _validate_labels(
     original_answer: str, hallucinated_code: str, labels: list[dict], format_type: str
 ) -> tuple[bool, str]:
-    """Validate that hallucination labels meet quality thresholds.
+    """Validate hallucination labels via the shared engine.
 
-    :return: (is_valid, reason) tuple.
+    ``code_with_explanation`` answers mix prose and code, so spans must stay
+    inside fenced code blocks and fences must be balanced; other formats are pure
+    code. ``original_answer`` is accepted for signature compatibility.
     """
-    if not labels:
-        return False, "no_labels"
-
-    # Reject prompt contamination (LLM leaked its instructions into the answer)
-    for residue in PROMPT_RESIDUE:
-        if residue in hallucinated_code:
-            return False, f"prompt_residue ({residue[:30]})"
-
-    # Reject unbalanced code fences for code_with_explanation
-    if format_type == "code_with_explanation":
-        fence_count = hallucinated_code.count("```")
-        if fence_count % 2 != 0:
-            return False, f"unbalanced_fences ({fence_count})"
-        if fence_count == 0:
-            return False, "no_code_fences"
-
-    total_span = sum(lab["end"] - lab["start"] for lab in labels)
-    code_len = len(hallucinated_code) if hallucinated_code else 1
-    coverage = total_span / code_len
-
-    max_coverage = _max_allowed_coverage(code_len)
-    if coverage > max_coverage:
-        return False, f"coverage_too_high ({coverage:.0%} > {max_coverage:.0%})"
-
-    previous_end = -1
-    for lab in labels:
-        span_len = lab["end"] - lab["start"]
-        if span_len < MIN_LABEL_SPAN_CHARS:
-            return False, f"span_too_short ({span_len} chars)"
-        if span_len > MAX_LABEL_SPAN_CHARS:
-            return False, f"span_too_long ({span_len} chars)"
-        if lab["start"] < previous_end:
-            return False, "overlapping_or_unsorted_labels"
-        previous_end = lab["end"]
-
-        span_text = hallucinated_code[lab["start"] : lab["end"]]
-        if _contains_leakage(span_text):
-            return False, "leaky_label_text"
-
-        if format_type == "code_with_explanation" and not _span_is_in_code(
-            hallucinated_code, lab["start"], lab["end"]
-        ):
-            return False, "label_outside_code_block"
-
-    return True, ""
+    is_mixed = format_type == "code_with_explanation"
+    return validate_labels(
+        hallucinated_code,
+        labels,
+        require_spans_in_code=is_mixed,
+        require_balanced_fences=is_mixed,
+    )
 
 
 def _process_result(result, instance_id, hall_type, fmt_data, model):

@@ -87,11 +87,14 @@ nav:
     - Multilingual: guide/multilingual.md
     - Web API: guide/api.md
     - Integrations: guide/integrations.md
-  - Code Hallucination Dataset:
-    - Overview: code-hallucination/index.md
-    - Pipeline Phases: code-hallucination/phases.md
-    - Configuration: code-hallucination/configuration.md
-    - Architecture Research: code-hallucination/architecture-research.md
+  - Hallucination Data:
+    - Taxonomy: taxonomy.md
+    - Data Generation Pipeline: generation.md
+    - Code Hallucination Dataset:
+      - Overview: code-hallucination/index.md
+      - Pipeline Phases: code-hallucination/phases.md
+      - Configuration: code-hallucination/configuration.md
+      - Architecture Research: code-hallucination/architecture-research.md
   - Research:
     - TinyLettuce: TINYLETTUCE.md
     - Multilingual (EuroBERT): EUROBERT.md

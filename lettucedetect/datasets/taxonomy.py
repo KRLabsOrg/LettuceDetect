@@ -29,6 +29,38 @@ SUBCATEGORIES: dict[str, list[str]] = {
     "fabricated_reference": ["entity", "section", "identifier", "attribute"],
 }
 
+# Natural-language definitions for prompting and documentation. Single source of
+# truth shared by the data generators and docs/taxonomy.md.
+CATEGORY_DEFINITIONS: dict[str, str] = {
+    "contradiction": (
+        "The span directly conflicts with the context: the context states one "
+        "thing and the answer asserts a different, incompatible thing."
+    ),
+    "unsupported_addition": (
+        "The span asserts something the context neither states nor implies — "
+        "plausible, but not derivable from the context."
+    ),
+    "fabricated_reference": (
+        "The span references a named element (identifier, section, file, entity, "
+        "attribute) that does not appear anywhere in the context."
+    ),
+}
+
+SUBCATEGORY_DEFINITIONS: dict[str, str] = {
+    "numerical": "a number, count, or quantity",
+    "temporal": "a date, time, or ordering",
+    "entity": "a named entity (person, place, object, library, commit, ...)",
+    "relational": "a relationship or mapping between entities",
+    "value": "a value, argument, setting, or condition",
+    "claim": "a standalone factual claim",
+    "elaboration": "an added explanatory detail",
+    "subjective": "an opinion or evaluation",
+    "behavior": "described behavior or effect",
+    "section": "a section, line number, or location reference",
+    "identifier": "a function, method, class, or variable name",
+    "attribute": "a field, property, or attribute name",
+}
+
 # ── Source-label mapping tables ────────────────────────────────────────────────
 # Each entry: native_label -> (top_level_category, subcategory | None)
 
@@ -105,9 +137,7 @@ def map_label(native_label: str, source: str) -> tuple[str, str | None]:
 
 
 def is_ragtruth_fabricated(span_text: str, context: str) -> bool:
-    """Heuristic: classify Baseless Info as fabricated_reference when span
-    contains a proper noun absent from the context.
-    """
+    """Classify Baseless Info as fabricated_reference when the span has a proper noun absent from context."""
     words = span_text.split()
     context_lower = context.lower()
     for word in words:
@@ -119,8 +149,10 @@ def is_ragtruth_fabricated(span_text: str, context: str) -> bool:
 def ragtruth_map_with_context(
     source_label: str, span_text: str, context: str
 ) -> tuple[str, str | None]:
-    """Context-aware RAGTruth mapping that splits Baseless Info into
-    fabricated_reference (proper noun not in context) vs unsupported_addition.
+    """Map a RAGTruth label, splitting Baseless Info into fabricated_reference vs unsupported_addition.
+
+    Uses the span text and context: a proper noun absent from the context becomes
+    ``fabricated_reference``; otherwise ``unsupported_addition``.
     """
     if "Baseless" in source_label:
         if is_ragtruth_fabricated(span_text, context):

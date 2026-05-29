@@ -210,6 +210,9 @@ For `fragment` / `edit_style` entries, `instance_id == original_id` and `functio
 
 Uses an LLM to inject realistic hallucinations into selected instances (determined by Phase 8). Returns structured JSON with span annotations.
 
+!!! note "Shared injection engine"
+    Edit application, span location, and label validation are handled by the shared [`lettucedetect.generation.injection`](../generation.md) engine. This phase supplies its code-specific injection prompt and native labels (`structural`/`behavioral`/`semantic`); the engine produces the exact span annotations.
+
 ### Hallucination types (round-robin)
 
 | Type | Description | Example |
