@@ -456,6 +456,218 @@ def build_edit_style_answer(patch: str, changed_files: list[str]) -> str | None:
     return "\n\n".join(parts) if parts else None
 
 
+def extract_definition(source: str, name: str, max_chars: int = 2000) -> str | None:
+    """Extract a specific function or class definition from source code using AST.
+
+    Returns the source lines for that definition (including docstring), or None if
+    the definition is not found or source cannot be parsed.
+
+    Args:
+        source: Python source code to search.
+        name: Function or class name to extract.
+        max_chars: Maximum number of characters to return (truncates if necessary).
+
+    Returns:
+        Source string for the definition, or None if not found.
+
+    """
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", SyntaxWarning)
+            tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    lines = source.split("\n")
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                start = node.lineno - 1
+                end = node.end_lineno
+                definition = "\n".join(lines[start:end])
+                if len(definition) > max_chars:
+                    definition = definition[:max_chars]
+                return definition
+    return None
+
+
+def find_definitions_in_repo(
+    names: set[str],
+    repo_dir: Path,
+    commit: str,
+    max_names: int = 20,
+    max_candidates_per_name: int = 3,
+    file_cache: dict[str, str | None] | None = None,
+) -> dict[str, dict]:
+    """Search a bare git repo for function/class definitions by name.
+
+    Issues a single ``git grep`` with all names batched into one regex, then
+    fetches candidate files and extracts definitions with AST.  This is much
+    faster than one grep call per name on large repos.
+
+    Returns dict mapping name -> {"file": filepath, "source": definition_source}.
+    """
+    if not names:
+        return {}
+
+    # Use caller-supplied cache or a local one
+    if file_cache is None:
+        file_cache = {}
+
+    results: dict[str, dict] = {}
+    processed = 0
+
+    for name in list(names)[:max_names]:
+        if processed >= max_names:
+            break
+        processed += 1
+
+        # Per-name grep with -l (list files only): fast because git stops at
+        # first match per file.  Alternation patterns force PCRE which is ~20x
+        # slower on large repos, so we search one name at a time.
+        try:
+            proc = subprocess.run(
+                ["git", f"--git-dir={repo_dir}", "grep", "-l", f"def {name}", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (subprocess.TimeoutExpired, Exception):
+            continue
+
+        if proc.returncode != 0 or not proc.stdout.strip():
+            continue
+
+        candidate_files = [
+            line.strip().removeprefix("HEAD:").lstrip("/")
+            for line in proc.stdout.splitlines()
+            if line.strip() and line.strip().removeprefix("HEAD:").lstrip("/").endswith(".py")
+        ]
+
+        for filepath in candidate_files[:max_candidates_per_name]:
+            if filepath not in file_cache:
+                file_cache[filepath] = fetch_file_at_commit(repo_dir, commit, filepath)
+            content = file_cache[filepath]
+            if content is None:
+                continue
+            definition = extract_definition(content, name)
+            if definition:
+                results[name] = {"file": filepath, "source": definition}
+                break
+
+    return results
+
+
+def fetch_import_dependencies(
+    source_files: dict[str, str],
+    repo_dir: Path,
+    commit: str,
+) -> dict[str, str]:
+    """Pass A — resolve relative imports and return referenced definitions.
+
+    For each file in *source_files*:
+      1. Parse AST for relative imports (``from . import X``,
+         ``from .module import X``).
+      2. Resolve the import to a file path relative to the changed file's
+         directory.
+      3. Fetch that file at *commit*.
+      4. Extract only the definitions (functions/classes) that are actually
+         referenced in the original *source_files* content.
+
+    Args:
+        source_files: Mapping of filepath -> source content (patch-touched files).
+        repo_dir: Path to a bare git repository.
+        commit: Git commit SHA to fetch dependency files at.
+
+    Returns:
+        Dict mapping ``filepath -> definition_source`` for all resolved
+        dependency definitions.  Returns an empty dict if anything goes wrong.
+
+    """
+    if not source_files:
+        return {}
+
+    # Concatenate all original source content for reference lookups
+    all_source = "\n".join(source_files.values())
+
+    # Collect resolved dependency file paths to fetch
+    dep_file_paths: set[str] = set()
+    # Map dep file path -> set of names actually imported from it
+    dep_file_names: dict[str, set[str]] = {}
+
+    for filepath, content in source_files.items():
+        file_dir = filepath.rsplit("/", 1)[0] if "/" in filepath else ""
+
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(content)
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+
+            imported_names = {alias.name for alias in node.names}
+
+            if node.level == 0:
+                # Absolute import — try to resolve as an internal repo path.
+                # e.g. "from astropy.table.column import Column"
+                #   → try "astropy/table/column.py" in the repo.
+                # We verify existence lazily (fetch_file_at_commit returns None if absent).
+                if node.module:
+                    candidate = node.module.replace(".", "/") + ".py"
+                    dep_file_paths.add(candidate)
+                    dep_file_names.setdefault(candidate, set()).update(imported_names)
+                continue
+
+            # Relative import: resolve module path
+            # level=1 -> same directory, level=2 -> parent, etc.
+            parts = file_dir.split("/") if file_dir else []
+            parent_parts = parts[: len(parts) - (node.level - 1)] if node.level > 1 else parts
+
+            module = node.module or ""
+            if module:
+                module_path = "/".join(parent_parts + [module.replace(".", "/")]) + ".py"
+            else:
+                # ``from . import X`` — the names come from the package __init__
+                module_path = "/".join(parent_parts + ["__init__.py"])
+
+            dep_file_paths.add(module_path)
+            dep_file_names.setdefault(module_path, set()).update(imported_names)
+
+    if not dep_file_paths:
+        return {}
+
+    dependency_definitions: dict[str, str] = {}
+
+    for dep_filepath in dep_file_paths:
+        if dep_filepath in source_files:
+            # Already in context — skip
+            continue
+
+        content = fetch_file_at_commit(repo_dir, commit, dep_filepath)
+        if content is None:
+            continue
+
+        # Extract only definitions that are referenced in the original source
+        names_from_file = dep_file_names.get(dep_filepath, set())
+        definitions_found = []
+        for name in names_from_file:
+            # Only include if the name actually appears in the original source content
+            if name not in all_source:
+                continue
+            definition = extract_definition(content, name)
+            if definition:
+                definitions_found.append(f"# {name}\n{definition}")
+
+        if definitions_found:
+            dependency_definitions[dep_filepath] = "\n\n".join(definitions_found)
+
+    return dependency_definitions
+
+
 def fetch_source_for_instance(
     instance: dict, repos_dir: Path = REPOS_DIR, use_github_api: bool = False
 ) -> dict | None:
@@ -540,6 +752,16 @@ def fetch_source_for_instance(
     for filepath in list(source_files.keys()):
         source_files[filepath] = truncate_around_patch(source_files[filepath], patch, filepath)
 
+    # Pass A: fetch import-based dependency definitions
+    dependency_files: dict[str, str] = {}
+    if repo_dir is not None:
+        try:
+            dependency_files = fetch_import_dependencies(source_files, repo_dir, commit)
+        except Exception as e:
+            print(
+                f"    Warning: fetch_import_dependencies failed for {instance['instance_id']}: {e}"
+            )
+
     return {
         "instance_id": instance["instance_id"],
         "changed_files": changed_files,
@@ -547,6 +769,7 @@ def fetch_source_for_instance(
         "patch_code": patch_code,
         "edit_style": edit_style,
         "modified_functions": modified_functions,
+        "dependency_files": dependency_files,
     }
 
 

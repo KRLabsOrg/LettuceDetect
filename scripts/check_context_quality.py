@@ -27,7 +27,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from scripts.code_hallucination.config import (  # noqa: E402
     DATA_DIR,
     DATASET_PATH,
-    INSTANCES_PATH,
     METADATA_PATH,
     REPOS_DIR,
     SOURCE_CACHE_DIR,
@@ -43,16 +42,72 @@ _LIGHT_INDEX_PATH = DATA_DIR / "swebench_index_light.json"
 _BUILTINS = frozenset(
     dir(__builtins__) if isinstance(__builtins__, dict) else dir(__builtins__)
 ) | {
-    "print", "len", "range", "enumerate", "zip", "map", "filter", "sorted",
-    "list", "dict", "set", "tuple", "str", "int", "float", "bool", "type",
-    "isinstance", "issubclass", "hasattr", "getattr", "setattr", "delattr",
-    "open", "super", "next", "iter", "any", "all", "sum", "min", "max",
-    "abs", "round", "hex", "oct", "bin", "ord", "chr", "repr", "hash",
-    "id", "vars", "dir", "help", "input", "format", "staticmethod",
-    "classmethod", "property", "object", "Exception", "ValueError",
-    "TypeError", "KeyError", "IndexError", "AttributeError", "NotImplementedError",
-    "RuntimeError", "StopIteration", "GeneratorExit", "AssertionError",
-    "ImportError", "OSError", "IOError", "FileNotFoundError",
+    "print",
+    "len",
+    "range",
+    "enumerate",
+    "zip",
+    "map",
+    "filter",
+    "sorted",
+    "list",
+    "dict",
+    "set",
+    "tuple",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "type",
+    "isinstance",
+    "issubclass",
+    "hasattr",
+    "getattr",
+    "setattr",
+    "delattr",
+    "open",
+    "super",
+    "next",
+    "iter",
+    "any",
+    "all",
+    "sum",
+    "min",
+    "max",
+    "abs",
+    "round",
+    "hex",
+    "oct",
+    "bin",
+    "ord",
+    "chr",
+    "repr",
+    "hash",
+    "id",
+    "vars",
+    "dir",
+    "help",
+    "input",
+    "format",
+    "staticmethod",
+    "classmethod",
+    "property",
+    "object",
+    "Exception",
+    "ValueError",
+    "TypeError",
+    "KeyError",
+    "IndexError",
+    "AttributeError",
+    "NotImplementedError",
+    "RuntimeError",
+    "StopIteration",
+    "GeneratorExit",
+    "AssertionError",
+    "ImportError",
+    "OSError",
+    "IOError",
+    "FileNotFoundError",
 }
 
 # Patterns that are clearly attribute calls — skip them
@@ -137,7 +192,7 @@ def audit_instance(
         if repo_dir and repo_dir.exists() and commit:
             try:
                 dep_files = fetch_import_dependencies(source_files, repo_dir, commit)
-            except Exception as e:
+            except Exception:
                 dep_files = {}
 
     # Build the full prompt with dependency definitions
@@ -178,9 +233,15 @@ def audit_instance(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Audit context quality for N instances.")
     parser.add_argument("--limit", type=int, default=100, metavar="N")
-    parser.add_argument("--clean-only", action="store_true", help="Only check clean (non-hallucinated) samples.")
-    parser.add_argument("--show-prompt", action="store_true", help="Print full prompt for each instance.")
-    parser.add_argument("--gaps-only", action="store_true", help="Only print instances with missing evidence.")
+    parser.add_argument(
+        "--clean-only", action="store_true", help="Only check clean (non-hallucinated) samples."
+    )
+    parser.add_argument(
+        "--show-prompt", action="store_true", help="Print full prompt for each instance."
+    )
+    parser.add_argument(
+        "--gaps-only", action="store_true", help="Only print instances with missing evidence."
+    )
     args = parser.parse_args()
 
     print("Loading index and dataset...")
@@ -218,13 +279,17 @@ def main() -> None:
         print(sep)
         print(f"[{i:3d}] {r['instance_id']}")
         print(f"      repo={r['repo']}  hallucinated={r['is_hallucinated']}")
-        print(f"      dep_files_fetched={dep}  bare_calls={calls_total}  coverage={pct}%  → {status}")
+        print(
+            f"      dep_files_fetched={dep}  bare_calls={calls_total}  coverage={pct}%  → {status}"
+        )
 
         if missing:
             print(f"      MISSING evidence for: {missing}")
 
         if r["evidenced"]:
-            print(f"      evidenced: {r['evidenced'][:10]}{'...' if len(r['evidenced']) > 10 else ''}")
+            print(
+                f"      evidenced: {r['evidenced'][:10]}{'...' if len(r['evidenced']) > 10 else ''}"
+            )
 
         if args.show_prompt:
             print(f"\n--- PROMPT ({r['prompt_chars']} chars) ---")
@@ -246,7 +311,9 @@ def main() -> None:
         avg_cov = sum(r["coverage_pct"] for r in group) / len(group)
         gap_counts = [len(r["missing"]) for r in group if r["missing"]]
         avg_gaps = sum(gap_counts) / max(len(gap_counts), 1)
-        print(f"  {label}: {len(group)} instances | fully_covered={fully_covered} ({100*fully_covered//len(group)}%) | avg_coverage={avg_cov:.1f}% | instances_with_gaps={len(gap_counts)} | avg_gaps_when_missing={avg_gaps:.1f}")
+        print(
+            f"  {label}: {len(group)} instances | fully_covered={fully_covered} ({100 * fully_covered // len(group)}%) | avg_coverage={avg_cov:.1f}% | instances_with_gaps={len(gap_counts)} | avg_gaps_when_missing={avg_gaps:.1f}"
+        )
 
     print("\n" + "═" * 70)
     print("SUMMARY")

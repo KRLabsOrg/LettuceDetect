@@ -68,8 +68,7 @@ def _load_swebench_index(instances_path: Path) -> dict[str, dict]:
     with open(instances_path) as f:
         instances = json.load(f)
     index = {
-        i["instance_id"]: {"repo": i["repo"], "base_commit": i["base_commit"]}
-        for i in instances
+        i["instance_id"]: {"repo": i["repo"], "base_commit": i["base_commit"]} for i in instances
     }
     with open(_LIGHT_INDEX_PATH, "w") as f:
         json.dump(index, f)
@@ -125,13 +124,17 @@ def process_instances(
     if limit is not None:
         instance_order = instance_order[:limit]
 
-    print(f"Processing {len(instance_order)} unique instances "
-          f"({'dry-run' if dry_run else 'writing'}, context7={'on' if use_context7 else 'off'})...")
+    print(
+        f"Processing {len(instance_order)} unique instances "
+        f"({'dry-run' if dry_run else 'writing'}, context7={'on' if use_context7 else 'off'})..."
+    )
 
     for i, instance_id in enumerate(instance_order, 1):
         if i % 500 == 0 or i == len(instance_order):
-            print(f"  [{i}/{len(instance_order)}] "
-                  f"pass_a={stats['pass_a_expanded']} pass_b={stats['pass_b_expanded']}")
+            print(
+                f"  [{i}/{len(instance_order)}] "
+                f"pass_a={stats['pass_a_expanded']} pass_b={stats['pass_b_expanded']}"
+            )
 
         swe = swebench_index.get(instance_id)
         if not swe:
@@ -268,12 +271,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Expand context: internal import deps + targeted external docs."
     )
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Process but do not write any files.")
-    parser.add_argument("--limit", type=int, default=None, metavar="N",
-                        help="Process at most N unique instances.")
-    parser.add_argument("--no-context7", action="store_true",
-                        help="Skip Context7 external docs (Pass B).")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Process but do not write any files."
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, metavar="N", help="Process at most N unique instances."
+    )
+    parser.add_argument(
+        "--no-context7", action="store_true", help="Skip Context7 external docs (Pass B)."
+    )
     args = parser.parse_args()
 
     print("Loading SWE-bench index...")
@@ -285,7 +291,8 @@ def main() -> None:
     print(f"  {len(samples)} samples loaded.")
 
     stats = process_instances(
-        metadata, swebench_index,
+        metadata,
+        swebench_index,
         dry_run=args.dry_run,
         limit=args.limit,
         use_context7=not args.no_context7,

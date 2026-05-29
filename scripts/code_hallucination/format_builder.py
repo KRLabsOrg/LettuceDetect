@@ -197,11 +197,23 @@ def assign_format_entries(source_data: dict, instance_id: str) -> list[dict]:
         if not eligible:
             # Fallback: no eligible functions — use fragment or edit_style
             if has_fragment:
-                return [{"instance_id": instance_id, "original_id": instance_id,
-                         "format_type": "fragment", "answer": source_data["patch_code"]}]
+                return [
+                    {
+                        "instance_id": instance_id,
+                        "original_id": instance_id,
+                        "format_type": "fragment",
+                        "answer": source_data["patch_code"],
+                    }
+                ]
             elif has_edit:
-                return [{"instance_id": instance_id, "original_id": instance_id,
-                         "format_type": "edit_style", "answer": source_data["edit_style"]}]
+                return [
+                    {
+                        "instance_id": instance_id,
+                        "original_id": instance_id,
+                        "format_type": "edit_style",
+                        "answer": source_data["edit_style"],
+                    }
+                ]
             return []
         return [
             {
@@ -215,11 +227,23 @@ def assign_format_entries(source_data: dict, instance_id: str) -> list[dict]:
         ]
 
     elif chosen == "edit_style":
-        return [{"instance_id": instance_id, "original_id": instance_id,
-                 "format_type": "edit_style", "answer": source_data["edit_style"]}]
+        return [
+            {
+                "instance_id": instance_id,
+                "original_id": instance_id,
+                "format_type": "edit_style",
+                "answer": source_data["edit_style"],
+            }
+        ]
     else:  # fragment
-        return [{"instance_id": instance_id, "original_id": instance_id,
-                 "format_type": "fragment", "answer": source_data["patch_code"]}]
+        return [
+            {
+                "instance_id": instance_id,
+                "original_id": instance_id,
+                "format_type": "fragment",
+                "answer": source_data["patch_code"],
+            }
+        ]
 
 
 def assign_format(source_data: dict) -> tuple[str, str]:
@@ -439,7 +463,9 @@ def _run_explanations_batched(needs_explanation, format_counts, results, api_key
                 batch = needs_explanation[batch_start : batch_start + BATCH_SIZE]
 
                 tasks = [
-                    _generate_explanation_async(aclient, model, base_entry["answer"], query, context)
+                    _generate_explanation_async(
+                        aclient, model, base_entry["answer"], query, context
+                    )
                     for base_entry, query, context in batch
                 ]
                 batch_results = await asyncio.gather(*tasks, return_exceptions=True)

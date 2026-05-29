@@ -27,6 +27,7 @@ from .config import (
     token_limit_kwargs,
 )
 
+
 def _original_id(iid: str) -> str:
     """Strip sub-instance suffix to get the original SWE-bench instance ID."""
     return iid.split("::")[0]
