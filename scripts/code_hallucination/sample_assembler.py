@@ -61,7 +61,10 @@ def _condense_source_for_function(source: str, func_name: str, original_body: st
         if not isinstance(node, ast.ClassDef):
             continue
         for child in ast.walk(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == func_name:
+            if (
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name == func_name
+            ):
                 class_header = lines[node.lineno - 1]
                 break
         if class_header:
@@ -89,6 +92,7 @@ def build_prompt(
             "source": definition_source} for answer-based dependencies, OR
             filepath -> definition_source for import-based dependencies.
             Both formats are handled.
+
     """
     # Build non-source sections first so they are never truncated.
     tail_parts = []
@@ -191,7 +195,11 @@ def assemble_samples(
         format_type = fmt_data.get("format_type", "")
         if function_name and format_type in ("complete_function", "code_with_explanation"):
             func_record = next(
-                (f for f in source_data.get("modified_functions", []) if f["name"] == function_name),
+                (
+                    f
+                    for f in source_data.get("modified_functions", [])
+                    if f["name"] == function_name
+                ),
                 None,
             )
             if func_record:
@@ -299,9 +307,7 @@ def run(
     format_entries = list(formats.values())
 
     # Load source cache keyed by original_id (not sub-instance ID)
-    seen_original_ids = {
-        entry.get("original_id", entry["instance_id"]) for entry in format_entries
-    }
+    seen_original_ids = {entry.get("original_id", entry["instance_id"]) for entry in format_entries}
     source_cache = {}
     for original_id in seen_original_ids:
         cache_path = SOURCE_CACHE_DIR / f"{original_id}.json"

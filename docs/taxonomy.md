@@ -154,17 +154,10 @@ category/subcategory (on both the span and the sample):
 
 ## Why this matters for v2
 
-The taxonomy is not just bookkeeping — it is the interface the v2 detector head
-is built around. The planned GLiNER2-style schema-driven head takes the label
-vocabulary as **input tokens** rather than fixed output indices:
-
-```
-[P] hallucination ([L] supported [L] contradiction [L] unsupported_addition [L] fabricated_reference) [SEP] context [SEP] question [SEP] answer
-```
-
-Because labels are learned from their *names*, a model trained on this taxonomy
-can be queried at inference with a different label set (e.g. a vertical-specific
-subcategory) without retraining, and passing just `[L] hallucinated` recovers
-the v1 binary behaviour. A single, source-agnostic label space is the
-precondition for that capability — which is why every data source must map in
-cleanly.
+A single, source-agnostic label space is what lets one detector be trained
+across modalities (prose, code, markdown) instead of one model per source. It
+also keeps the door open to typed, span-level output — telling a user not just
+*that* a span is unsupported but *how* (contradiction vs. unsupported addition
+vs. fabricated reference) — which is the differentiator over scalar
+faithfulness scores. Every data source mapping in cleanly is the precondition
+for both.
