@@ -112,7 +112,31 @@ Instances not selected for docs still get an entry written with empty docs (by d
 
 **Module:** `format_builder.py`
 
-Each instance gets exactly one answer format, chosen by weighted random selection from available options. Uses LLM calls for `code_with_explanation` format.
+Each SWE-bench instance produces **one or more format entries** (sub-instances), depending on the number of modified functions. Uses LLM calls for `code_with_explanation` format.
+
+### Sub-instance expansion
+
+When a patch modifies multiple functions, `complete_function` and `code_with_explanation` formats are split into one sub-instance per function. This ensures that:
+- Each training instance has exactly one function as its answer.
+- Sibling functions (added to context in Phase 7) are compact signatures, not full bodies.
+- The model learns to verify individual function-level answers rather than entire patches.
+
+**Sub-instance ID format:** `{original_instance_id}::{function_name}`
+**Example:** `DataDog__integrations-core-1013::check`
+
+`fragment` and `edit_style` formats are **not** split — they already include all patch changes and are self-contained.
+
+### Eligibility and sorting
+
+Functions eligible for sub-instances must have a patched body of at least `MIN_FUNCTION_CHARS = 50` characters. They are sorted by priority:
+
+1. Modified functions (have an original body before the patch) come first — these are more interesting for hallucination detection since the model must know what changed.
+2. New functions (no original) come second.
+3. Within each group, sorted by descending patched length.
+
+At most `MAX_FUNCTIONS_PER_INSTANCE = 5` sub-instances are created per patch to avoid overweighting large refactors.
+
+Each entry is stamped with the `split` field from the SWE-bench instance (needed by Phase 8 for per-split ratio selection).
 
 ### Format types
 
@@ -160,6 +184,21 @@ with:
             self.cookies[key]["max-age"] = max_age
 ```
 Available for all patches where changed regions can be extracted.
+
+### Entry schema (`formats.jsonl`)
+
+```json
+{
+  "instance_id":   "DataDog__integrations-core-1013::check",
+  "original_id":   "DataDog__integrations-core-1013",
+  "format_type":   "complete_function",
+  "answer":        "def check(self, instance):\n    ...",
+  "function_name": "check",
+  "split":         "train"
+}
+```
+
+For `fragment` / `edit_style` entries, `instance_id == original_id` and `function_name` is absent.
 
 **Output:** `data/code_hallucination/formats.jsonl`
 
@@ -227,7 +266,23 @@ For answers containing both code and prose (code_with_explanation format), the i
 
 **Module:** `sample_assembler.py`
 
-Combines all intermediate data into the final `HallucinationSample` format.
+Iterates over **format entries** (which may include sub-instance IDs) and builds the final `HallucinationSample` format. Metadata such as repo, split, and `is_lite` is resolved via `original_id` from a lookup over the SWE-bench instances.
+
+### Sibling function context
+
+For `complete_function` and `code_with_explanation` sub-instances, the answer contains one function body. Other functions from the same patch that are **called by the answer function** are added to the `Referenced definitions` section of the prompt — as **signatures only** (not full bodies):
+
+```python
+def _get_instance_params(self, instance):
+    ...
+
+def _perform_service_check(self, url, ssl_validation, auth):
+    ...
+```
+
+This ensures every function call in a clean answer is evidenced in the context (either imported, defined in the source files, or present as a signature), making clean samples self-consistent and distinguishable from hallucinated ones.
+
+"Called" is determined by `\b{name}\s*\(` regex match against the answer body — catches both bare calls and method calls (`self.method_name()`).
 
 ### Prompt construction
 
@@ -235,6 +290,15 @@ Combines all intermediate data into the final `HallucinationSample` format.
 File: path/to/file.py
 ```python
 <source code at base commit>
+```
+
+Referenced definitions:
+```python
+def _get_instance_params(self, instance):
+    ...
+
+def _perform_service_check(self, url, ssl_validation, auth):
+    ...
 ```
 
 Documentation for django:
@@ -245,14 +309,14 @@ User request: <rewritten query>
 
 ### Sample types
 
-**Clean samples** (~60%): Gold patch answer, empty labels, from instances NOT selected for injection.
+**Clean samples** (~60%): Gold patch answer, empty labels, from format entries NOT selected for injection.
 
 **Hallucinated samples** (~40%): LLM-modified answer with character-level span annotations.
 
 ### Outputs
 
 - `data/code_hallucination/code_hallucination_data.json` — List of samples
-- `data/code_hallucination/code_hallucination_metadata.json` — Metadata (instance_id, repo, format_type, hallucination_type, injector_model, is_hallucinated)
+- `data/code_hallucination/code_hallucination_metadata.json` — Metadata (instance_id, original_id, repo, format_type, hallucination_type, injector_model, is_hallucinated)
 
 ---
 
@@ -260,18 +324,23 @@ User request: <rewritten query>
 
 **Module:** `splitter.py`
 
-Selects which instances receive hallucination injection. Applies the hallucination ratio (default 40%) **uniformly within each split** to maintain consistent class distribution.
+Selects which **format entries** (sub-instances) receive hallucination injection. Operates on the output of Phase 5, not on raw SWE-bench instances.
+
+Uses `select_format_targets(format_entries, ratio=0.40)` which:
+- Groups entries by their `split` field.
+- Applies the hallucination ratio uniformly within each split to maintain consistent class distribution.
+- Returns a set of format entry `instance_id`s (may include sub-instance IDs like `orig::func`).
 
 ```
-Train: ~7,600 hallucinated + ~11,400 clean = ~19,000
-Dev:   ~90 hallucinated + ~135 clean = ~225
-Test:  ~920 hallucinated + ~1,374 clean = ~2,294
+Train: ~40% of train format entries get hallucinated
+Dev:   ~40% of dev format entries get hallucinated
+Test:  ~40% of test format entries get hallucinated
 ```
 
 !!! note
     Phase 8 runs **before** Phase 6 in the pipeline (target selection must happen before injection).
 
-**Output:** Set of `instance_id`s (used in-memory by Phase 6 and Phase 7)
+**Output:** Set of format entry `instance_id`s (used in-memory by Phase 6 and Phase 7)
 
 ---
 

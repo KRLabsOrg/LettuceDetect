@@ -27,6 +27,11 @@ from .config import (
     token_limit_kwargs,
 )
 
+def _original_id(iid: str) -> str:
+    """Strip sub-instance suffix to get the original SWE-bench instance ID."""
+    return iid.split("::")[0]
+
+
 INJECTION_SYSTEM_PROMPT = textwrap.dedent("""\
     You are a code hallucination injector for building a hallucination detection dataset.
 
@@ -710,14 +715,15 @@ def _run_sequential(to_process, formats, queries, docs, source_cache, api_key, b
                 continue
 
             hall_type = HALLUCINATION_TYPES[i % len(HALLUCINATION_TYPES)]
-            query = queries.get(instance_id, "")
-            source_data = source_cache.get(instance_id, {})
+            orig = _original_id(instance_id)
+            query = queries.get(orig, "")
+            source_data = source_cache.get(orig, {})
             context = (
                 build_source_context(source_data)
                 if source_data
                 else inst.get("problem_statement", "")
             )
-            instance_docs = docs.get(instance_id, {})
+            instance_docs = docs.get(orig, {})
 
             entry = None
             last_reason = None
@@ -802,14 +808,15 @@ def _run_batched(to_process, formats, queries, docs, source_cache, api_key, base
                         continue
 
                     hall_type = HALLUCINATION_TYPES[global_idx % len(HALLUCINATION_TYPES)]
-                    query = queries.get(instance_id, "")
-                    source_data = source_cache.get(instance_id, {})
+                    orig = _original_id(instance_id)
+                    query = queries.get(orig, "")
+                    source_data = source_cache.get(orig, {})
                     context = (
                         build_source_context(source_data)
                         if source_data
                         else inst.get("problem_statement", "")
                     )
-                    instance_docs = docs.get(instance_id, {})
+                    instance_docs = docs.get(orig, {})
 
                     tasks.append(
                         _inject_one_async(
