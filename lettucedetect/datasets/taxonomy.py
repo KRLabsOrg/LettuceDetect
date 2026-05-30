@@ -93,16 +93,14 @@ CODE_MAP: dict[str, tuple[str, str | None]] = {
     "semantic": ("unsupported_addition", "behavior"),
 }
 
-# LD markdown hallucination (planned)
+# LD generic markdown hallucination (READMEs, wiki); one type per edit
 MARKDOWN_MAP: dict[str, tuple[str, str | None]] = {
-    "contradicted_number": ("contradiction", "numerical"),
-    "contradicted_date": ("contradiction", "temporal"),
-    "contradicted_entity": ("contradiction", "entity"),
-    "contradicted_table_cell": ("contradiction", "value"),
-    "extra_claim": ("unsupported_addition", "claim"),
-    "fabricated_section_ref": ("fabricated_reference", "section"),
-    "fabricated_citation": ("fabricated_reference", "entity"),
-    "fabricated_equation_ref": ("fabricated_reference", "section"),
+    "NUMERICAL": ("contradiction", "numerical"),
+    "TEMPORAL": ("contradiction", "temporal"),
+    "ENTITY": ("contradiction", "entity"),
+    "RELATIONAL": ("contradiction", "relational"),
+    "FABRICATED": ("fabricated_reference", "entity"),
+    "CLAIM": ("unsupported_addition", "claim"),
 }
 
 # FAVA labels
