@@ -175,6 +175,12 @@ def _item_key(item: dict) -> str:
     return f"{item['split']}::{item['parsed']['instance_id']}::{item['parsed']['tool_type']}"
 
 
+def _record_key(record: dict) -> str:
+    """Derive the resumability key from a written sample (no synthetic field needed)."""
+    meta = record["metadata"]
+    return f"{record['split']}::{meta['instance_id']}::{meta['tool_type']}"
+
+
 def _make_process(aclient: AsyncOpenAI) -> Callable[[dict], Awaitable[Outcome]]:
     """Build the async per-item processor for the runner."""
 
@@ -258,6 +264,7 @@ def main() -> None:
             out_path=out_path,
             failures_path=failures_path,
             key_of=_item_key,
+            record_key=_record_key,
             batch_size=args.batch_size,
             on_progress=lambda s: print(f"  {split}: {s}"),
         )

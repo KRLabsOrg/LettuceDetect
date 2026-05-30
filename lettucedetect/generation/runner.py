@@ -35,8 +35,12 @@ class Outcome:
     extra: dict = field(default_factory=dict)
 
 
-def load_done_keys(path: str | Path, key_field: str = "key") -> set[str]:
-    """Return the set of already-completed keys from an output JSONL file."""
+def load_done_keys(path: str | Path, record_key: Callable[[dict], str]) -> set[str]:
+    """Return already-completed keys from an output JSONL, derived from each record.
+
+    ``record_key`` extracts the resumability key from a written record, so no
+    synthetic key field has to be stored in the output.
+    """
     path = Path(path)
     done: set[str] = set()
     if not path.exists():
@@ -47,9 +51,10 @@ def load_done_keys(path: str | Path, key_field: str = "key") -> set[str]:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            key = entry.get(key_field)
-            if key is not None:
-                done.add(key)
+            try:
+                done.add(record_key(entry))
+            except (KeyError, TypeError):
+                continue
     return done
 
 
@@ -60,29 +65,28 @@ async def run_batched(
     out_path: str | Path,
     failures_path: str | Path | None = None,
     key_of: Callable[[object], str],
-    done_keys: set[str] | None = None,
+    record_key: Callable[[dict], str] | None = None,
     batch_size: int = 16,
-    key_field: str = "key",
     progress_every: int = 50,
     on_progress: Callable[[dict], None] | None = None,
 ) -> dict:
     """Run ``process`` over ``items`` in async batches, resumably.
 
-    - Skips items whose ``key_of(item)`` is already present in ``done_keys``
-      (defaults to keys found in ``out_path``).
-    - Appends each success record (augmented with ``key_field``) to ``out_path``
-      and flushes per batch, so a crash never loses completed work.
-    - Logs each failure to ``failures_path`` (if given) as ``{key, reason, ...extra}``.
+    - Skips items whose ``key_of(item)`` matches an already-written record.
+      Resumability keys are derived from existing records via ``record_key`` (so
+      output records are written verbatim, with no extra bookkeeping field).
+    - Appends each success record to ``out_path`` and flushes per batch, so a
+      crash never loses completed work.
+    - Logs each failure to ``failures_path`` (if given) as ``{key, reason, ...}``.
 
     Returns a stats dict.
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    if done_keys is None:
-        done_keys = load_done_keys(out_path, key_field)
+    done_keys = load_done_keys(out_path, record_key) if record_key else set()
 
     todo = [it for it in items if key_of(it) not in done_keys]
-    stats = {"total": len(todo), "ok": 0, "fail": 0, "skipped_done": 0}
+    stats = {"total": len(todo), "ok": 0, "fail": 0}
 
     ferr = open(failures_path, "a") if failures_path else None
     try:
@@ -101,8 +105,7 @@ async def run_batched(
                             )
                         continue
                     if res.ok and res.record is not None:
-                        record = {key_field: res.key, **res.record}
-                        fout.write(json.dumps(record) + "\n")
+                        fout.write(json.dumps(res.record) + "\n")
                         stats["ok"] += 1
                     else:
                         stats["fail"] += 1
