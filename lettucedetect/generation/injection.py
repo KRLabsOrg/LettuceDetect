@@ -19,22 +19,21 @@ category/subtype distribution; everything else is shared here.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import random
 import re
-import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from openai import AsyncOpenAI, OpenAI
 
 from lettucedetect.datasets.taxonomy import (
     CATEGORY_DEFINITIONS,
     SUBCATEGORIES,
     SUBCATEGORY_DEFINITIONS,
 )
+from lettucedetect.generation._completion import complete, complete_async
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI, OpenAI
 
 # ── Default thresholds (callers may override) ──────────────────────────────────
 
@@ -315,78 +314,11 @@ def _parse_changes(raw: str | None) -> dict | None:
     return result
 
 
-def _request_changes(
-    client: OpenAI,
-    model: str,
-    *,
-    system_prompt: str,
-    user_msg: str,
-    temperature: float,
-    completion_kwargs: dict,
-    max_retries: int,
-    retry_delay: float,
-) -> dict | None:
-    """Request the JSON ``{"changes": [...]}`` edit object from the model (sync)."""
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=temperature,
-                **completion_kwargs,
-            )
-            parsed = _parse_changes(response.choices[0].message.content)
-            if parsed is not None:
-                return parsed
-            if attempt < max_retries - 1:
-                continue
-            return None
-        except Exception:
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay * (attempt + 1))
-            else:
-                return None
-    return None
-
-
-async def _request_changes_async(
-    aclient: AsyncOpenAI,
-    model: str,
-    *,
-    system_prompt: str,
-    user_msg: str,
-    temperature: float,
-    completion_kwargs: dict,
-    max_retries: int,
-    retry_delay: float,
-) -> dict | None:
-    """Async twin of :func:`_request_changes` for batched vLLM throughput."""
-    for attempt in range(max_retries):
-        try:
-            response = await aclient.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_msg},
-                ],
-                temperature=temperature,
-                **completion_kwargs,
-            )
-            parsed = _parse_changes(response.choices[0].message.content)
-            if parsed is not None:
-                return parsed
-            if attempt < max_retries - 1:
-                continue
-            return None
-        except Exception:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                return None
-    return None
+def _changes_messages(system_prompt: str, user_msg: str) -> list[dict]:
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg},
+    ]
 
 
 def _finalize_injection(
@@ -454,14 +386,13 @@ def inject(
     and validates the resulting spans. Low-level entry point; most callers use
     :func:`inject_taxonomy`.
     """
-    completion_kwargs = completion_kwargs or {}
-    result = _request_changes(
+    result = complete(
         client,
         model,
-        system_prompt=system_prompt,
-        user_msg=user_msg,
+        _changes_messages(system_prompt, user_msg),
+        transform=_parse_changes,
         temperature=temperature,
-        completion_kwargs=completion_kwargs,
+        completion_kwargs=completion_kwargs or {},
         max_retries=max_retries,
         retry_delay=retry_delay,
     )
@@ -492,14 +423,13 @@ async def inject_async(
     retry_delay: float = 2.0,
 ) -> InjectionResult:
     """Async twin of :func:`inject` for batched throughput against local vLLM."""
-    completion_kwargs = completion_kwargs or {}
-    result = await _request_changes_async(
+    result = await complete_async(
         aclient,
         model,
-        system_prompt=system_prompt,
-        user_msg=user_msg,
+        _changes_messages(system_prompt, user_msg),
+        transform=_parse_changes,
         temperature=temperature,
-        completion_kwargs=completion_kwargs,
+        completion_kwargs=completion_kwargs or {},
         max_retries=max_retries,
         retry_delay=retry_delay,
     )

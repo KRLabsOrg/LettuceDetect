@@ -12,9 +12,9 @@ This is deliberately separate from
 
 from __future__ import annotations
 
-import asyncio
-import time
 from typing import TYPE_CHECKING
+
+from lettucedetect.generation._completion import complete, complete_async
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI, OpenAI
@@ -60,27 +60,25 @@ def generate_grounded_answer(
     :param min_chars: reject answers shorter than this (treated as failures).
     :return: the answer string, or None on failure.
     """
-    system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
-    completion_kwargs = completion_kwargs or {"max_tokens": 400}
-    messages = _build_messages(system_prompt, question, evidence, extra_context, evidence_chars)
+    messages = _build_messages(
+        system_prompt or _DEFAULT_SYSTEM_PROMPT, question, evidence, extra_context, evidence_chars
+    )
+    return complete(
+        client,
+        model,
+        messages,
+        transform=lambda c: _accept(c, min_chars),
+        temperature=temperature,
+        completion_kwargs=completion_kwargs or {"max_tokens": 400},
+        max_retries=max_retries,
+        retry_delay=retry_delay,
+    )
 
-    for attempt in range(max_retries):
-        try:
-            response = client.chat.completions.create(
-                model=model, messages=messages, temperature=temperature, **completion_kwargs
-            )
-            content = (response.choices[0].message.content or "").strip()
-            if len(content) >= min_chars:
-                return content
-            if attempt < max_retries - 1:
-                continue
-            return None
-        except Exception:
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay * (attempt + 1))
-            else:
-                return None
-    return None
+
+def _accept(content: str | None, min_chars: int) -> str | None:
+    """Keep a stripped answer if it meets the minimum length, else reject."""
+    text = (content or "").strip()
+    return text if len(text) >= min_chars else None
 
 
 def _build_messages(
@@ -114,24 +112,16 @@ async def generate_grounded_answer_async(
     retry_delay: float = 2.0,
 ) -> str | None:
     """Async twin of :func:`generate_grounded_answer` for batched throughput."""
-    system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
-    completion_kwargs = completion_kwargs or {"max_tokens": 400}
-    messages = _build_messages(system_prompt, question, evidence, extra_context, evidence_chars)
-
-    for attempt in range(max_retries):
-        try:
-            response = await aclient.chat.completions.create(
-                model=model, messages=messages, temperature=temperature, **completion_kwargs
-            )
-            content = (response.choices[0].message.content or "").strip()
-            if len(content) >= min_chars:
-                return content
-            if attempt < max_retries - 1:
-                continue
-            return None
-        except Exception:
-            if attempt < max_retries - 1:
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                return None
-    return None
+    messages = _build_messages(
+        system_prompt or _DEFAULT_SYSTEM_PROMPT, question, evidence, extra_context, evidence_chars
+    )
+    return await complete_async(
+        aclient,
+        model,
+        messages,
+        transform=lambda c: _accept(c, min_chars),
+        temperature=temperature,
+        completion_kwargs=completion_kwargs or {"max_tokens": 400},
+        max_retries=max_retries,
+        retry_delay=retry_delay,
+    )
