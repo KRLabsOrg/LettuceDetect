@@ -115,6 +115,15 @@ FAVA_MAP: dict[str, tuple[str, str | None]] = {
     "Unverifiable": ("unsupported_addition", "claim"),
 }
 
+# LD academic-paper hallucination (ACL); the injector returns one of these per edit
+PAPER_MAP: dict[str, tuple[str, str | None]] = {
+    "NUMERICAL": ("contradiction", "numerical"),
+    "ENTITY": ("contradiction", "entity"),
+    "RELATIONAL": ("contradiction", "relational"),
+    "METHODOLOGICAL": ("contradiction", "value"),
+    "CITATIONAL": ("contradiction", "entity"),
+}
+
 # ── Lookup helpers ─────────────────────────────────────────────────────────────
 
 _ALL_MAPS: dict[str, dict[str, tuple[str, str | None]]] = {
@@ -123,6 +132,7 @@ _ALL_MAPS: dict[str, dict[str, tuple[str, str | None]]] = {
     "code": CODE_MAP,
     "markdown": MARKDOWN_MAP,
     "fava": FAVA_MAP,
+    "paper": PAPER_MAP,
 }
 
 

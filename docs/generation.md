@@ -48,8 +48,15 @@ and validates the result. It is:
 - **Validated** — coverage caps, minimum span length, leakage detection, and
   (for mixed prose+code answers) in-fence enforcement.
 
-Sync and async variants exist (`inject`, `inject_async`, `inject_taxonomy`,
-`inject_taxonomy_async`).
+It has two modes. **Targeted** (`inject_taxonomy`) forces one chosen
+`(category, subcategory)` — used for code and tool output. **Menu**
+(`inject_menu`) hands the model a source-specific prompt that lists several
+hallucination types and lets it pick the 1–3 that fit the passage, labelling
+each edit with its own type (mapped to the taxonomy per source) — used for
+academic papers and other markdown, where a forced subtype often does not fit.
+
+Sync and async variants exist for both (`inject_taxonomy`, `inject_menu`, and
+their `_async` twins).
 
 ### `runner.py` — batched, resumable orchestration
 `run_batched` runs a per-item async processor over the work set with:

@@ -29,6 +29,7 @@ from lettucedetect.datasets.taxonomy import (
     CATEGORY_DEFINITIONS,
     SUBCATEGORIES,
     SUBCATEGORY_DEFINITIONS,
+    map_label,
 )
 from lettucedetect.generation._completion import complete, complete_async
 
@@ -134,6 +135,9 @@ def apply_changes_to_answer(
     The model returns edits only; this function deterministically constructs the
     hallucinated answer and the corresponding label offsets. Overlapping edits
     are dropped, keeping the earlier one.
+
+    Each label's ``label`` is the edit's own ``hallucination_type`` when present
+    (menu-style prompts return a type per edit), otherwise the passed ``hall_type``.
     """
     located = []
     for change in changes:
@@ -142,6 +146,7 @@ def apply_changes_to_answer(
         located_change = _locate_original_change(original_answer, change)
         if located_change is None:
             continue
+        located_change["label"] = change.get("hallucination_type") or hall_type
         located.append(located_change)
 
     if not located:
@@ -171,7 +176,7 @@ def apply_changes_to_answer(
         label_start = sum(len(part) for part in hallucinated_parts)
         hallucinated_parts.append(hallucinated_span)
         label_end = label_start + len(hallucinated_span)
-        labels.append({"start": label_start, "end": label_end, "label": hall_type})
+        labels.append({"start": label_start, "end": label_end, "label": item["label"]})
         cursor = end
 
     hallucinated_parts.append(original_answer[cursor:])
@@ -623,3 +628,85 @@ async def inject_taxonomy_async(
             lab["category"] = category
             lab["subcategory"] = subcategory
     return result
+
+
+# ── Menu mode: model picks the fitting hallucination types per edit ────────────
+
+
+def _menu_user_msg(context: str, answer: str, context_chars: int) -> str:
+    return (
+        f"Provided excerpts (the source of truth):\n{context[:context_chars]}\n\n"
+        f"Correct answer to modify:\n{answer}\n\n"
+        "Return ONLY replacement edits, each labelled with its hallucination type."
+    )
+
+
+def _map_menu_labels(result: InjectionResult, source: str) -> InjectionResult:
+    """Attach unified category/subcategory to each span via the source's type map."""
+    if result.ok:
+        for lab in result.labels:
+            category, subcategory = map_label(lab["label"], source)
+            lab["category"] = category
+            lab["subcategory"] = subcategory
+    return result
+
+
+def inject_menu(
+    client: OpenAI,
+    model: str,
+    *,
+    context: str,
+    clean_answer: str,
+    system_prompt: str,
+    source: str,
+    temperature: float = 0.8,
+    completion_kwargs: dict | None = None,
+    context_chars: int = 8000,
+    max_retries: int = 3,
+) -> InjectionResult:
+    """Inject with a source-specific menu prompt (model picks 1-3 fitting types).
+
+    ``system_prompt`` is the source's injection prompt; ``source`` keys the native
+    type -> unified taxonomy map. Each span is labelled with its per-edit type and
+    mapped to ``category``/``subcategory``.
+    """
+    result = inject(
+        client,
+        model,
+        clean_answer=clean_answer,
+        hall_type="",
+        system_prompt=system_prompt,
+        user_msg=_menu_user_msg(context, clean_answer, context_chars),
+        temperature=temperature,
+        completion_kwargs=completion_kwargs,
+        max_retries=max_retries,
+    )
+    return _map_menu_labels(result, source)
+
+
+async def inject_menu_async(
+    aclient: AsyncOpenAI,
+    model: str,
+    *,
+    context: str,
+    clean_answer: str,
+    system_prompt: str,
+    source: str,
+    temperature: float = 0.8,
+    completion_kwargs: dict | None = None,
+    context_chars: int = 8000,
+    max_retries: int = 3,
+) -> InjectionResult:
+    """Async twin of :func:`inject_menu`."""
+    result = await inject_async(
+        aclient,
+        model,
+        clean_answer=clean_answer,
+        hall_type="",
+        system_prompt=system_prompt,
+        user_msg=_menu_user_msg(context, clean_answer, context_chars),
+        temperature=temperature,
+        completion_kwargs=completion_kwargs,
+        max_retries=max_retries,
+    )
+    return _map_menu_labels(result, source)
