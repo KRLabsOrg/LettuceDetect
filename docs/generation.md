@@ -69,15 +69,20 @@ their `_async` twins).
 
 ## Composing a source adapter
 
-Each source is a thin adapter that wires together only the primitives it needs:
+Each source is a thin adapter that wires together only the primitives it needs.
+The five built sources:
 
-| Source | questions | answers | injection |
-|---|---|---|---|
-| Code (SWE-bench) | — (gold patch) | specialized format-builder | ✓ |
-| Tool output (squeez) | — (query given) | ✓ | ✓ |
-| Markdown (READMEs) | ✓ | ✓ | ✓ |
-| Paper chunks (ACL) | — (question given) | ✓ (or gold span) | ✓ |
+| Source (`dataset`) | modality | question | answer | injection prompt |
+|---|---|---|---|---|
+| `lettucedetect-code` (SWE-bench) | code | — (issue) | format-builder over the patch | code (targeted) |
+| `lettucedetect-tool-output` (squeez) | tool_output | — (given) | grounded | tool-output (targeted) |
+| `lettucedetect-acl` (acl-verbatim) | markdown | — (given) | grounded | paper (menu) |
+| `lettucedetect-readme` (GitHub) | markdown | generated | grounded | generic factual (menu) |
+| `lettucedetect-wikipedia` (open-wikipedia) | markdown | generated | grounded | generic factual (menu) |
 
-The adapter supplies `(context, clean_answer, modality)` and a category/subtype
-distribution; the shared modules handle the rest, so orchestration features
-(batching, resumability, failure logging) are written once and reused.
+Document sources (README, Wikipedia) share `doc_source.py` — chunk by heading,
+generate a question per chunk, answer, inject — and differ only in corpus and
+question-type subset. ACL groups retrieved chunks per question and uses the
+paper-specific prompt. Each adapter supplies `(context, clean_answer, modality)`
+and a category/subtype distribution; the shared modules handle batching,
+resumability, and failure logging.
