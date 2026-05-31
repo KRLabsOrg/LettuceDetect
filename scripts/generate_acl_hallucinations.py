@@ -36,6 +36,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from openai import AsyncOpenAI  # noqa: E402
 
 from lettucedetect.generation.answers import generate_grounded_answer_async  # noqa: E402
+from lettucedetect.generation.doc_source import hash_split  # noqa: E402
 from lettucedetect.generation.injection import InjectionResult, inject_menu_async  # noqa: E402
 from lettucedetect.generation.runner import Outcome, run_batched_sync  # noqa: E402
 
@@ -102,8 +103,13 @@ If you cannot find a good edit, return {"changes": []}.
 """
 
 
-def group_questions(rows: list[dict], split: str) -> list[dict]:
-    """Group rows into per-question items with their top-k retrieved chunks."""
+def group_questions(rows: list[dict]) -> list[dict]:
+    """Group rows into per-question items with their top-k retrieved chunks.
+
+    The split is assigned per item by hashing the paper id, so the (tiny) source
+    test config is ignored and train/dev/test are paper-separated and sensibly
+    sized.
+    """
     by_q: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_q[r["question"]].append(r)
@@ -126,7 +132,7 @@ def group_questions(rows: list[dict], split: str) -> list[dict]:
                 "question": question,
                 "paper_id": paper_id,
                 "chunks": [r["chunk"] for r in ranked],
-                "split": split,
+                "split": hash_split(paper_id, dev_pct=8, test_pct=8),
             }
         )
     return items
@@ -220,8 +226,7 @@ def main() -> None:
     import random
 
     ap = argparse.ArgumentParser(description="Generate ACL paper hallucination samples.")
-    ap.add_argument("--limit", type=int, default=20, help="Max questions per split (0=all).")
-    ap.add_argument("--splits", nargs="+", default=["train", "validation", "test"])
+    ap.add_argument("--limit", type=int, default=20, help="Max questions total (0=all).")
     ap.add_argument("--out", type=str, default="data/v2/acl")
     ap.add_argument("--ratio", type=float, default=HALLUCINATION_RATIO)
     ap.add_argument("--seed", type=int, default=42)
@@ -230,9 +235,6 @@ def main() -> None:
 
     from datasets import load_dataset
 
-    # acl splits train/validation/test -> sample split field train/dev/test
-    field_split = {"train": "train", "validation": "dev", "test": "test"}
-
     print(f"LLM: {MODEL} @ {API_BASE_URL}  (batch_size={args.batch_size})")
     aclient = AsyncOpenAI(api_key=API_KEY, base_url=API_BASE_URL)
     ds = load_dataset("KRLabsOrg/acl-verbatim-spans", "canonical")
@@ -240,26 +242,32 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     rng = random.Random(args.seed)  # noqa: S311 - seeded reproducibility, not crypto
 
-    for hf_split in args.splits:
-        items = group_questions(list(ds[hf_split]), field_split[hf_split])
-        if args.limit:
-            items = items[: args.limit]
-        n_targets = int(len(items) * args.ratio)
-        hall_keys = {_item_key(it) for it in rng.sample(items, min(n_targets, len(items)))}
+    # Pool all source rows; split is assigned per question by paper hash.
+    all_rows = [r for split in ds for r in ds[split]]
+    items = group_questions(all_rows)
+    if args.limit:
+        items = items[: args.limit]
+
+    for split in ("train", "dev", "test"):
+        split_items = [it for it in items if it["split"] == split]
+        if not split_items:
+            continue
+        n_targets = int(len(split_items) * args.ratio)
+        hall_keys = {_item_key(it) for it in rng.sample(split_items, min(n_targets, len(split_items)))}
         process = _make_process(aclient, hall_keys)
 
-        out_path = out_dir / f"{field_split[hf_split]}.jsonl"
+        out_path = out_dir / f"{split}.jsonl"
         stats = run_batched_sync(
-            items,
+            split_items,
             process,
             out_path=out_path,
-            failures_path=out_dir / f"{field_split[hf_split]}.failures.jsonl",
+            failures_path=out_dir / f"{split}.failures.jsonl",
             key_of=_item_key,
             record_key=_record_key,
             batch_size=args.batch_size,
-            on_progress=lambda s: print(f"  {hf_split}: {s}"),
+            on_progress=lambda s: print(f"  {split}: {s}"),
         )
-        print(f"{hf_split}: {stats} -> {out_path}")
+        print(f"{split}: {stats} -> {out_path}")
 
 
 if __name__ == "__main__":
