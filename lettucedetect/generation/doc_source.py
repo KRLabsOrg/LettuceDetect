@@ -9,6 +9,7 @@ subset, the injection prompt, and the native-type map; everything else is here.
 
 from __future__ import annotations
 
+import hashlib
 import random
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
@@ -74,6 +75,16 @@ Respond in this exact JSON format (no markdown):
 }
 If you cannot find a good edit, return {"changes": []}.
 """
+
+
+def hash_split(key: str, dev_pct: int = 5, test_pct: int = 5) -> str:
+    """Deterministic document-level split, so all chunks of a doc share a split."""
+    bucket = int(hashlib.sha256(key.encode()).hexdigest(), 16) % 100
+    if bucket < test_pct:
+        return "test"
+    if bucket < test_pct + dev_pct:
+        return "dev"
+    return "train"
 
 
 def chunk_by_heading(text: str, min_chars: int = 300, max_chars: int = 4000) -> list[str]:

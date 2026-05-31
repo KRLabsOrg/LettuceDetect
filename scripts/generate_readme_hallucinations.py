@@ -18,7 +18,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import sys
@@ -29,7 +28,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from openai import AsyncOpenAI  # noqa: E402
 
-from lettucedetect.generation.doc_source import DocSourceConfig, generate_doc_source  # noqa: E402
+from lettucedetect.generation.doc_source import (  # noqa: E402
+    DocSourceConfig,
+    generate_doc_source,
+    hash_split,
+)
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:8000/v1")
 API_KEY = os.environ.get("OPENAI_API_KEY", "EMPTY")
@@ -47,16 +50,6 @@ README_QUESTION_TYPES = [
 ]
 
 
-def split_for_repo(repo: str) -> str:
-    """Deterministic repo-level split (keeps a repo's chunks in one split)."""
-    h = int(hashlib.sha256(repo.encode()).hexdigest(), 16) % 100
-    if h < 5:
-        return "test"
-    if h < 10:
-        return "dev"
-    return "train"
-
-
 def load_corpus(path: Path, limit: int) -> list[dict]:
     """Load the README corpus into doc dicts ({id, text, split})."""
     docs = []
@@ -70,7 +63,7 @@ def load_corpus(path: Path, limit: int) -> list[dict]:
             readme = row.get("readme", "")
             if not repo or not readme:
                 continue
-            docs.append({"id": repo, "text": readme, "split": split_for_repo(repo)})
+            docs.append({"id": repo, "text": readme, "split": hash_split(repo)})
     if limit:
         docs = docs[:limit]
     return docs
