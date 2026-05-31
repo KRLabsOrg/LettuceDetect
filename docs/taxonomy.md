@@ -1,10 +1,9 @@
-# Unified Hallucination Taxonomy (v2)
+# Unified Hallucination Taxonomy
 
-The conceptual core of LettuceDetect v2. A single taxonomy that every data
-source maps into, so that prose (RAGTruth, FAVA), code (SWE-bench), and markdown
-hallucinations all share one label space. This is what lets a single
-schema-driven detector be trained across modalities and lets users redefine the
-label set at inference time.
+A single taxonomy that every data source maps into, so that prose (RAGTruth,
+FAVA), code (SWE-bench), and markdown hallucinations all share one label space.
+This is what lets a single detector be trained across modalities and lets users
+redefine the label set at inference time.
 
 Canonical implementation: [`lettucedetect/datasets/taxonomy.py`](../lettucedetect/datasets/taxonomy.py).
 Applied to data via [`lettucedetect/preprocess/apply_taxonomy.py`](../lettucedetect/preprocess/apply_taxonomy.py).
@@ -152,7 +151,7 @@ category/subcategory (on both the span and the sample):
 }
 ```
 
-## Why this matters for v2
+## Why this matters
 
 A single, source-agnostic label space is what lets one detector be trained
 across modalities (prose, code, markdown) instead of one model per source. It
