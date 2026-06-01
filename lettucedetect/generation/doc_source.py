@@ -203,7 +203,10 @@ def _make_process(
         if not question:
             return Outcome(key=key, ok=False, reason="question_generation_failed")
         answer = await generate_grounded_answer_async(
-            aclient, model, question=question, evidence=item["chunk"],
+            aclient,
+            model,
+            question=question,
+            evidence=item["chunk"],
             completion_kwargs={"max_tokens": 400},
         )
         if not answer:
@@ -212,8 +215,12 @@ def _make_process(
         hall = None
         if key in hall_keys:
             hall = await inject_menu_async(
-                aclient, model, context=item["chunk"], clean_answer=answer,
-                system_prompt=cfg.injection_prompt, source=cfg.source_key,
+                aclient,
+                model,
+                context=item["chunk"],
+                clean_answer=answer,
+                system_prompt=cfg.injection_prompt,
+                source=cfg.source_key,
                 completion_kwargs={"max_tokens": 600},
             )
         sample = _make_sample(item, question, answer, hall, cfg)

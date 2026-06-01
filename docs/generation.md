@@ -58,6 +58,15 @@ academic papers and other markdown, where a forced subtype often does not fit.
 Sync and async variants exist for both (`inject_taxonomy`, `inject_menu`, and
 their `_async` twins).
 
+### `classify.py` — label an existing, untyped span
+`classify_span(context, answer, span_text)` does the inverse of injection: given a
+span an annotator already marked as unsupported, it assigns a unified
+`(category, subcategory)` with an LLM. It is for sources whose spans ship without
+a native type, so the mechanical [`map_label`](taxonomy.md) cannot be used — most
+notably **PsiloQA**, whose hallucinations are *natural* (produced by real LLMs,
+not injected). It never edits text or invents spans; it only classifies, so
+`supported` is not a valid output. Sync and async variants are provided.
+
 ### `runner.py` — batched, resumable orchestration
 `run_batched` runs a per-item async processor over the work set with:
 
@@ -86,3 +95,20 @@ question-type subset. ACL groups retrieved chunks per question and uses the
 paper-specific prompt. Each adapter supplies `(context, clean_answer, modality)`
 and a category/subtype distribution; the shared modules handle batching,
 resumability, and failure logging.
+
+## Public prose sources (separate collection)
+
+Two existing public RAG datasets are folded in without any generation, as a
+separate prose collection, to complement the synthetic structured-context data:
+
+| Source (`dataset`) | modality | spans | taxonomy assignment |
+|---|---|---|---|
+| `ragtruth` (RAGTruth) | prose | native typed | mechanical [`map_label`](taxonomy.md) via `apply_taxonomy.py --source ragtruth` |
+| `psiloqa` (PsiloQA) | prose | untyped, **natural** | LLM `classify_span` via `scripts/classify_psiloqa_spans.py` |
+
+RAGTruth's native labels map deterministically. PsiloQA's hallucinations are
+produced by real LLMs (not injected) and annotated only as binary char spans, so
+each span is labelled by the `classify.py` primitive. All 14 PsiloQA languages
+and its original train/validation/test splits are preserved. These provide a
+naturally-occurring counterpart to the injected spans — useful for checking that
+detectors generalize beyond the corruption process.

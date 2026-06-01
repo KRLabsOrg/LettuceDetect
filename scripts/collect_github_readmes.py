@@ -27,8 +27,20 @@ import requests
 
 API = "https://api.github.com"
 DEFAULT_LANGUAGES = [
-    "python", "javascript", "typescript", "go", "rust", "java",
-    "c++", "c", "ruby", "php", "c#", "kotlin", "swift", "scala",
+    "python",
+    "javascript",
+    "typescript",
+    "go",
+    "rust",
+    "java",
+    "c++",
+    "c",
+    "ruby",
+    "php",
+    "c#",
+    "kotlin",
+    "swift",
+    "scala",
 ]
 MIN_README_CHARS = 600
 MAX_README_CHARS = 40000

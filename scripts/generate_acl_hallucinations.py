@@ -187,7 +187,9 @@ def make_sample(item: dict, context: str, answer: str, hall: InjectionResult | N
     }
 
 
-def _make_process(aclient: AsyncOpenAI, hall_keys: set[str]) -> Callable[[dict], Awaitable[Outcome]]:
+def _make_process(
+    aclient: AsyncOpenAI, hall_keys: set[str]
+) -> Callable[[dict], Awaitable[Outcome]]:
     async def process(item: dict) -> Outcome:
         key = _item_key(item)
         context = build_context(item["chunks"])
@@ -253,7 +255,9 @@ def main() -> None:
         if not split_items:
             continue
         n_targets = int(len(split_items) * args.ratio)
-        hall_keys = {_item_key(it) for it in rng.sample(split_items, min(n_targets, len(split_items)))}
+        hall_keys = {
+            _item_key(it) for it in rng.sample(split_items, min(n_targets, len(split_items)))
+        }
         process = _make_process(aclient, hall_keys)
 
         out_path = out_dir / f"{split}.jsonl"
