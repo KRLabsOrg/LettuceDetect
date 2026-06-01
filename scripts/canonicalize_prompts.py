@@ -92,7 +92,9 @@ def main() -> None:
     sources = args.source or list(DEFAULT_SOURCES)
     for src in sources:
         src_dir = root / src
-        files = [p for p in sorted(src_dir.glob("*.jsonl")) if not p.name.endswith(".failures.jsonl")]
+        files = [
+            p for p in sorted(src_dir.glob("*.jsonl")) if not p.name.endswith(".failures.jsonl")
+        ]
         if not files:
             print(f"{src}: (no files)")
             continue
