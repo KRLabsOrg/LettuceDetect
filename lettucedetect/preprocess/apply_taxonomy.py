@@ -93,6 +93,8 @@ def preprocess_code(
                 context_modality="code",
                 category=category,
                 subcategory=subcategory,
+                context=s.get("context"),
+                question=s.get("question"),
                 metadata={
                     "instance_id": m.get("instance_id", ""),
                     "repo": m.get("repo", ""),

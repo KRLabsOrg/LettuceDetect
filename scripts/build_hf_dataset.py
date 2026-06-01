@@ -38,6 +38,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Top-level fields kept on every uploaded record, in order.
 RECORD_FIELDS = (
     "prompt",
+    "context",
+    "question",
     "answer",
     "labels",
     "split",

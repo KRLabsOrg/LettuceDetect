@@ -88,6 +88,10 @@ def main() -> None:
     cfg = DocSourceConfig(
         dataset_name="lettucedetect-wikipedia",
         question_types=WIKI_QUESTION_TYPES,
+        # Pack several article sections per chunk for a longer, more realistic
+        # grounding context (single sections are often too short).
+        min_chunk_chars=1500,
+        max_chunk_chars=6000,
     )  # uses the generic factual markdown injection (default)
 
     for split in ("train", "dev", "test"):

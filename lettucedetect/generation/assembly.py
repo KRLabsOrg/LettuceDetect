@@ -13,6 +13,18 @@ import random
 from pathlib import Path
 
 
+def format_prompt(context: str, question: str | None) -> str:
+    """Build a sample's model-input prompt with the question at the front.
+
+    Placing the request before the context keeps it from being truncated away
+    when a long context is clipped (``truncation="only_first"`` cuts the tail).
+    Sources build their own ``context`` string; this is the shared final step.
+    """
+    if question:
+        return f"User request: {question}\n\n{context}"
+    return context
+
+
 def load_jsonl(path: str | Path) -> list[dict]:
     """Read a JSONL file into a list of records."""
     path = Path(path)

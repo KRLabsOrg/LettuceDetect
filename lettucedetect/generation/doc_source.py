@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from lettucedetect.generation.answers import generate_grounded_answer_async
+from lettucedetect.generation.assembly import format_prompt
 from lettucedetect.generation.injection import InjectionResult, inject_menu_async
 from lettucedetect.generation.questions import generate_question_async, sample_question_type
 from lettucedetect.generation.runner import Outcome, run_batched_sync
@@ -88,11 +89,13 @@ def hash_split(key: str, dev_pct: int = 5, test_pct: int = 5) -> str:
 
 
 def chunk_by_heading(text: str, min_chars: int = 300, max_chars: int = 4000) -> list[str]:
-    """Split markdown into heading-delimited sections within a size band.
+    """Split markdown into heading sections, packing consecutive ones into chunks.
 
-    Each section starts at a ``#`` heading and runs to the next one. Sections
-    shorter than ``min_chars`` are skipped; longer ones are truncated to
-    ``max_chars`` so a chunk is a focused, bounded context.
+    Each section starts at a ``#`` heading and runs to the next. Consecutive
+    sections are concatenated greedily until adding the next would exceed
+    ``max_chars``, so a chunk is a substantial multi-section context rather than a
+    single (often tiny) section. A section longer than ``max_chars`` is truncated
+    into its own chunk. Trailing material shorter than ``min_chars`` is dropped.
     """
     lines = text.splitlines()
     sections: list[list[str]] = []
@@ -106,11 +109,24 @@ def chunk_by_heading(text: str, min_chars: int = 300, max_chars: int = 4000) -> 
     if current:
         sections.append(current)
 
-    chunks = []
+    chunks: list[str] = []
+    buf = ""
     for sec in sections:
         body = "\n".join(sec).strip()
-        if len(body) >= min_chars:
+        if not body:
+            continue
+        if len(body) > max_chars:
+            if len(buf) >= min_chars:
+                chunks.append(buf)
+            buf = ""
             chunks.append(body[:max_chars])
+        elif buf and len(buf) + len(body) + 2 > max_chars:
+            chunks.append(buf)
+            buf = body
+        else:
+            buf = f"{buf}\n\n{body}" if buf else body
+    if len(buf) >= min_chars:
+        chunks.append(buf)
     return chunks
 
 
@@ -145,7 +161,9 @@ def _make_sample(
     else:
         final_answer, labels, cat, sub = answer, [], None, None
     return {
-        "prompt": f"{item['chunk']}\n\nUser request: {question}",
+        "prompt": format_prompt(item["chunk"], question),
+        "context": item["chunk"],
+        "question": question,
         "answer": final_answer,
         "labels": labels,
         "split": item["split"],

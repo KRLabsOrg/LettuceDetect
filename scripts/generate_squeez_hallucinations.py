@@ -43,6 +43,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from openai import AsyncOpenAI  # noqa: E402
 
 from lettucedetect.generation.answers import generate_grounded_answer_async  # noqa: E402
+from lettucedetect.generation.assembly import format_prompt  # noqa: E402
 from lettucedetect.generation.injection import (  # noqa: E402
     InjectionResult,
     inject_taxonomy_async,
@@ -116,10 +117,9 @@ def parse_row(row: dict) -> dict | None:
     }
 
 
-def build_prompt(query: str, tool_output: str) -> str:
-    """Sample context: the tool output plus the developer question."""
-    ctx = f"Tool output:\n```\n{tool_output}\n```\n\nUser request: {query}"
-    return ctx[:MAX_CONTEXT_CHARS]
+def build_context(tool_output: str) -> str:
+    """Return the grounding context: the tool's output (truncated to the budget)."""
+    return f"Tool output:\n```\n{tool_output}\n```"[:MAX_CONTEXT_CHARS]
 
 
 def make_sample(parsed: dict, answer: str, hall_result: InjectionResult | None, split: str) -> dict:
@@ -135,8 +135,12 @@ def make_sample(parsed: dict, answer: str, hall_result: InjectionResult | None, 
         labels = []
         sample_cat, sample_sub = None, None
 
+    context = build_context(parsed["tool_output"])
+    question = parsed["query"] or None
     return {
-        "prompt": build_prompt(parsed["query"], parsed["tool_output"]),
+        "prompt": format_prompt(context, question),
+        "context": context,
+        "question": question,
         "answer": final_answer,
         "labels": labels,
         "split": split,

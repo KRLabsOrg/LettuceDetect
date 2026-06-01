@@ -33,6 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from openai import AsyncOpenAI  # noqa: E402
 
+from lettucedetect.generation.assembly import format_prompt  # noqa: E402
 from lettucedetect.generation.classify import classify_span_async  # noqa: E402
 from lettucedetect.generation.runner import Outcome, run_batched_sync  # noqa: E402
 
@@ -46,9 +47,9 @@ CONTEXT_MODALITY = "prose"
 SPLITS = ("train", "validation", "test")
 
 
-def build_prompt(passage: str, question: str) -> str:
-    """Sample context: the Wikipedia passage plus the user question."""
-    return f"{passage[:MAX_CONTEXT_CHARS]}\n\nUser request: {question}"
+def build_context(passage: str) -> str:
+    """Return the grounding context: the Wikipedia passage (truncated to budget)."""
+    return passage[:MAX_CONTEXT_CHARS]
 
 
 def to_item(row: dict, split: str) -> dict | None:
@@ -91,8 +92,12 @@ def make_sample(item: dict, labels: list[dict]) -> dict:
     is_hall = bool(labels)
     cat = labels[0]["category"] if labels else None
     sub = labels[0].get("subcategory") if labels else None
+    context = build_context(item["passage"])
+    question = item["question"] or None
     return {
-        "prompt": build_prompt(item["passage"], item["question"]),
+        "prompt": format_prompt(context, question),
+        "context": context,
+        "question": question,
         "answer": item["answer"],
         "labels": labels,
         "split": item["split"],

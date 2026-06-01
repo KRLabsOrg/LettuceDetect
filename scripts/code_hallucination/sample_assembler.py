@@ -5,6 +5,8 @@ import json
 import re
 import warnings
 
+from lettucedetect.generation.assembly import format_prompt
+
 from .config import (
     DATASET_PATH,
     MAX_ANSWER_CHARS,
@@ -74,20 +76,20 @@ def _condense_source_for_function(source: str, func_name: str, original_body: st
     return "\n\n".join(parts)
 
 
-def build_prompt(
+def build_context(
     source_files: dict[str, str],
     documentation: dict[str, str],
-    user_query: str,
     dependency_files: dict[str, dict] | None = None,
 ) -> str:
-    """Build the prompt (context) for a sample.
+    """Build the grounding context for a sample.
 
-    Format: source files + dependency definitions + documentation + user query.
+    Format: source files + dependency definitions + documentation. The user
+    request is not included here; it is prepended by ``format_prompt`` so it sits
+    at the front of the prompt and is never lost to truncation.
 
     Args:
         source_files: Mapping of filepath -> source content for patch-touched files.
         documentation: Mapping of library name -> documentation string.
-        user_query: The user's request / problem statement.
         dependency_files: Optional mapping of identifier name -> {"file": path,
             "source": definition_source} for answer-based dependencies, OR
             filepath -> definition_source for import-based dependencies.
@@ -116,9 +118,7 @@ def build_prompt(
     for lib, doc in documentation.items():
         tail_parts.append(f"Documentation for {lib}:\n{doc}")
 
-    tail_parts.append(f"User request: {user_query}")
-
-    tail = "\n\n".join(tail_parts)
+    tail = "\n\n".join(tail_parts) if tail_parts else ""
     source_budget = MAX_PROMPT_CHARS - len(tail) - 2  # -2 for the joining "\n\n"
 
     # Build source file sections, truncating collectively to stay within budget.
@@ -134,7 +134,7 @@ def build_prompt(
         source_parts.append(block)
         used += len(block) + 2  # +2 for "\n\n" separator
 
-    parts = source_parts + [tail] if source_parts else [tail]
+    parts = [p for p in (*source_parts, tail) if p]
     return "\n\n".join(parts)
 
 
@@ -219,7 +219,8 @@ def assemble_samples(
                     if _is_called(f["name"], answer_body):
                         dependency_files[f["name"]] = _extract_signature(f["patched"])
 
-        prompt = build_prompt(source_files, doc, query, dependency_files=dependency_files or None)
+        context = build_context(source_files, doc, dependency_files=dependency_files or None)
+        prompt = format_prompt(context, query)
 
         if instance_id in hallucination_instance_ids and instance_id in hallucinations:
             # Hallucinated sample
@@ -228,6 +229,8 @@ def assemble_samples(
                 continue
             sample = {
                 "prompt": prompt,
+                "context": context,
+                "question": query,
                 "answer": hall_data["hallucinated_answer"],
                 "labels": hall_data["labels"],
                 "split": split,
@@ -262,6 +265,8 @@ def assemble_samples(
 
             sample = {
                 "prompt": prompt,
+                "context": context,
+                "question": query,
                 "answer": answer,
                 "labels": [],
                 "split": split,

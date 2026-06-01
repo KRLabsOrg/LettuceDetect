@@ -36,6 +36,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from openai import AsyncOpenAI  # noqa: E402
 
 from lettucedetect.generation.answers import generate_grounded_answer_async  # noqa: E402
+from lettucedetect.generation.assembly import format_prompt  # noqa: E402
 from lettucedetect.generation.doc_source import hash_split  # noqa: E402
 from lettucedetect.generation.injection import InjectionResult, inject_menu_async  # noqa: E402
 from lettucedetect.generation.runner import Outcome, run_batched_sync  # noqa: E402
@@ -145,8 +146,8 @@ def build_context(chunks: list[str]) -> str:
 
 
 def build_prompt(context: str, question: str) -> str:
-    """Sample context: the excerpts plus the user question."""
-    return f"{context}\n\nUser request: {question}"
+    """Model input: the question (front) plus the retrieved excerpts."""
+    return format_prompt(context, question)
 
 
 def _item_key(item: dict) -> str:
@@ -169,6 +170,8 @@ def make_sample(item: dict, context: str, answer: str, hall: InjectionResult | N
         final_answer, labels, cat, sub = answer, [], None, None
     return {
         "prompt": build_prompt(context, item["question"]),
+        "context": context,
+        "question": item["question"],
         "answer": final_answer,
         "labels": labels,
         "split": item["split"],
