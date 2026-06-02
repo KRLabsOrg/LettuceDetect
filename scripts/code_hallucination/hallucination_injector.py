@@ -497,7 +497,6 @@ def _run_sequential(to_process, formats, queries, docs, source_cache, api_key, b
     client = OpenAI(api_key=api_key, base_url=base_url)
     processed = 0
     failed = 0
-    no_spans = 0
     results = []
 
     failure_reasons: dict[str, int] = {}

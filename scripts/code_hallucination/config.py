@@ -34,6 +34,7 @@ def set_output_dir(path: str | os.PathLike[str]) -> Path:
     global DOCS_PATH
     global FORMATS_PATH
     global HALLUCINATED_PATH
+    global INJECTION_FAILURES_PATH
     global DATASET_PATH
     global METADATA_PATH
     global VALIDATION_REPORT_PATH
