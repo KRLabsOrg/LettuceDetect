@@ -103,6 +103,7 @@ def preprocess_code(
                     "format_type": m.get("format_type"),
                     "is_hallucinated": m.get("is_hallucinated", bool(s["labels"])),
                     "injector_model": m.get("injector_model"),
+                    "reasoning": m.get("reasoning"),
                 },
             )
         )

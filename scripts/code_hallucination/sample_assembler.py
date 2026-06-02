@@ -247,6 +247,7 @@ def assemble_samples(
                 "format_type": hall_data.get("format_type", fmt_data.get("format_type")),
                 "hallucination_type": hall_data.get("hallucination_type"),
                 "injector_model": hall_data.get("injector_model"),
+                "reasoning": hall_data.get("reasoning"),
                 "is_hallucinated": True,
             }
         else:
@@ -299,7 +300,7 @@ def run(
     formats: dict[str, dict],
     hallucinations: dict[str, dict],
     hallucination_instance_ids: set[str],
-):
+) -> tuple[list[dict], list[dict]]:
     """Run Phase 7: Assemble all samples."""
     print("=" * 60)
     print("Phase 7: Sample Assembly")
