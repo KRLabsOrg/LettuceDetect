@@ -1,4 +1,4 @@
-"""Apply the unified v2 taxonomy to any LettuceDetect data source.
+r"""Apply the unified v2 taxonomy to any LettuceDetect data source.
 
 Takes an already-preprocessed dataset and enriches each span and sample
 with ``category`` and ``subcategory`` fields from the unified taxonomy,
@@ -69,12 +69,14 @@ def preprocess_code(
     data_path: Path,
     metadata_path: Path,
 ) -> list[HallucinationSample]:
+    """Load the code dataset + metadata and convert to taxonomy-tagged samples."""
     with open(data_path) as f:
         raw_samples = json.load(f)
     with open(metadata_path) as f:
         raw_meta = json.load(f)
 
-    assert len(raw_samples) == len(raw_meta), "data/metadata length mismatch"
+    if len(raw_samples) != len(raw_meta):
+        raise ValueError("data/metadata length mismatch")
 
     samples = []
     for s, m in zip(raw_samples, raw_meta):
@@ -111,6 +113,7 @@ def preprocess_code(
 
 
 def preprocess_ragtruth(data_path: Path) -> list[HallucinationSample]:
+    """Convert RAGTruth data to taxonomy-tagged samples (context-aware mapping)."""
     with open(data_path) as f:
         raw = json.load(f)
 
@@ -173,6 +176,7 @@ def preprocess_ragbench(data_path: Path) -> list[HallucinationSample]:
 def preprocess_markdown(
     data_path: Path, metadata_path: Path | None = None
 ) -> list[HallucinationSample]:
+    """Convert a generic markdown dataset to taxonomy-tagged samples."""
     with open(data_path) as f:
         raw_samples = json.load(f)
 
@@ -209,6 +213,7 @@ def preprocess_markdown(
 
 
 def write_output(samples: list[HallucinationSample], output_dir: Path) -> None:
+    """Write samples to one JSONL file per split under ``output_dir``."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     by_split: dict[str, list[HallucinationSample]] = {}
@@ -230,6 +235,7 @@ def write_output(samples: list[HallucinationSample], output_dir: Path) -> None:
 
 
 def main() -> None:
+    """CLI: preprocess one data source to the unified-taxonomy schema."""
     parser = argparse.ArgumentParser(
         description="Preprocess a data source to the v2 unified schema."
     )
