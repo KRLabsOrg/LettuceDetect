@@ -74,6 +74,7 @@ class InjectionResult:
     hallucinated_answer: str | None = None
     labels: list[dict] = field(default_factory=list)
     changes: list[dict] = field(default_factory=list)
+    reasoning: str | None = None  # model thinking trace, when the server emits one
 
 
 # ── Edit location and application ──────────────────────────────────────────────
@@ -391,7 +392,7 @@ def inject(
     and validates the resulting spans. Low-level entry point; most callers use
     :func:`inject_taxonomy`.
     """
-    result = complete(
+    result, reasoning = complete(
         client,
         model,
         _changes_messages(system_prompt, user_msg),
@@ -400,8 +401,9 @@ def inject(
         completion_kwargs=completion_kwargs or {},
         max_retries=max_retries,
         retry_delay=retry_delay,
+        capture_reasoning=True,
     )
-    return _finalize_injection(
+    res = _finalize_injection(
         clean_answer,
         result,
         hall_type,
@@ -409,6 +411,8 @@ def inject(
         require_balanced_fences=require_balanced_fences,
         base_coverage_cap=base_coverage_cap,
     )
+    res.reasoning = reasoning
+    return res
 
 
 async def inject_async(
@@ -428,7 +432,7 @@ async def inject_async(
     retry_delay: float = 2.0,
 ) -> InjectionResult:
     """Async twin of :func:`inject` for batched throughput against local vLLM."""
-    result = await complete_async(
+    result, reasoning = await complete_async(
         aclient,
         model,
         _changes_messages(system_prompt, user_msg),
@@ -437,8 +441,9 @@ async def inject_async(
         completion_kwargs=completion_kwargs or {},
         max_retries=max_retries,
         retry_delay=retry_delay,
+        capture_reasoning=True,
     )
-    return _finalize_injection(
+    res = _finalize_injection(
         clean_answer,
         result,
         hall_type,
@@ -446,6 +451,8 @@ async def inject_async(
         require_balanced_fences=require_balanced_fences,
         base_coverage_cap=base_coverage_cap,
     )
+    res.reasoning = reasoning
+    return res
 
 
 # ── Taxonomy layer: modality-aware, category/subtype-driven ────────────────────
