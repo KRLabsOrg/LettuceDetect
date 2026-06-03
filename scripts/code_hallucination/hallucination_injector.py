@@ -182,6 +182,10 @@ def run(
         for inst in instances_to_inject
         if inst["instance_id"] in formats and formats[inst["instance_id"]].get("answer")
     ]
+    # Guard against duplicate sub-instance IDs (the format builder can collide two
+    # same-named functions) so we never inject — or write — the same id twice.
+    seen: set[str] = set()
+    items = [it for it in items if it["instance_id"] not in seen and not seen.add(it["instance_id"])]
 
     async def process(inst: dict) -> Outcome:
         iid = inst["instance_id"]

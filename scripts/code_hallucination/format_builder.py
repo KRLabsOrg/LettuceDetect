@@ -194,6 +194,12 @@ def assign_format_entries(source_data: dict, instance_id: str) -> list[dict]:
 
     if chosen in ("complete_function", "code_with_explanation"):
         eligible = _get_eligible_functions(source_data)
+        # Sub-instance IDs are "{id}::{function_name}", so two functions sharing a
+        # name (different files/classes) would collide — keep one per name.
+        seen_names: set[str] = set()
+        eligible = [
+            f for f in eligible if f["name"] not in seen_names and not seen_names.add(f["name"])
+        ]
         if not eligible:
             # Fallback: no eligible functions — use fragment or edit_style
             if has_fragment:
