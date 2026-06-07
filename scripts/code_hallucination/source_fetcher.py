@@ -10,7 +10,17 @@ from pathlib import Path
 
 import requests
 
-from .config import MAX_FILE_CHARS, REPOS_DIR, SOURCE_CACHE_DIR
+from .config import MAX_FILE_CHARS, MAX_PROMPT_CHARS, REPOS_DIR, SOURCE_CACHE_DIR
+
+
+def build_source_context(source_data: dict) -> str:
+    """Build the source-code context string from cached source data (truncated)."""
+    parts = [
+        f"File: {filepath}\n```python\n{content}\n```"
+        for filepath, content in source_data.get("source_files", {}).items()
+    ]
+    context = "\n\n".join(parts)
+    return context[:MAX_PROMPT_CHARS] if len(context) > MAX_PROMPT_CHARS else context
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com"
 

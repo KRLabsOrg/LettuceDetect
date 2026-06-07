@@ -58,7 +58,7 @@ PROMPT_RESIDUE: tuple[str, ...] = (
 )
 MAX_LABEL_COVERAGE = 0.40
 MAX_LABEL_SPAN_CHARS = 500
-MIN_LABEL_SPAN_CHARS = 12
+MIN_LABEL_SPAN_CHARS = 4
 
 
 @dataclass
@@ -96,15 +96,26 @@ def _find_all_occurrences(text: str, pattern: str) -> list[dict]:
 
 
 def _locate_original_change(original_answer: str, change: dict) -> dict | None:
-    """Locate a replacement span in the original answer by exact unique match."""
+    """Locate a replacement span in the original answer.
+
+    Uses the first occurrence when the snippet recurs. Returns None for missing
+    fields, a snippet absent from the answer, or a no-op (``original == hallucinated``).
+    """
     original_span = change.get("original", "")
     hallucinated_span = change.get("hallucinated", "")
-    if not original_span or not hallucinated_span:
+    if not original_span or not hallucinated_span or original_span == hallucinated_span:
         return None
 
     offsets = _find_all_occurrences(original_answer, original_span)
-    if len(offsets) != 1:
-        return None
+    if not offsets:
+        # Retry on the whitespace-stripped core if the exact snippet isn't found.
+        stripped = original_span.strip()
+        if stripped and stripped != original_span:
+            offsets = _find_all_occurrences(original_answer, stripped)
+            if offsets:
+                original_span, hallucinated_span = stripped, hallucinated_span.strip()
+        if not offsets:
+            return None
 
     return {
         "start": offsets[0]["start"],

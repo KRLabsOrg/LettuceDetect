@@ -93,6 +93,14 @@ CODE_MAP: dict[str, tuple[str, str | None]] = {
     "semantic": ("unsupported_addition", "behavior"),
 }
 
+# LD code-agent hallucination; the injector returns one of these per edit
+CODE_AGENT_MAP: dict[str, tuple[str, str | None]] = {
+    "wrong_implementation": ("contradiction", "value"),
+    "unrequested_change": ("unsupported_addition", "behavior"),
+    "omission": ("omission", None),
+    "fabricated_api": ("fabricated_reference", "identifier"),
+}
+
 # LD generic markdown hallucination (READMEs, wiki); one type per edit
 MARKDOWN_MAP: dict[str, tuple[str, str | None]] = {
     "NUMERICAL": ("contradiction", "numerical"),
@@ -128,6 +136,7 @@ _ALL_MAPS: dict[str, dict[str, tuple[str, str | None]]] = {
     "ragtruth": RAGTRUTH_MAP,
     "prose_generator": PROSE_GENERATOR_MAP,
     "code": CODE_MAP,
+    "code_agent": CODE_AGENT_MAP,
     "markdown": MARKDOWN_MAP,
     "fava": FAVA_MAP,
     "paper": PAPER_MAP,
