@@ -25,14 +25,31 @@ from .config import API_BASE_URL, API_KEY, MODEL
 
 
 def load_source_cache(instance_ids: list[str]) -> dict[str, dict]:
-    """Load source cache for given instance IDs."""
+    """Load source cache keyed by original_id (strips sub-instance suffix if present)."""
     cache = {}
     for iid in instance_ids:
-        cache_path = config.SOURCE_CACHE_DIR / f"{iid}.json"
+        original = iid.split("::")[0]
+        if original in cache:
+            continue
+        cache_path = config.SOURCE_CACHE_DIR / f"{original}.json"
         if cache_path.exists():
             with open(cache_path) as f:
-                cache[iid] = json.load(f)
+                cache[original] = json.load(f)
     return cache
+
+
+def load_jsonl_all(path) -> list:
+    """Load a JSONL file as a list of dicts."""
+    result = []
+    if not path.exists():
+        return result
+    with open(path) as f:
+        for line in f:
+            try:
+                result.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return result
 
 
 def load_jsonl_dict(path, key="instance_id", value_key=None) -> dict:
@@ -113,17 +130,19 @@ def run_test(n: int = 5, api_key: str = API_KEY, base_url: str = API_BASE_URL, m
     run_formats(selected, api_key=api_key, base_url=base_url, model=model, queries=queries_dict)
 
     # Phase 8: Select targets (before phase 6)
-    from .splitter import select_hallucination_targets
+    from .splitter import select_format_targets
 
-    targets = select_hallucination_targets(selected)
+    format_entries_list = load_jsonl_all(config.FORMATS_PATH)
+    formats = {e["instance_id"]: e for e in format_entries_list}
+    docs = load_jsonl_dict(config.DOCS_PATH, value_key="docs")
+    targets = select_format_targets(format_entries_list)
 
     # Phase 6: Inject hallucinations
     from .hallucination_injector import run as run_inject
 
-    formats = load_jsonl_dict(config.FORMATS_PATH)
-    docs = load_jsonl_dict(config.DOCS_PATH, value_key="docs")
-    to_inject = [i for i in selected if i["instance_id"] in targets]
-    sc = load_source_cache([i["instance_id"] for i in to_inject])
+    to_inject = [e for e in format_entries_list if e["instance_id"] in targets]
+    original_ids = {e.get("original_id", e["instance_id"]) for e in to_inject}
+    sc = load_source_cache(list(original_ids))
     run_inject(
         to_inject,
         formats,
@@ -139,6 +158,7 @@ def run_test(n: int = 5, api_key: str = API_KEY, base_url: str = API_BASE_URL, m
     from .sample_assembler import run as run_assemble
 
     hallucinations = load_jsonl_dict(config.HALLUCINATED_PATH)
+    targets = set(hallucinations.keys())
     samples, metadata = run_assemble(selected, queries_dict, docs, formats, hallucinations, targets)
 
     # Phase 9: Validate
@@ -242,16 +262,16 @@ def main():
             )
         elif phase == 6:
             from .hallucination_injector import run
-            from .splitter import select_hallucination_targets
-            from .swebench_loader import load_instances
+            from .splitter import select_format_targets
 
-            instances = filter_instances_by_splits(load_instances(), args.splits)
-            formats = load_jsonl_dict(config.FORMATS_PATH)
+            format_entries_list = load_jsonl_all(config.FORMATS_PATH)
+            formats = {e["instance_id"]: e for e in format_entries_list}
             queries = load_jsonl_dict(config.QUERIES_PATH, value_key="query")
             docs = load_jsonl_dict(config.DOCS_PATH, value_key="docs")
-            targets = select_hallucination_targets(instances)
-            to_inject = [i for i in instances if i["instance_id"] in targets]
-            sc = load_source_cache([i["instance_id"] for i in to_inject])
+            targets = select_format_targets(format_entries_list)
+            to_inject = [e for e in format_entries_list if e["instance_id"] in targets]
+            original_ids = {e.get("original_id", e["instance_id"]) for e in to_inject}
+            sc = load_source_cache(list(original_ids))
             run(
                 to_inject,
                 formats,
@@ -264,7 +284,6 @@ def main():
             )
         elif phase == 7:
             from .sample_assembler import run
-            from .splitter import select_hallucination_targets
             from .swebench_loader import load_instances
 
             instances = filter_instances_by_splits(load_instances(), args.splits)
@@ -272,7 +291,8 @@ def main():
             docs = load_jsonl_dict(config.DOCS_PATH, value_key="docs")
             formats = load_jsonl_dict(config.FORMATS_PATH)
             hallucinations = load_jsonl_dict(config.HALLUCINATED_PATH)
-            targets = select_hallucination_targets(instances)
+            # Targets are all sub-instance IDs that have a hallucination entry
+            targets = set(hallucinations.keys())
             run(instances, queries, docs, formats, hallucinations, targets)
         elif phase == 8:
             from .splitter import run

@@ -139,21 +139,125 @@ Write a natural AI assistant response that includes this exact code."""
     return None
 
 
-def assign_format(source_data: dict) -> tuple[str, str]:
-    """Assign a format type and build the answer for an instance.
+SUB_INSTANCE_SEP = "::"
+MAX_FUNCTIONS_PER_INSTANCE = 5
+MIN_FUNCTION_CHARS = 50
 
-    Returns (format_type, answer_text).
-    Falls back if preferred format isn't available.
 
-    Note: code_with_explanation is handled separately since it needs LLM calls.
-    This function returns ("code_with_explanation", base_code) and the caller
-    wraps it with an explanation.
+def _get_eligible_functions(source_data: dict) -> list[dict]:
+    """Return functions eligible for sub-instances, sorted by priority.
+
+    Priority: modified functions (have an original body) before new ones,
+    then by descending patched length.  Capped at MAX_FUNCTIONS_PER_INSTANCE.
+    """
+    funcs = source_data.get("modified_functions", [])
+    eligible = [f for f in funcs if len(f.get("patched", "")) >= MIN_FUNCTION_CHARS]
+    eligible.sort(key=lambda f: (f["original"] is None, -len(f.get("patched", ""))))
+    return eligible[:MAX_FUNCTIONS_PER_INSTANCE]
+
+
+def assign_format_entries(source_data: dict, instance_id: str) -> list[dict]:
+    """Return a list of format entries for an instance.
+
+    For complete_function / code_with_explanation: one entry per eligible
+    function (up to MAX_FUNCTIONS_PER_INSTANCE), using sub-instance IDs
+    ``{instance_id}::{function_name}``.
+
+    For fragment / edit_style: exactly one entry, keeping the original
+    instance_id.
+
+    code_with_explanation entries contain the raw function body as ``answer``
+    — the caller is responsible for wrapping it with an LLM-generated
+    explanation before writing to disk.
     """
     has_functions = bool(source_data.get("modified_functions"))
     has_edit = bool(source_data.get("edit_style"))
     has_fragment = bool(source_data.get("patch_code", "").strip())
 
-    # Build available formats
+    available = []
+    if has_functions:
+        available.append("complete_function")
+    if has_edit:
+        available.append("edit_style")
+    if has_fragment:
+        available.append("fragment")
+
+    if not available:
+        return []
+
+    all_available = available + ["code_with_explanation"]
+
+    weights = [FORMAT_WEIGHTS[FORMAT_TYPES.index(fmt)] for fmt in all_available]
+    total = sum(weights)
+    weights = [w / total for w in weights]
+    chosen = random.choices(all_available, weights=weights, k=1)[0]
+
+    if chosen in ("complete_function", "code_with_explanation"):
+        eligible = _get_eligible_functions(source_data)
+        # Sub-instance IDs are "{id}::{function_name}", so two functions sharing a
+        # name (different files/classes) would collide — keep one per name.
+        seen_names: set[str] = set()
+        eligible = [
+            f for f in eligible if f["name"] not in seen_names and not seen_names.add(f["name"])
+        ]
+        if not eligible:
+            # Fallback: no eligible functions — use fragment or edit_style
+            if has_fragment:
+                return [
+                    {
+                        "instance_id": instance_id,
+                        "original_id": instance_id,
+                        "format_type": "fragment",
+                        "answer": source_data["patch_code"],
+                    }
+                ]
+            elif has_edit:
+                return [
+                    {
+                        "instance_id": instance_id,
+                        "original_id": instance_id,
+                        "format_type": "edit_style",
+                        "answer": source_data["edit_style"],
+                    }
+                ]
+            return []
+        return [
+            {
+                "instance_id": f"{instance_id}{SUB_INSTANCE_SEP}{func['name']}",
+                "original_id": instance_id,
+                "format_type": chosen,
+                "answer": func["patched"],
+                "function_name": func["name"],
+            }
+            for func in eligible
+        ]
+
+    elif chosen == "edit_style":
+        return [
+            {
+                "instance_id": instance_id,
+                "original_id": instance_id,
+                "format_type": "edit_style",
+                "answer": source_data["edit_style"],
+            }
+        ]
+    else:  # fragment
+        return [
+            {
+                "instance_id": instance_id,
+                "original_id": instance_id,
+                "format_type": "fragment",
+                "answer": source_data["patch_code"],
+            }
+        ]
+
+
+def assign_format(source_data: dict) -> tuple[str, str]:
+    """Legacy single-entry helper (used by run_test). Picks the longest function."""
+    has_functions = bool(source_data.get("modified_functions"))
+    has_edit = bool(source_data.get("edit_style"))
+    has_fragment = bool(source_data.get("patch_code", "").strip())
+
     available = []
     if has_functions:
         available.append("complete_function")
@@ -165,43 +269,30 @@ def assign_format(source_data: dict) -> tuple[str, str]:
     if not available:
         return None, None
 
-    # code_with_explanation can use any base format
     all_available = available + ["code_with_explanation"]
-
-    # Weighted random choice from available formats
-    weights = []
-    for fmt in all_available:
-        idx = FORMAT_TYPES.index(fmt)
-        weights.append(FORMAT_WEIGHTS[idx])
-
-    # Normalize weights
+    weights = [FORMAT_WEIGHTS[FORMAT_TYPES.index(fmt)] for fmt in all_available]
     total = sum(weights)
     weights = [w / total for w in weights]
-
     chosen = random.choices(all_available, weights=weights, k=1)[0]
 
-    # Build answer text
     if chosen == "code_with_explanation":
-        # Pick the best base code to wrap with explanation
         if has_functions:
             funcs = source_data["modified_functions"]
             func = max(funcs, key=lambda f: len(f.get("patched", "")))
             answer = func["patched"]
         elif has_fragment:
             answer = source_data["patch_code"]
-        elif has_edit:
+        else:
             answer = source_data["edit_style"]
         return "code_with_explanation", answer
     elif chosen == "complete_function":
         funcs = source_data["modified_functions"]
         func = max(funcs, key=lambda f: len(f.get("patched", "")))
-        answer = func["patched"]
+        return chosen, func["patched"]
     elif chosen == "edit_style":
-        answer = source_data["edit_style"]
-    else:  # fragment
-        answer = source_data["patch_code"]
-
-    return chosen, answer
+        return chosen, source_data["edit_style"]
+    else:
+        return chosen, source_data["patch_code"]
 
 
 def run(
@@ -226,7 +317,7 @@ def run(
     if queries is None:
         queries = {}
 
-    # Load existing for resumability
+    # Load existing for resumability — keyed by sub-instance ID
     existing = {}
     if FORMATS_PATH.exists():
         with open(FORMATS_PATH) as f:
@@ -236,16 +327,20 @@ def run(
                     existing[entry["instance_id"]] = entry
                 except (json.JSONDecodeError, KeyError):
                     continue
-    print(f"Already processed: {len(existing)} formats")
+    print(f"Already processed: {len(existing)} format entries")
 
-    to_process = [inst for inst in instances if inst["instance_id"] not in existing]
+    # Track which original instances are fully done (any entry present = skip whole instance)
+    existing_originals = {
+        entry.get("original_id", entry["instance_id"]) for entry in existing.values()
+    }
+    to_process = [inst for inst in instances if inst["instance_id"] not in existing_originals]
     print(f"Remaining: {len(to_process)} instances to process")
     print(f"Batch size: {BATCH_SIZE}")
 
     # First pass: assign formats for all instances (no LLM needed)
-    # Collect which ones need explanation generation
-    needs_explanation = []  # (instance_id, code, query, context)
-    entries_no_llm = []  # entries that don't need LLM
+    # needs_explanation items: (entry_dict, query, context)
+    needs_explanation = []
+    entries_no_llm = []
 
     for inst in to_process:
         instance_id = inst["instance_id"]
@@ -257,22 +352,19 @@ def run(
         with open(cache_path) as fp:
             source_data = json.load(fp)
 
-        fmt, answer = assign_format(source_data)
-        if fmt is None:
+        fmt_entries = assign_format_entries(source_data, instance_id)
+        if not fmt_entries:
             continue
 
-        if fmt == "code_with_explanation":
-            query = queries.get(instance_id, inst.get("problem_statement", "")[:500])
-            context = source_data.get("patch_code", "")
-            needs_explanation.append((instance_id, answer, query, context, fmt))
-        else:
-            entries_no_llm.append(
-                {
-                    "instance_id": instance_id,
-                    "format_type": fmt,
-                    "answer": answer,
-                }
-            )
+        split = inst.get("split", "train")
+        for entry in fmt_entries:
+            entry["split"] = split
+            if entry["format_type"] == "code_with_explanation":
+                query = queries.get(instance_id, inst.get("problem_statement", "")[:500])
+                context = source_data.get("patch_code", "")
+                needs_explanation.append((entry, query, context))
+            else:
+                entries_no_llm.append(entry)
 
     # Write non-LLM entries immediately
     results = list(existing.values())
@@ -293,8 +385,8 @@ def run(
             processed += 1
         f.flush()
 
-    print(f"  Assigned {len(entries_no_llm)} non-LLM formats")
-    print(f"  Need LLM explanation: {len(needs_explanation)} instances")
+    print(f"  Assigned {len(entries_no_llm)} non-LLM format entries")
+    print(f"  Need LLM explanation: {len(needs_explanation)} sub-instances")
 
     # Second pass: generate explanations (batched or sequential)
     if needs_explanation:
@@ -322,13 +414,18 @@ def run(
 def _run_explanations_sequential(
     needs_explanation, format_counts, results, api_key, base_url, model
 ):
-    """Generate explanations sequentially (for remote APIs)."""
+    """Generate explanations sequentially (for remote APIs).
+
+    needs_explanation items: (entry_dict, query, context)
+    entry_dict contains instance_id, original_id, answer (base code), function_name.
+    """
     client = OpenAI(api_key=api_key, base_url=base_url)
     explanation_failures = 0
     processed = 0
 
     with open(FORMATS_PATH, "a") as f:
-        for instance_id, code, query, context, _ in needs_explanation:
+        for base_entry, query, context in needs_explanation:
+            code = base_entry["answer"]
             explained = _generate_explanation(client, model, code, query, context)
 
             if explained is None:
@@ -339,11 +436,7 @@ def _run_explanations_sequential(
                 fmt = "code_with_explanation"
                 answer = explained
 
-            entry = {
-                "instance_id": instance_id,
-                "format_type": fmt,
-                "answer": answer,
-            }
+            entry = {**base_entry, "format_type": fmt, "answer": answer}
             f.write(json.dumps(entry) + "\n")
             f.flush()
             results.append(entry)
@@ -360,7 +453,10 @@ def _run_explanations_sequential(
 
 
 def _run_explanations_batched(needs_explanation, format_counts, results, api_key, base_url, model):
-    """Generate explanations with async batching (for local vLLM)."""
+    """Generate explanations with async batching (for local vLLM).
+
+    needs_explanation items: (entry_dict, query, context)
+    """
     aclient = AsyncOpenAI(api_key=api_key, base_url=base_url)
     explanation_failures = 0
     processed = 0
@@ -372,26 +468,24 @@ def _run_explanations_batched(needs_explanation, format_counts, results, api_key
             for batch_start in range(0, len(needs_explanation), BATCH_SIZE):
                 batch = needs_explanation[batch_start : batch_start + BATCH_SIZE]
 
-                tasks = []
-                for instance_id, code, query, context, _ in batch:
-                    tasks.append(_generate_explanation_async(aclient, model, code, query, context))
-
+                tasks = [
+                    _generate_explanation_async(
+                        aclient, model, base_entry["answer"], query, context
+                    )
+                    for base_entry, query, context in batch
+                ]
                 batch_results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                for (instance_id, code, query, context, _), explained in zip(batch, batch_results):
+                for (base_entry, _, _), explained in zip(batch, batch_results):
                     if isinstance(explained, Exception) or explained is None:
                         fmt = "fragment"
-                        answer = code
+                        answer = base_entry["answer"]
                         explanation_failures += 1
                     else:
                         fmt = "code_with_explanation"
                         answer = explained
 
-                    entry = {
-                        "instance_id": instance_id,
-                        "format_type": fmt,
-                        "answer": answer,
-                    }
+                    entry = {**base_entry, "format_type": fmt, "answer": answer}
                     f.write(json.dumps(entry) + "\n")
                     results.append(entry)
                     format_counts[fmt] += 1

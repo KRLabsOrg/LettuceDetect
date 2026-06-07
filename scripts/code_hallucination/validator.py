@@ -5,6 +5,14 @@ import difflib
 import json
 from collections import Counter
 
+# Reuse the canonical span/coverage helpers from the injector so the generation
+# and validation passes never drift apart.
+from lettucedetect.generation.injection import (
+    _extract_code_regions,
+    _max_allowed_coverage,
+    _span_is_in_code,
+)
+
 from .config import DATASET_PATH, FORMATS_PATH, METADATA_PATH, VALIDATION_REPORT_PATH
 
 LEAKY_TERMS = (
@@ -17,15 +25,6 @@ LEAKY_TERMS = (
     "helper method",
     "should be replaced",
 )
-
-
-def _max_allowed_coverage(answer_len: int) -> float:
-    """Use a looser coverage cap for short answers and fragments."""
-    if answer_len <= 400:
-        return 0.40
-    if answer_len <= 800:
-        return 0.35
-    return 0.30
 
 
 def validate_spans(samples: list[dict]) -> list[str]:
@@ -51,36 +50,6 @@ def validate_spans(samples: list[dict]) -> list[str]:
             seen.add((start, end, label.get("label")))
             previous_end = end
     return issues
-
-
-def _extract_code_regions(answer: str) -> list[tuple[int, int]]:
-    """Return markdown fenced code block ranges, or the whole answer if none."""
-    regions = []
-    idx = 0
-    while True:
-        start = answer.find("```", idx)
-        if start == -1:
-            break
-        code_start = answer.find("\n", start + 3)
-        if code_start == -1:
-            break
-        code_start += 1
-        end = answer.find("```", code_start)
-        if end == -1:
-            break
-        regions.append((code_start, end))
-        idx = end + 3
-    if not regions:
-        return [(0, len(answer))]
-    return regions
-
-
-def _span_is_in_code(answer: str, start: int, end: int) -> bool:
-    """Check whether a span is fully inside a fenced code region."""
-    return any(
-        start >= code_start and end <= code_end
-        for code_start, code_end in _extract_code_regions(answer)
-    )
 
 
 def _is_whitespace_only_diff(original_text: str, hallucinated_text: str) -> bool:
@@ -148,7 +117,7 @@ def check_label_quality(samples: list[dict], metadata: list[dict]) -> dict:
         coverage = sum(label["end"] - label["start"] for label in sample["labels"]) / max(
             len(answer), 1
         )
-        if coverage > _max_allowed_coverage(len(answer)):
+        if coverage > _max_allowed_coverage(len(answer), 0.30):
             issues["coverage_over_30pct"] += 1
 
         for label in sample["labels"]:

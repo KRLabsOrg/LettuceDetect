@@ -1,13 +1,10 @@
-"""Phase 4: Fetch library documentation from Context7 API.
+"""Phase 4: Fetch library documentation from Context7 API."""
 
-Only fetches docs for ~50% of instances (configurable via DOCS_RATIO).
-The other 50% get empty docs, creating training variety — models learn
-to handle both with-docs and without-docs scenarios.
-"""
-
+import ast
 import json
 import random
 import re
+import warnings
 
 import requests
 
@@ -119,26 +116,67 @@ def repo_to_library(repo: str) -> str | None:
     return None
 
 
-def get_documentation_for_instance(
-    changed_files: list[str], patch: str, problem_statement: str, repo: str = ""
-) -> dict[str, str]:
-    """Fetch documentation for the primary library of the instance's repo.
+def extract_external_imports(source_files: dict[str, str]) -> dict[str, set[str]]:
+    """Parse source files and return {library_name -> {imported_names}} for external libs.
 
-    Only fetches docs for the library that matches the repo (e.g., django docs
-    for django/django), not for random imports like sys or re.
-
-    :param repo: GitHub repo path, used to determine which library to fetch docs for.
+    Skips relative imports and standard-library modules.  Only returns libraries
+    that appear in PATH_TO_LIB so we know Context7 can serve them.
     """
-    primary_lib = repo_to_library(repo)
-    if not primary_lib:
-        return {}
+    lib_names: dict[str, set[str]] = {}
+    for content in source_files.values():
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                tree = ast.parse(content)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level != 0:
+                continue
+            if not node.module:
+                continue
+            top = node.module.split(".")[0]
+            lib = PATH_TO_LIB.get(top)
+            if lib:
+                names = {alias.name for alias in node.names if alias.name != "*"}
+                lib_names.setdefault(lib, set()).update(names)
+    return lib_names
 
-    short_query = problem_statement[:200].replace("\n", " ").strip()
 
-    docs = {}
-    doc = fetch_context7_docs(primary_lib, short_query)
-    if doc:
-        docs[primary_lib] = doc
+def get_documentation_for_instance(
+    changed_files: list[str],
+    patch: str,
+    problem_statement: str,
+    repo: str = "",
+    source_files: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Fetch targeted per-function documentation for external library imports.
+
+    Looks at the actual imported names in *source_files* and queries Context7
+    specifically for each one (e.g. "numpy percentile usage").  Falls back to a
+    broad problem-statement query when source_files are not available.
+    """
+    docs: dict[str, str] = {}
+
+    if source_files:
+        lib_imports = extract_external_imports(source_files)
+        for lib, names in lib_imports.items():
+            fetched_parts: list[str] = []
+            for name in sorted(names)[:10]:  # cap to avoid too many requests
+                query = f"{name} function signature usage example"
+                doc = fetch_context7_docs(lib, query, max_chars=800)
+                if doc:
+                    fetched_parts.append(f"### {name}\n{doc}")
+            if fetched_parts:
+                docs[lib] = "\n\n".join(fetched_parts)
+    else:
+        # Fallback: broad query for the repo's primary library
+        primary_lib = repo_to_library(repo)
+        if primary_lib:
+            short_query = problem_statement[:200].replace("\n", " ").strip()
+            doc = fetch_context7_docs(primary_lib, short_query)
+            if doc:
+                docs[primary_lib] = doc
 
     return docs
 
