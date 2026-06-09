@@ -405,6 +405,11 @@ def main() -> None:
     )
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--batch-size", type=int, default=int(os.environ.get("BATCH_SIZE", "8")))
+    ap.add_argument(
+        "--hall-ids-file",
+        help="File with one instance id per line; these become the hallucination "
+        "targets instead of sampling --ratio of all instances.",
+    )
     args = ap.parse_args()
 
     queries = {
@@ -447,8 +452,12 @@ def main() -> None:
             it["style"] = "function" if r < 0.45 else ("fragment" if r < 0.72 else "edit")
         else:
             it["style"] = "edit" if rng.random() < args.edit_ratio else "files"
-    n_hall = int(len(items) * args.ratio)
-    hall_items = rng.sample(items, min(n_hall, len(items)))
+    if args.hall_ids_file:
+        wanted = {line.strip() for line in Path(args.hall_ids_file).read_text().splitlines() if line.strip()}
+        hall_items = [it for it in items if it["id"] in wanted]
+    else:
+        n_hall = int(len(items) * args.ratio)
+        hall_items = rng.sample(items, min(n_hall, len(items)))
     hall_ids = {it["id"] for it in hall_items}
     n_struct = int(len(hall_items) * args.struct_ratio)
     struct_ids = {it["id"] for it in rng.sample(hall_items, min(n_struct, len(hall_items)))}
