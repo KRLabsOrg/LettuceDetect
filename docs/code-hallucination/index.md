@@ -136,7 +136,8 @@ Injection runs through the shared
 [`lettucedetect.generation.injection`](../generation.md) engine, which rejects
 edits that leak hint words, mislocate, over-cover the answer, or are no-ops, and
 the generator skips trivial gold answers, over-long answers, and fabrications that
-are not truly absent from the context. See [Phases](phases.md) for the per-step detail.
+are not truly absent from the context. See [Phases](phases.md) for the per-step detail,
+and [Provenance](provenance.md) for how the published data was audited and repaired.
 
 ## Inspect and audit
 
