@@ -99,11 +99,14 @@ def _locate_original_change(original_answer: str, change: dict) -> dict | None:
     """Locate a replacement span in the original answer.
 
     Uses the first occurrence when the snippet recurs. Returns None for missing
-    fields, a snippet absent from the answer, or a no-op (``original == hallucinated``).
+    fields, a snippet absent from the answer, or a no-op (original and hallucinated
+    identical once whitespace is collapsed).
     """
     original_span = change.get("original", "")
     hallucinated_span = change.get("hallucinated", "")
-    if not original_span or not hallucinated_span or original_span == hallucinated_span:
+    if not original_span or not hallucinated_span:
+        return None
+    if " ".join(original_span.split()) == " ".join(hallucinated_span.split()):
         return None
 
     offsets = _find_all_occurrences(original_answer, original_span)
@@ -238,15 +241,18 @@ def _contains_leakage(text: str, leaky_terms: tuple[str, ...]) -> bool:
 
 
 def _max_allowed_coverage(answer_len: int, base_cap: float) -> float:
-    """Coverage cap by answer length.
+    """Coverage cap, decreasing monotonically with answer length.
 
-    Short answers/fragments (<=400 chars) get a 0.40 cap, medium answers
-    (<=800) a tighter 0.35, and longer answers fall back to ``base_cap``.
+    A single genuine edit is a large fraction of a short answer, so short answers
+    get a lenient cap; long answers where most of the text is flagged are the
+    suspicious case and fall back to ``base_cap``.
     """
-    if answer_len <= 400:
-        return 0.40
-    if answer_len <= 800:
-        return 0.35
+    if answer_len <= 200:
+        return 0.80
+    if answer_len <= 500:
+        return 0.60
+    if answer_len <= 1500:
+        return 0.45
     return base_cap
 
 

@@ -2,6 +2,7 @@
 
 import ast
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -133,10 +134,16 @@ def clone_repo(repo: str, repos_dir: Path = REPOS_DIR) -> Path | None:
 
 
 def fetch_file_from_github(repo: str, commit: str, filepath: str) -> str | None:
-    """Fallback: fetch a file from GitHub raw API (for when repo isn't cloned)."""
+    """Fetch a file from GitHub raw.
+
+    Works unauthenticated for public repos; a ``GITHUB_TOKEN`` env var, when set,
+    is sent to raise the request rate limit for large runs.
+    """
     url = f"{GITHUB_RAW_BASE}/{repo}/{commit}/{filepath}"
+    token = os.environ.get("GITHUB_TOKEN")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        r = requests.get(url, timeout=15)
+        r = requests.get(url, headers=headers, timeout=15)
         if r.status_code == 200:
             return r.text
         return None

@@ -83,7 +83,7 @@ The five built sources:
 
 | Source (`dataset`) | modality | question | answer | injection prompt |
 |---|---|---|---|---|
-| `lettucedetect-code` (SWE-bench) | code | — (issue) | format-builder over the patch | code (targeted) |
+| `lettucedetect-code-agent` (SWE-bench) | code | rewritten developer request | the gold fix as an edit | code intent + structural (targeted) |
 | `lettucedetect-tool-output` (squeez) | tool_output | — (given) | grounded | tool-output (targeted) |
 | `lettucedetect-acl` (acl-verbatim) | markdown | — (given) | grounded | paper (menu) |
 | `lettucedetect-readme` (GitHub) | markdown | generated | grounded | generic factual (menu) |
