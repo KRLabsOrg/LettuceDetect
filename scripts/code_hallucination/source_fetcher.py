@@ -133,22 +133,32 @@ def clone_repo(repo: str, repos_dir: Path = REPOS_DIR) -> Path | None:
     return repo_dir
 
 
+class TransientFetchError(Exception):
+    """A fetch failure that may succeed on retry (timeout, rate limit, 5xx)."""
+
+
 def fetch_file_from_github(repo: str, commit: str, filepath: str) -> str | None:
     """Fetch a file from GitHub raw.
 
     Works unauthenticated for public repos; a ``GITHUB_TOKEN`` env var, when set,
     is sent to raise the request rate limit for large runs.
+
+    Returns None only on a definitive miss (404 etc.); raises
+    :class:`TransientFetchError` on timeouts, rate limits, and server errors so
+    callers don't treat (or cache) a transient failure as a permanent miss.
     """
     url = f"{GITHUB_RAW_BASE}/{repo}/{commit}/{filepath}"
     token = os.environ.get("GITHUB_TOKEN")
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
         r = requests.get(url, headers=headers, timeout=15)
-        if r.status_code == 200:
-            return r.text
-        return None
-    except Exception:
-        return None
+    except requests.RequestException as exc:
+        raise TransientFetchError(f"{url}: {exc}") from exc
+    if r.status_code == 200:
+        return r.text
+    if r.status_code in (403, 429) or r.status_code >= 500:
+        raise TransientFetchError(f"{url}: HTTP {r.status_code}")
+    return None
 
 
 def fetch_file_at_commit(repo_dir: Path, commit: str, filepath: str) -> str | None:
@@ -719,7 +729,11 @@ def fetch_source_for_instance(
         import time
 
         for filepath in changed_files:
-            content = fetch_file_from_github(repo, commit, filepath)
+            try:
+                content = fetch_file_from_github(repo, commit, filepath)
+            except TransientFetchError as exc:
+                print(f"    transient fetch failure, skipping {filepath}: {exc}")
+                content = None
             if content:
                 source_files[filepath] = content
             time.sleep(0.3)
@@ -732,7 +746,11 @@ def fetch_source_for_instance(
 
             print(f"    Falling back to GitHub API for {repo}")
             for filepath in changed_files:
-                content = fetch_file_from_github(repo, commit, filepath)
+                try:
+                    content = fetch_file_from_github(repo, commit, filepath)
+                except TransientFetchError as exc:
+                    print(f"    transient fetch failure, skipping {filepath}: {exc}")
+                    content = None
                 if content:
                     source_files[filepath] = content
                 time.sleep(0.3)

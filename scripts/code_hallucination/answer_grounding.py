@@ -9,9 +9,10 @@ definitions at the base commit (via GitHub raw) so the context supports them.
 from __future__ import annotations
 
 import re
+import time
 from functools import lru_cache
 
-from .source_fetcher import extract_definition, fetch_file_from_github
+from .source_fetcher import TransientFetchError, extract_definition, fetch_file_from_github
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SELF_CALL = re.compile(r"\bself\.([A-Za-z_]\w*)\s*\(")
@@ -96,8 +97,26 @@ def _referenced_names(answer: str) -> set[str]:
 
 @lru_cache(maxsize=4096)
 def _fetch_cached(repo: str, commit: str, path: str) -> str | None:
-    """Fetch a repo file at a commit, cached across samples (same repo reuses modules)."""
+    """Fetch a repo file at a commit, cached across samples (same repo reuses modules).
+
+    Only definitive results are cached: a :class:`TransientFetchError` raised by
+    the fetch propagates (lru_cache does not cache exceptions), so a timeout or
+    rate-limit window never becomes a permanent miss.
+    """
     return fetch_file_from_github(repo, commit, path)
+
+
+def _fetch_with_retry(repo: str, commit: str, path: str) -> str | None:
+    """Cached fetch with one retry on transient failure; logs and skips after that."""
+    for attempt in (1, 2):
+        try:
+            return _fetch_cached(repo, commit, path)
+        except TransientFetchError as exc:
+            if attempt == 2:
+                print(f"  grounding fetch failed (transient, skipped): {exc}")
+                return None
+            time.sleep(2.0)
+    return None
 
 
 def _internal_module_paths(text: str, from_file: str) -> list[str]:
@@ -188,7 +207,7 @@ def resolve_definitions(
         return {}
 
     def fetch(path: str) -> str | None:
-        return _fetch_cached(repo, commit, path)
+        return _fetch_with_retry(repo, commit, path)
 
     def absorb(content: str | None) -> None:
         if not content:

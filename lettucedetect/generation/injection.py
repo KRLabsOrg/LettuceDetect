@@ -666,10 +666,20 @@ def _menu_user_msg(context: str, answer: str, context_chars: int) -> str:
 
 
 def _map_menu_labels(result: InjectionResult, source: str) -> InjectionResult:
-    """Attach unified category/subcategory to each span via the source's type map."""
+    """Attach unified category/subcategory to each span via the source's type map.
+
+    An edit whose native label is not in the source's map fails the whole
+    sample (``validation:unknown_native_label``) rather than emitting it.
+    """
     if result.ok:
         for lab in result.labels:
-            category, subcategory = map_label(lab["label"], source)
+            try:
+                category, subcategory = map_label(lab["label"], source)
+            except ValueError:
+                return InjectionResult(
+                    ok=False,
+                    reason=f"validation:unknown_native_label ({lab['label']!r})",
+                )
             lab["category"] = category
             lab["subcategory"] = subcategory
     return result

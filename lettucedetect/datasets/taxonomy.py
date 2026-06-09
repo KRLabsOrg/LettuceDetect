@@ -146,11 +146,15 @@ _ALL_MAPS: dict[str, dict[str, tuple[str, str | None]]] = {
 def map_label(native_label: str, source: str) -> tuple[str, str | None]:
     """Map a native source label to (category, subcategory).
 
-    Falls back to (native_label, None) when the label is not in the map,
-    so callers don't need to handle KeyError.
+    Raises ValueError on an unknown source or native label so invalid labels
+    are rejected at the boundary instead of leaking into generated data.
     """
-    mapping = _ALL_MAPS.get(source, {})
-    return mapping.get(native_label, (native_label, None))
+    if source not in _ALL_MAPS:
+        raise ValueError(f"unknown taxonomy source {source!r}")
+    mapping = _ALL_MAPS[source]
+    if native_label not in mapping:
+        raise ValueError(f"unknown native label {native_label!r} for source {source!r}")
+    return mapping[native_label]
 
 
 def is_ragtruth_fabricated(span_text: str, context: str) -> bool:
