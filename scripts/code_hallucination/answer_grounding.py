@@ -107,7 +107,7 @@ def _fetch_cached(repo: str, commit: str, path: str) -> str | None:
 
 
 def _fetch_with_retry(repo: str, commit: str, path: str) -> str | None:
-    """Cached fetch with one retry on transient failure; logs and skips after that."""
+    """Fetch via the cache with one retry on transient failure; log and skip after that."""
     for attempt in (1, 2):
         try:
             return _fetch_cached(repo, commit, path)
@@ -335,5 +335,15 @@ def render_definitions(definitions: dict[str, str]) -> str:
 
 
 def remaining_ungrounded(answer: str, context: str) -> set[str]:
-    """Names the answer references that are still absent from the context."""
-    return _ungrounded_targets(answer, context)
+    """Names the answer references that are still absent from the context.
+
+    Names the answer itself imports are not counted: the import statement is
+    evidence the name exists (stdlib/third-party modules aren't in the repo, so
+    they can't be grounded from it; repo-internal imports are grounded
+    separately by :func:`resolve_definitions`).
+    """
+    targets = _ungrounded_targets(answer, context)
+    imported: set[str] = set()
+    for _dots, _module, group in _FROM_IMPORT.findall(_strip_noncode(answer)):
+        imported.update(_import_names(group))
+    return targets - imported
