@@ -2,39 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from string import Template
 
-from openai import OpenAI
-
 from lettucedetect.detectors.cache import CacheManager
+from lettucedetect.detectors.llm_client import (
+    HALLUCINATION_JSON_SCHEMA,
+    LLMClient,
+    make_llm_client,
+)
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
 
 logger = logging.getLogger(__name__)
-
-# JSON schema for structured response format
-HALLUCINATION_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "hallucination_detection",
-        "schema": {
-            "type": "object",
-            "properties": {
-                "hallucination_list": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of exact text spans from the answer that are hallucinated",
-                }
-            },
-            "required": ["hallucination_list"],
-            "additionalProperties": False,
-        },
-        "strict": True,
-    },
-}
 
 
 class LLMDetector:
@@ -49,6 +30,9 @@ class LLMDetector:
         fewshot_path: str | None = None,
         prompt_path: str | None = None,
         cache_file: str | None = None,
+        provider: str = "openai",
+        client: LLMClient | None = None,
+        **client_kwargs,
     ):
         """Initialize the LLMDetector.
 
@@ -59,6 +43,9 @@ class LLMDetector:
         :param fewshot_path: The path to the few-shot examples.
         :param prompt_path: The path to the prompt.
         :param cache_file: The path to the cache file.
+        :param provider: Backend provider, ``"openai"`` or ``"bedrock"``. Ignored if ``client`` is given.
+        :param client: An explicit :class:`LLMClient` instance; overrides ``provider``.
+        :param client_kwargs: Extra keyword arguments forwarded to the provider client constructor.
         """
         if lang not in LANG_TO_PASSAGE:
             raise ValueError(f"Invalid language. Use one of: {', '.join(LANG_TO_PASSAGE.keys())}")
@@ -67,6 +54,7 @@ class LLMDetector:
         self.temperature = temperature
         self.lang = lang
         self.zero_shot = zero_shot
+        self.client = client or make_llm_client(provider, **client_kwargs)
 
         # Load few-shot examples
         if fewshot_path is None:
@@ -98,12 +86,6 @@ class LLMDetector:
             logger.info("Using provided cache file: %s", cache_file)
 
         self.cache = CacheManager(cache_file)
-
-    def _openai(self) -> OpenAI:
-        return OpenAI(
-            api_key=os.getenv("OPENAI_API_KEY") or "EMPTY",
-            base_url=os.getenv("OPENAI_API_BASE") or "https://api.openai.com/v1",
-        )
 
     def _fewshot_block(self) -> str:
         if self.zero_shot or not self.fewshot:
@@ -168,21 +150,15 @@ class LLMDetector:
 
         cached = self.cache.get(cache_key)
         if cached is None:
-            resp = self._openai().chat.completions.create(
+            cached = self.client.complete(
+                system="You are an expert in detecting hallucinations in LLM outputs.",
+                user=llm_prompt,
                 model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert in detecting hallucinations in LLM outputs.",
-                    },
-                    # Use the full LLM prompt here, not the raw context
-                    {"role": "user", "content": llm_prompt},
-                ],
-                response_format=HALLUCINATION_SCHEMA,
                 temperature=self.temperature,
+                schema=HALLUCINATION_JSON_SCHEMA,
             )
-            cached = resp.choices[0].message.content
-            self.cache.set(cache_key, cached)
+            if cached:
+                self.cache.set(cache_key, cached)
 
         try:
             payload = json.loads(cached)

@@ -7,7 +7,7 @@ name = "lettucedetect"
 version = "0.1.8"
 description = "Lettucedetect is a framework for detecting hallucinations in RAG applications."
 readme = {file = "README.md", content-type = "text/markdown"}
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
     {name = "Adam Kovacs", email = "kovacs@krlabs.eu"},
@@ -42,6 +42,9 @@ api = [
     "fastapi[standard]>=0.115",
     "pydantic-settings>=2.8.0",
     "httpx>=0.28"
+]
+bedrock = [
+    "boto3>=1.34",
 ]
 docs = [
     "mkdocs-material>=9.0",
