@@ -110,3 +110,30 @@ the dataset is re-audited (`check_context_quality.py`), re-grounded
   flagging heuristic alone; heuristics over-flag (the edit-style case is the
   cautionary example — the automated count suggested ~250 bad samples, reading
   showed 6).
+
+## Test-set verification (≥50% release)
+
+After the class-balance raise, the entire test split was individually reviewed
+(2,038 samples → 2,015 retained; 1,014 hallucinated / 1,001 clean, 50.3%).
+Three tiers:
+
+1. **Full first-pass review** — annotator agents read every sample against the
+   rubric in `data/v2/code_agent/annotations/packets/RUBRIC.md`: per-span
+   validity, category, boundary tightness, explanation quality (hallucinated);
+   fix-plausibility, artifacts, question↔answer match (clean). 92.9% of
+   hallucinated samples were accepted as labeled.
+2. **Blind second-pass adjudication** — every flagged case re-judged from the
+   raw sample with no access to first-pass verdicts, to prevent anchoring (an
+   earlier non-blind attempt rubber-stamped 144/144 first-pass verdicts and was
+   discarded).
+3. **Evidence arbitration** — pass disagreements resolved against the true
+   pre-fix sources: span text absent from the original repository means the
+   answer introduced it (genuine hallucination; 41/44 cases), present means the
+   span marks original code (span dropped; 3/44).
+
+Applied: 235 spans tightened to the minimal hallucinated substring, 23 invalid
+spans dropped, 2 categories corrected, 5 samples reclassified clean, 23 removed.
+No post-review rebalancing. Full artifacts (verdicts, blind adjudications,
+contested cases with resolutions, tightening decisions) live in
+`data/v2/code_agent/annotations/`; summary in `annotations/REPORT.md`.
+Train/validation remain machine-generated with automated gates only.
