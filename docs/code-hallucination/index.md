@@ -222,61 +222,30 @@ python scripts/build_hf_dataset.py \
 
 ## Training
 
-The samples use the standard `HallucinationSample` schema, so they train with the
-LettuceDetect pipeline either alone or mixed with the other sources. Two
-approaches are supported.
-
-> **Note:** the training and evaluation scripts below read a single assembled JSON
-> array, whereas generation writes `{train,dev,test}.jsonl` splits. Concatenate the
-> splits into one JSON list (or load the published dataset) before training.
-
-### Token classification (ModernBERT)
-
-A lightweight encoder that labels each answer token as supported or hallucinated.
+The samples use the standard `HallucinationSample` schema. Token-classification
+training uses `scripts/train_span_detector.py` — a fast HF-Trainer path that
+tokenizes once to an arrow dataset, trains in bf16 with dynamic padding and
+step-based eval, and selects the best checkpoint by hallucinated-token F1:
 
 ```bash
-# Code data only
-python scripts/train_code_hallucination.py \
-    --code-data-path data/v2/code_agent/code_agent_data.json \
-    --model-name answerdotai/ModernBERT-base \
-    --output-dir output/code_hallucination_detector \
-    --batch-size 4 --epochs 6 --learning-rate 1e-5
+# From the published dataset (all sources)
+python scripts/train_span_detector.py \
+    --dataset KRLabsOrg/lettucedetect-code-hallucination \
+    --model-name jhu-clsp/mmBERT-base \
+    --output-dir output/mmbert_span_detector
 
-# Code + RAGTruth combined (better text+code generalization)
-python scripts/train_code_hallucination.py \
-    --code-data-path data/v2/code_agent/code_agent_data.json \
-    --ragtruth-path data/ragtruth/ragtruth_data.json \
-    --model-name answerdotai/ModernBERT-base \
-    --output-dir output/code_hallucination_detector \
-    --batch-size 4 --epochs 6
+# From local generation outputs, code source only
+python scripts/train_span_detector.py \
+    --data data/v2/code_agent \
+    --model-name jhu-clsp/mmBERT-base \
+    --output-dir output/code_span_detector
 ```
 
-The training script uses the SWE-bench splits directly — train for training, dev
-for validation, test held out, with zero repository overlap between splits.
+Useful flags: `--sources` filters by the `dataset` field when training from the
+hub; `--doc-stride N` windows long prompts instead of truncating them (for 4k
+encoders); `--trust-remote-code` for models like EuroBERT; `--max-length`
+defaults to 8192. Splits come from the data (`dev` is used as validation, test
+is held out and scored after training), so the SWE-bench repository-disjoint
+split is preserved.
 
-### Generative span detection (Qwen SFT)
-
-Fine-tune a decoder LLM to read context + answer and emit a JSON list of
-hallucinated spans with explanations — the inverse of the injection step.
-
-```bash
-# Requires: pip install peft
-python scripts/train_generative_detector.py \
-    --code-data-path data/v2/code_agent/code_agent_data.json \
-    --model-name Qwen/Qwen3.5-2B \
-    --output-dir output/generative_detector \
-    --batch-size 2 --epochs 3 --lora-r 16
-```
-
-The model learns to output `{"hallucinated_spans": [{"text": "...", "explanation": "..."}]}`,
-or `{"hallucinated_spans": []}` for clean samples. Training uses
-[LoRA](https://arxiv.org/abs/2106.09685); only response tokens contribute to the loss.
-
-### Evaluate
-
-```bash
-python scripts/evaluate_code_hallucination.py \
-    --model_path output/code_hallucination_detector \
-    --data_path data/v2/code_agent/code_agent_data.json \
-    --evaluation_type example_level
-```
+LLM baselines on the same data run through `scripts/evaluate_llm.py`.
