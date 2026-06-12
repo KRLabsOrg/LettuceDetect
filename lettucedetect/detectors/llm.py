@@ -199,7 +199,10 @@ class LLMDetector:
         """
         spans = []
         for item in items:
-            sub = item["text"] if isinstance(item, dict) else item
+            if not isinstance(item, (str, dict)):
+                logger.warning("Skipping malformed hallucination item: %r", item)
+                continue
+            sub = item.get("text") if isinstance(item, dict) else item
             if not sub:
                 continue
             # Use regex for more reliable matching
@@ -213,6 +216,25 @@ class LLMDetector:
                         span[key] = item[key]
             spans.append(span)
         return spans
+
+    @staticmethod
+    def _parse_response(raw: str) -> list:
+        """Parse and validate the raw LLM response into a hallucination list.
+
+        Recovers the case where the model returns ``hallucination_list`` as a
+        JSON-encoded string instead of an array.
+
+        :param raw: Raw JSON string returned by the client.
+        :returns: The validated hallucination list.
+        :raises ValueError: If ``hallucination_list`` is not a list.
+        """
+        payload = json.loads(raw)
+        items = payload["hallucination_list"]
+        if isinstance(items, str):
+            items = json.loads(items)
+        if not isinstance(items, list):
+            raise ValueError(f"hallucination_list is {type(items).__name__}, expected list")
+        return items
 
     def _predict(self, prompt: str, answer: str) -> list[dict]:
         """Single (prompt, answer) pair → hallucination spans.
@@ -228,7 +250,8 @@ class LLMDetector:
         cache_key = self.cache._hash(llm_prompt, self.model, str(self.temperature))
 
         cached = self.cache.get(cache_key)
-        if cached is None:
+        from_cache = cached is not None
+        if not from_cache:
             cached = self.client.complete(
                 system="You are an expert in detecting hallucinations in LLM outputs.",
                 user=llm_prompt,
@@ -236,16 +259,19 @@ class LLMDetector:
                 temperature=self.temperature,
                 schema=self.schema,
             )
-            if cached:
-                self.cache.set(cache_key, cached)
 
         try:
-            payload = json.loads(cached)
-            return self._to_spans(payload["hallucination_list"], answer)
-        except (json.JSONDecodeError, KeyError) as e:
+            items = self._parse_response(cached)
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             logger.error("Error parsing LLM response: %s", e)
             logger.debug("Raw response: %s", cached)
+            if from_cache:
+                self.cache.delete(cache_key)
             return []
+
+        if not from_cache:
+            self.cache.set(cache_key, cached)
+        return self._to_spans(items, answer)
 
     def predict(
         self,

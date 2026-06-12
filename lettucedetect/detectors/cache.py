@@ -38,3 +38,10 @@ class CacheManager:
         with self._lock:
             self._data[key] = value
             self.path.write_text(json.dumps(self._data, ensure_ascii=False), encoding="utf-8")
+
+    def delete(self, key: str) -> None:
+        """Remove a key from the cache and persist to disk."""
+        with self._lock:
+            if key in self._data:
+                del self._data[key]
+                self.path.write_text(json.dumps(self._data, ensure_ascii=False), encoding="utf-8")
