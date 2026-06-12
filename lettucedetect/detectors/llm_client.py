@@ -15,49 +15,65 @@ from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
 
-HALLUCINATION_JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "hallucination_list": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "List of exact text spans from the answer that are hallucinated",
-        }
-    },
-    "required": ["hallucination_list"],
-    "additionalProperties": False,
-}
 
-HALLUCINATION_REASONING_JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "hallucination_list": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "Exact text span from the answer that is hallucinated",
-                    },
-                    "confidence": {
-                        "type": "number",
-                        "description": "Confidence between 0 and 1 that the span is hallucinated",
-                    },
-                    "reasoning": {
-                        "type": "string",
-                        "description": "Brief explanation of why the span is hallucinated",
-                    },
-                },
-                "required": ["text", "confidence", "reasoning"],
-                "additionalProperties": False,
-            },
-            "description": "List of hallucinated spans with confidence and reasoning",
+def build_hallucination_schema(
+    include_reasoning: bool = False,
+    categories: list[str] | None = None,
+) -> dict:
+    """Build the JSON schema for the hallucination-detection response.
+
+    With no options the response is a plain list of hallucinated substrings;
+    enabling either option switches to a list of objects carrying the extra fields.
+
+    :param include_reasoning: Add per-span ``confidence`` and ``reasoning`` fields.
+    :param categories: Allowed values for a per-span ``category`` field; omitted when None.
+    :returns: JSON schema the response object must conform to.
+    """
+    if not include_reasoning and not categories:
+        items: dict = {
+            "type": "string",
+            "description": "Exact text span from the answer that is hallucinated",
         }
-    },
-    "required": ["hallucination_list"],
-    "additionalProperties": False,
-}
+    else:
+        properties: dict = {
+            "text": {
+                "type": "string",
+                "description": "Exact text span from the answer that is hallucinated",
+            }
+        }
+        if include_reasoning:
+            properties["confidence"] = {
+                "type": "number",
+                "description": "Confidence between 0 and 1 that the span is hallucinated",
+            }
+            properties["reasoning"] = {
+                "type": "string",
+                "description": "Brief explanation of why the span is hallucinated",
+            }
+        if categories:
+            properties["category"] = {
+                "type": "string",
+                "enum": list(categories),
+                "description": "Hallucination category of the span",
+            }
+        items = {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+            "additionalProperties": False,
+        }
+    return {
+        "type": "object",
+        "properties": {
+            "hallucination_list": {
+                "type": "array",
+                "items": items,
+                "description": "List of hallucinated spans from the answer",
+            }
+        },
+        "required": ["hallucination_list"],
+        "additionalProperties": False,
+    }
 
 
 class LLMClient(ABC):

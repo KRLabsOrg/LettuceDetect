@@ -15,15 +15,17 @@ import types
 
 import pytest
 
+from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import (
-    HALLUCINATION_JSON_SCHEMA,
-    HALLUCINATION_REASONING_JSON_SCHEMA,
     BedrockClient,
     LLMClient,
     OpenAIClient,
+    build_hallucination_schema,
     make_llm_client,
 )
+
+PLAIN_SCHEMA = build_hallucination_schema()
 
 
 class FakeClient(LLMClient):
@@ -102,6 +104,30 @@ class TestMakeLLMClient:
             make_llm_client("anthropic")
 
 
+class TestBuildHallucinationSchema:
+    """Tests for the response-schema builder."""
+
+    def test_plain_schema_lists_strings(self):
+        """Without options the hallucination list holds plain strings."""
+        schema = build_hallucination_schema()
+        assert schema["properties"]["hallucination_list"]["items"]["type"] == "string"
+
+    def test_reasoning_schema_requires_confidence_and_reasoning(self):
+        """include_reasoning adds confidence and reasoning to the span objects."""
+        items = build_hallucination_schema(include_reasoning=True)["properties"][
+            "hallucination_list"
+        ]["items"]
+        assert items["required"] == ["text", "confidence", "reasoning"]
+
+    def test_categories_become_an_enum(self):
+        """Passing categories adds a category field constrained to those values."""
+        items = build_hallucination_schema(categories=["a", "b"])["properties"][
+            "hallucination_list"
+        ]["items"]
+        assert items["required"] == ["text", "category"]
+        assert items["properties"]["category"]["enum"] == ["a", "b"]
+
+
 class TestLLMDetectorWithInjectedClient:
     """Tests for LLMDetector routing through an injected LLMClient."""
 
@@ -137,7 +163,7 @@ class TestLLMDetectorWithInjectedClient:
         call = client.calls[0]
         assert call["model"] == "my-model"
         assert call["temperature"] == 0.7
-        assert call["schema"] is HALLUCINATION_JSON_SCHEMA
+        assert call["schema"] == PLAIN_SCHEMA
         assert "hallucination_list" in call["schema"]["properties"]
         assert call["schema"]["required"] == ["hallucination_list"]
 
@@ -268,7 +294,7 @@ class TestLLMDetectorWithInjectedClient:
         detector.predict(["ctx"], "an answer", "a question", output_format="spans")
 
         call = client.calls[0]
-        assert call["schema"] is HALLUCINATION_REASONING_JSON_SCHEMA
+        assert call["schema"] == build_hallucination_schema(include_reasoning=True)
         assert '"confidence"' in call["user"]
         assert '"reasoning"' in call["user"]
 
@@ -280,8 +306,101 @@ class TestLLMDetectorWithInjectedClient:
 
         spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
 
-        assert client.calls[0]["schema"] is HALLUCINATION_JSON_SCHEMA
+        assert client.calls[0]["schema"] == PLAIN_SCHEMA
         assert spans == [{"start": 9, "end": 14, "text": "sunny"}]
+
+    def test_include_taxonomy_returns_category_in_spans(self, cache_file):
+        """With include_taxonomy=True, spans carry the LLM's category."""
+        answer = "The capital of France is Paris and it is sunny."
+        response = json.dumps(
+            {"hallucination_list": [{"text": "it is sunny", "category": "unsupported_addition"}]}
+        )
+        client = FakeClient(response)
+        detector = make_detector(client, cache_file, include_taxonomy=True)
+
+        spans = detector.predict(
+            context=["France is a country in Europe."],
+            answer=answer,
+            question="What is the capital of France?",
+            output_format="spans",
+        )
+
+        assert spans == [
+            {
+                "start": answer.index("it is sunny"),
+                "end": answer.index("it is sunny") + len("it is sunny"),
+                "text": "it is sunny",
+                "category": "unsupported_addition",
+            }
+        ]
+
+    def test_include_taxonomy_sends_category_schema_and_prompt(self, cache_file):
+        """include_taxonomy=True adds a category enum to the schema and prompt instructions."""
+        client = FakeClient('{"hallucination_list": []}')
+        detector = make_detector(client, cache_file, include_taxonomy=True)
+
+        detector.predict(["ctx"], "an answer", "a question", output_format="spans")
+
+        call = client.calls[0]
+        category = call["schema"]["properties"]["hallucination_list"]["items"]["properties"][
+            "category"
+        ]
+        assert category["enum"] == list(CATEGORY_DEFINITIONS)
+        assert '"category"' in call["user"]
+        for name, definition in CATEGORY_DEFINITIONS.items():
+            assert name in call["user"]
+            assert definition in call["user"]
+        assert '"confidence"' not in call["user"]
+
+    def test_include_taxonomy_accepts_custom_categories(self, cache_file):
+        """A list of category names replaces the unified taxonomy in schema and prompt."""
+        client = FakeClient('{"hallucination_list": []}')
+        detector = make_detector(client, cache_file, include_taxonomy=["minor", "major"])
+
+        detector.predict(["ctx"], "an answer", "a question", output_format="spans")
+
+        call = client.calls[0]
+        category = call["schema"]["properties"]["hallucination_list"]["items"]["properties"][
+            "category"
+        ]
+        assert category["enum"] == ["minor", "major"]
+        assert '"minor"' in call["user"]
+        assert '"major"' in call["user"]
+        for name in CATEGORY_DEFINITIONS:
+            assert name not in call["user"]
+
+    def test_include_taxonomy_with_reasoning_combines_all_fields(self, cache_file):
+        """Both flags together yield spans with confidence, reasoning, and category."""
+        answer = "Lisbon is the capital of Spain."
+        response = json.dumps(
+            {
+                "hallucination_list": [
+                    {
+                        "text": "Spain",
+                        "confidence": 0.9,
+                        "reasoning": "The source says Lisbon is in Portugal.",
+                        "category": "contradiction",
+                    }
+                ]
+            }
+        )
+        client = FakeClient(response)
+        detector = make_detector(client, cache_file, include_reasoning=True, include_taxonomy=True)
+
+        spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
+
+        assert spans == [
+            {
+                "start": answer.index("Spain"),
+                "end": answer.index("Spain") + len("Spain"),
+                "text": "Spain",
+                "confidence": 0.9,
+                "reasoning": "The source says Lisbon is in Portugal.",
+                "category": "contradiction",
+            }
+        ]
+        items = client.calls[0]["schema"]["properties"]["hallucination_list"]["items"]
+        assert items["required"] == ["text", "confidence", "reasoning", "category"]
 
     def test_missing_key_in_client_output_yields_empty_spans(self, cache_file):
         """A response missing the expected key yields no spans instead of raising."""
@@ -336,7 +455,7 @@ class TestOpenAIClientComplete:
             user="user prompt",
             model="gpt-test",
             temperature=0.3,
-            schema=HALLUCINATION_JSON_SCHEMA,
+            schema=PLAIN_SCHEMA,
         )
 
         assert result == '{"hallucination_list": ["Paris"]}'
@@ -351,7 +470,7 @@ class TestOpenAIClientComplete:
         json_schema = response_format["json_schema"]
         assert json_schema["name"] == "hallucination_detection"
         assert json_schema["strict"] is True
-        assert json_schema["schema"] is HALLUCINATION_JSON_SCHEMA
+        assert json_schema["schema"] is PLAIN_SCHEMA
 
 
 def _make_bedrock_client_with_fake(fake_runtime) -> BedrockClient:
@@ -393,16 +512,14 @@ class TestBedrockClientComplete:
             user="user",
             model="anthropic.claude-3",
             temperature=0.0,
-            schema=HALLUCINATION_JSON_SCHEMA,
+            schema=PLAIN_SCHEMA,
         )
 
         assert json.loads(result) == {"hallucination_list": ["X"]}
         assert fake.converse_kwargs["modelId"] == "anthropic.claude-3"
         tool_config = fake.converse_kwargs["toolConfig"]
         assert tool_config["toolChoice"] == {"tool": {"name": "record_hallucinations"}}
-        assert (
-            tool_config["tools"][0]["toolSpec"]["inputSchema"]["json"] is HALLUCINATION_JSON_SCHEMA
-        )
+        assert tool_config["tools"][0]["toolSpec"]["inputSchema"]["json"] is PLAIN_SCHEMA
 
     def test_complete_with_text_block_before_tool_use(self):
         """complete() finds the toolUse block even after a leading text block."""
@@ -418,7 +535,7 @@ class TestBedrockClientComplete:
         }
         client = _make_bedrock_client_with_fake(_FakeBedrockRuntime(response))
 
-        result = client.complete("s", "u", "m", 0.0, HALLUCINATION_JSON_SCHEMA)
+        result = client.complete("s", "u", "m", 0.0, PLAIN_SCHEMA)
         assert json.loads(result) == {"hallucination_list": ["Y"]}
 
     def test_complete_without_tool_use_returns_empty_string(self):
@@ -426,5 +543,5 @@ class TestBedrockClientComplete:
         response = {"output": {"message": {"content": [{"text": "no tool call here"}]}}}
         client = _make_bedrock_client_with_fake(_FakeBedrockRuntime(response))
 
-        result = client.complete("s", "u", "m", 0.0, HALLUCINATION_JSON_SCHEMA)
+        result = client.complete("s", "u", "m", 0.0, PLAIN_SCHEMA)
         assert result == ""

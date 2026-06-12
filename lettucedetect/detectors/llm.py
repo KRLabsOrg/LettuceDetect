@@ -7,11 +7,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from string import Template
 
+from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS
 from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.llm_client import (
-    HALLUCINATION_JSON_SCHEMA,
-    HALLUCINATION_REASONING_JSON_SCHEMA,
     LLMClient,
+    build_hallucination_schema,
     make_llm_client,
 )
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
@@ -22,18 +22,6 @@ _RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
    (no extra keys, no markdown, no code-block fences):
 
    `{"hallucination_list": ["substring1", "substring2", …]}`
-
-   If none are found, return `{"hallucination_list": []}`."""
-
-_RESPONSE_FORMAT_REASONING = """**Return** a JSON object following *exactly* this schema
-   (no extra keys, no markdown, no code-block fences):
-
-   `{"hallucination_list": [{"text": "substring1", "confidence": 0.95, "reasoning": "why it is unsupported"}, …]}`
-
-   - "text" must be an exact substring of the answer.
-   - "confidence" is your confidence between 0 and 1 that the span is hallucinated.
-   - "reasoning" is a brief explanation of why the span contradicts or is unsupported by the source.
-   - Examples above may show only the hallucinated substrings; still return full objects.
 
    If none are found, return `{"hallucination_list": []}`."""
 
@@ -53,6 +41,7 @@ class LLMDetector:
         provider: str = "openai",
         client: LLMClient | None = None,
         include_reasoning: bool = False,
+        include_taxonomy: bool | list[str] = False,
         **client_kwargs,
     ):
         """Initialize the LLMDetector.
@@ -69,6 +58,11 @@ class LLMDetector:
         :param include_reasoning: If True, ask the LLM for a confidence score and a short
             reasoning per span and include them as ``confidence`` and ``reasoning`` keys
             in the returned spans.
+        :param include_taxonomy: If True, ask the LLM to classify each span into one of
+            the unified taxonomy categories defined in
+            :data:`lettucedetect.datasets.taxonomy.CATEGORY_DEFINITIONS`; pass a list of
+            category names to use a custom taxonomy instead. The classification is
+            included as a ``category`` key in the returned spans.
         :param client_kwargs: Extra keyword arguments forwarded to the provider client constructor.
         """
         if lang not in LANG_TO_PASSAGE:
@@ -79,6 +73,14 @@ class LLMDetector:
         self.lang = lang
         self.zero_shot = zero_shot
         self.include_reasoning = include_reasoning
+        if isinstance(include_taxonomy, bool):
+            self.categories = list(CATEGORY_DEFINITIONS) if include_taxonomy else None
+        else:
+            self.categories = list(include_taxonomy) or None
+        self.schema = build_hallucination_schema(
+            include_reasoning=include_reasoning,
+            categories=self.categories,
+        )
         self.client = client or make_llm_client(provider, **client_kwargs)
 
         # Load few-shot examples
@@ -126,6 +128,48 @@ class LLMDetector:
             )
         return "\n".join(lines)
 
+    def _response_format_block(self) -> str:
+        """Compose the response-format instructions for the enabled options.
+
+        :return: The response-format block for the prompt template.
+        """
+        if not self.include_reasoning and not self.categories:
+            return _RESPONSE_FORMAT
+
+        example: dict = {"text": "substring1"}
+        notes = ['- "text" must be an exact substring of the answer.']
+        if self.include_reasoning:
+            example["confidence"] = 0.95
+            example["reasoning"] = "why it is unsupported"
+            notes.append(
+                '- "confidence" is your confidence between 0 and 1 that the span is hallucinated.'
+            )
+            notes.append(
+                '- "reasoning" is a brief explanation of why the span contradicts or is unsupported by the source.'
+            )
+        if self.categories:
+            example["category"] = self.categories[0]
+            category_lines = "\n".join(
+                f'     - "{name}": {CATEGORY_DEFINITIONS[name]}'
+                if name in CATEGORY_DEFINITIONS
+                else f'     - "{name}"'
+                for name in self.categories
+            )
+            notes.append('- "category" classifies the hallucination as one of:\n' + category_lines)
+        notes.append(
+            "- Examples above may show only the hallucinated substrings; still return full objects."
+        )
+
+        example_json = json.dumps(example, ensure_ascii=False)
+        notes_block = "\n   ".join(notes)
+        return (
+            "**Return** a JSON object following *exactly* this schema\n"
+            "   (no extra keys, no markdown, no code-block fences):\n\n"
+            f'   `{{"hallucination_list": [{example_json}, …]}}`\n\n'
+            f"   {notes_block}\n\n"
+            '   If none are found, return `{"hallucination_list": []}`.'
+        )
+
     def _build_prompt(self, context: str, answer: str) -> str:
         """Fill the template with runtime values, inserting few-shot examples.
 
@@ -140,17 +184,16 @@ class LLMDetector:
             context=context,
             answer=answer,
             fewshot_block=self._fewshot_block(),
-            response_format_block=(
-                _RESPONSE_FORMAT_REASONING if self.include_reasoning else _RESPONSE_FORMAT
-            ),
+            response_format_block=self._response_format_block(),
         )
 
     @staticmethod
     def _to_spans(items: list[str | dict], answer: str) -> list[dict]:
         """Convert hallucinated items to a list of spans.
 
-        :param items: List of hallucinated substrings, or objects with ``text``,
-            ``confidence``, and ``reasoning`` keys when reasoning is enabled.
+        :param items: List of hallucinated substrings, or objects with a ``text`` key
+            plus ``confidence``/``reasoning``/``category`` keys depending on the
+            enabled options.
         :param answer: The answer string.
         :returns: List of spans.
         """
@@ -165,8 +208,9 @@ class LLMDetector:
                 continue
             span = {"start": match.start(), "end": match.end(), "text": sub}
             if isinstance(item, dict):
-                span["confidence"] = item.get("confidence")
-                span["reasoning"] = item.get("reasoning")
+                for key in ("confidence", "reasoning", "category"):
+                    if key in item:
+                        span[key] = item[key]
             spans.append(span)
         return spans
 
@@ -190,11 +234,7 @@ class LLMDetector:
                 user=llm_prompt,
                 model=self.model,
                 temperature=self.temperature,
-                schema=(
-                    HALLUCINATION_REASONING_JSON_SCHEMA
-                    if self.include_reasoning
-                    else HALLUCINATION_JSON_SCHEMA
-                ),
+                schema=self.schema,
             )
             if cached:
                 self.cache.set(cache_key, cached)
