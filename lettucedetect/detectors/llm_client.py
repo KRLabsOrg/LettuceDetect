@@ -28,6 +28,37 @@ HALLUCINATION_JSON_SCHEMA = {
     "additionalProperties": False,
 }
 
+HALLUCINATION_REASONING_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "hallucination_list": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Exact text span from the answer that is hallucinated",
+                    },
+                    "confidence": {
+                        "type": "number",
+                        "description": "Confidence between 0 and 1 that the span is hallucinated",
+                    },
+                    "reasoning": {
+                        "type": "string",
+                        "description": "Brief explanation of why the span is hallucinated",
+                    },
+                },
+                "required": ["text", "confidence", "reasoning"],
+                "additionalProperties": False,
+            },
+            "description": "List of hallucinated spans with confidence and reasoning",
+        }
+    },
+    "required": ["hallucination_list"],
+    "additionalProperties": False,
+}
+
 
 class LLMClient(ABC):
     """Backend that turns a prompt into a schema-conforming JSON string."""

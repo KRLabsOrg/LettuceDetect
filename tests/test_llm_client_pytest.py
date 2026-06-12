@@ -18,6 +18,7 @@ import pytest
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import (
     HALLUCINATION_JSON_SCHEMA,
+    HALLUCINATION_REASONING_JSON_SCHEMA,
     BedrockClient,
     LLMClient,
     OpenAIClient,
@@ -224,6 +225,63 @@ class TestLLMDetectorWithInjectedClient:
 
         spans = detector.predict(["ctx"], "answer", "q?", output_format="spans")
         assert spans == []
+
+    def test_include_reasoning_returns_confidence_and_reasoning_in_spans(self, cache_file):
+        """With include_reasoning=True, spans carry the LLM's confidence and reasoning."""
+        answer = "The capital of France is Paris and it is sunny."
+        response = json.dumps(
+            {
+                "hallucination_list": [
+                    {
+                        "text": "it is sunny",
+                        "confidence": 0.85,
+                        "reasoning": "The source says nothing about the weather.",
+                    }
+                ]
+            }
+        )
+        client = FakeClient(response)
+        detector = make_detector(client, cache_file, include_reasoning=True)
+
+        spans = detector.predict(
+            context=["France is a country in Europe."],
+            answer=answer,
+            question="What is the capital of France?",
+            output_format="spans",
+        )
+
+        assert spans == [
+            {
+                "start": answer.index("it is sunny"),
+                "end": answer.index("it is sunny") + len("it is sunny"),
+                "text": "it is sunny",
+                "confidence": 0.85,
+                "reasoning": "The source says nothing about the weather.",
+            }
+        ]
+
+    def test_include_reasoning_sends_reasoning_schema_and_prompt(self, cache_file):
+        """include_reasoning=True switches the schema and the prompt's format instructions."""
+        client = FakeClient('{"hallucination_list": []}')
+        detector = make_detector(client, cache_file, include_reasoning=True)
+
+        detector.predict(["ctx"], "an answer", "a question", output_format="spans")
+
+        call = client.calls[0]
+        assert call["schema"] is HALLUCINATION_REASONING_JSON_SCHEMA
+        assert '"confidence"' in call["user"]
+        assert '"reasoning"' in call["user"]
+
+    def test_include_reasoning_off_keeps_plain_schema_and_spans(self, cache_file):
+        """The default keeps the plain string-list schema and spans without extra keys."""
+        answer = "Paris is sunny."
+        client = FakeClient('{"hallucination_list": ["sunny"]}')
+        detector = make_detector(client, cache_file)
+
+        spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
+
+        assert client.calls[0]["schema"] is HALLUCINATION_JSON_SCHEMA
+        assert spans == [{"start": 9, "end": 14, "text": "sunny"}]
 
     def test_missing_key_in_client_output_yields_empty_spans(self, cache_file):
         """A response missing the expected key yields no spans instead of raising."""

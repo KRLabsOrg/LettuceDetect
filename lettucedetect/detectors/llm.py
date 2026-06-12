@@ -10,12 +10,32 @@ from string import Template
 from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.llm_client import (
     HALLUCINATION_JSON_SCHEMA,
+    HALLUCINATION_REASONING_JSON_SCHEMA,
     LLMClient,
     make_llm_client,
 )
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
 
 logger = logging.getLogger(__name__)
+
+_RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
+   (no extra keys, no markdown, no code-block fences):
+
+   `{"hallucination_list": ["substring1", "substring2", …]}`
+
+   If none are found, return `{"hallucination_list": []}`."""
+
+_RESPONSE_FORMAT_REASONING = """**Return** a JSON object following *exactly* this schema
+   (no extra keys, no markdown, no code-block fences):
+
+   `{"hallucination_list": [{"text": "substring1", "confidence": 0.95, "reasoning": "why it is unsupported"}, …]}`
+
+   - "text" must be an exact substring of the answer.
+   - "confidence" is your confidence between 0 and 1 that the span is hallucinated.
+   - "reasoning" is a brief explanation of why the span contradicts or is unsupported by the source.
+   - Examples above may show only the hallucinated substrings; still return full objects.
+
+   If none are found, return `{"hallucination_list": []}`."""
 
 
 class LLMDetector:
@@ -32,6 +52,7 @@ class LLMDetector:
         cache_file: str | None = None,
         provider: str = "openai",
         client: LLMClient | None = None,
+        include_reasoning: bool = False,
         **client_kwargs,
     ):
         """Initialize the LLMDetector.
@@ -45,6 +66,9 @@ class LLMDetector:
         :param cache_file: The path to the cache file.
         :param provider: Backend provider, ``"openai"`` or ``"bedrock"``. Ignored if ``client`` is given.
         :param client: An explicit :class:`LLMClient` instance; overrides ``provider``.
+        :param include_reasoning: If True, ask the LLM for a confidence score and a short
+            reasoning per span and include them as ``confidence`` and ``reasoning`` keys
+            in the returned spans.
         :param client_kwargs: Extra keyword arguments forwarded to the provider client constructor.
         """
         if lang not in LANG_TO_PASSAGE:
@@ -54,6 +78,7 @@ class LLMDetector:
         self.temperature = temperature
         self.lang = lang
         self.zero_shot = zero_shot
+        self.include_reasoning = include_reasoning
         self.client = client or make_llm_client(provider, **client_kwargs)
 
         # Load few-shot examples
@@ -115,24 +140,34 @@ class LLMDetector:
             context=context,
             answer=answer,
             fewshot_block=self._fewshot_block(),
+            response_format_block=(
+                _RESPONSE_FORMAT_REASONING if self.include_reasoning else _RESPONSE_FORMAT
+            ),
         )
 
     @staticmethod
-    def _to_spans(substrs: list[str], answer: str) -> list[dict]:
-        """Convert a list of substrings to a list of spans.
+    def _to_spans(items: list[str | dict], answer: str) -> list[dict]:
+        """Convert hallucinated items to a list of spans.
 
-        :param substrs: List of substrings.
+        :param items: List of hallucinated substrings, or objects with ``text``,
+            ``confidence``, and ``reasoning`` keys when reasoning is enabled.
         :param answer: The answer string.
         :returns: List of spans.
         """
         spans = []
-        for sub in substrs:
+        for item in items:
+            sub = item["text"] if isinstance(item, dict) else item
             if not sub:
                 continue
             # Use regex for more reliable matching
             match = re.search(re.escape(sub), answer)
-            if match:
-                spans.append({"start": match.start(), "end": match.end(), "text": sub})
+            if not match:
+                continue
+            span = {"start": match.start(), "end": match.end(), "text": sub}
+            if isinstance(item, dict):
+                span["confidence"] = item.get("confidence")
+                span["reasoning"] = item.get("reasoning")
+            spans.append(span)
         return spans
 
     def _predict(self, prompt: str, answer: str) -> list[dict]:
@@ -155,7 +190,11 @@ class LLMDetector:
                 user=llm_prompt,
                 model=self.model,
                 temperature=self.temperature,
-                schema=HALLUCINATION_JSON_SCHEMA,
+                schema=(
+                    HALLUCINATION_REASONING_JSON_SCHEMA
+                    if self.include_reasoning
+                    else HALLUCINATION_JSON_SCHEMA
+                ),
             )
             if cached:
                 self.cache.set(cache_key, cached)
