@@ -234,7 +234,10 @@ def main() -> None:
         processing_class=tokenizer,
         compute_metrics=compute_metrics,
     )
-    trainer.train(resume_from_checkpoint=args.resume)
+    # Resume only if a checkpoint actually exists, so the same command works for a
+    # fresh start and for a post-reboot relaunch.
+    has_ckpt = bool(list(Path(args.output_dir).glob("checkpoint-*")))
+    trainer.train(resume_from_checkpoint=args.resume and has_ckpt)
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
