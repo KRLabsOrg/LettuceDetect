@@ -222,7 +222,6 @@ def main() -> None:
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
-        group_by_length=True,
         bf16=torch.cuda.is_available() and torch.cuda.is_bf16_supported(),
         seed=args.seed,
         report_to="none",
