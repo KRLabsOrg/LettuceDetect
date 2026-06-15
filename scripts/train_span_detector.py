@@ -108,7 +108,11 @@ def tokenize_split(
     def tok(batch: dict) -> dict:
         enc = tokenizer(
             batch["prompt"], batch["answer"],
-            truncation="only_first", max_length=max_length, return_offsets_mapping=True,
+            # longest_first (not only_first): if an answer alone exceeds max_length,
+            # only_first can't fit it by truncating the prompt and the fast tokenizer
+            # errors. longest_first still truncates only the prompt in the common
+            # (long-prompt) case, keeping the answer and its label offsets intact.
+            truncation="longest_first", max_length=max_length, return_offsets_mapping=True,
         )
         labels = [
             token_labels(enc.sequence_ids(i), enc["offset_mapping"][i], batch["labels"][i])
