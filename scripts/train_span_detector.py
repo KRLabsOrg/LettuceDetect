@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
@@ -96,37 +95,29 @@ def token_labels(
 
 
 def tokenize_split(
-    rows: list[dict], tokenizer: AutoTokenizer, max_length: int, doc_stride: int
+    rows: list[dict], tokenizer: AutoTokenizer, max_length: int, doc_stride: int, num_proc: int
 ) -> Dataset:
-    """Tokenize once into an arrow-backed dataset (windowed over the prompt when stride > 0)."""
+    """Tokenize via a cached, parallel ``.map`` (disk-cached, so reruns skip it).
 
-    def generate() -> Iterator[dict]:
-        for row in rows:
-            kwargs: dict = {
-                "text": row["prompt"],
-                "text_pair": row["answer"],
-                "truncation": "only_first",
-                "max_length": max_length,
-                "return_offsets_mapping": True,
-            }
-            if doc_stride > 0:
-                kwargs["stride"] = doc_stride
-                kwargs["return_overflowing_tokens"] = True
-            enc = tokenizer(**kwargs)
-            n_windows = len(enc["input_ids"]) if doc_stride > 0 else 1
-            for i in range(n_windows):
-                idx = i if doc_stride > 0 else None
-                seq_ids = enc.sequence_ids(i) if doc_stride > 0 else enc.sequence_ids()
-                offsets = enc["offset_mapping"][idx] if idx is not None else enc["offset_mapping"]
-                input_ids = enc["input_ids"][idx] if idx is not None else enc["input_ids"]
-                attention = enc["attention_mask"][idx] if idx is not None else enc["attention_mask"]
-                yield {
-                    "input_ids": input_ids,
-                    "attention_mask": attention,
-                    "labels": token_labels(seq_ids, offsets, row["labels"]),
-                }
+    ``doc_stride`` is not supported here (kept truncation-only); add windowing back
+    if a 4k encoder ever needs it.
+    """
+    if doc_stride > 0:
+        raise SystemExit("--doc-stride not supported with cached tokenization; use 0")
 
-    return Dataset.from_generator(generate)
+    def tok(batch: dict) -> dict:
+        enc = tokenizer(
+            batch["prompt"], batch["answer"],
+            truncation="only_first", max_length=max_length, return_offsets_mapping=True,
+        )
+        labels = [
+            token_labels(enc.sequence_ids(i), enc["offset_mapping"][i], batch["labels"][i])
+            for i in range(len(batch["prompt"]))
+        ]
+        return {"input_ids": enc["input_ids"], "attention_mask": enc["attention_mask"], "labels": labels}
+
+    ds = Dataset.from_list(rows)
+    return ds.map(tok, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
 
 
 def compute_metrics(eval_pred: tuple) -> dict[str, float]:
@@ -172,6 +163,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--trust-remote-code", action="store_true", help="Needed for e.g. EuroBERT.")
     ap.add_argument("--limit", type=int, default=0, help="Cap rows per split (0 = all). For smoke tests.")
+    ap.add_argument("--num-proc", type=int, default=8, help="Tokenization workers.")
+    ap.add_argument("--resume", action="store_true", help="Resume from last checkpoint in --output-dir.")
     args = ap.parse_args()
     if not args.dataset and not args.data:  # both empty lists
         ap.error("provide --dataset and/or --data")
@@ -184,9 +177,6 @@ def main() -> None:
     if args.limit:
         rows = {split: r[: args.limit] for split, r in rows.items()}
     print({split: len(r) for split, r in rows.items()})
-
-    train_ds = tokenize_split(rows["train"], tokenizer, args.max_length, args.doc_stride)
-    eval_ds = tokenize_split(rows["validation"], tokenizer, args.max_length, args.doc_stride)
 
     config = AutoConfig.from_pretrained(
         args.model_name,
@@ -226,6 +216,11 @@ def main() -> None:
         seed=args.seed,
         report_to="none",
     )
+    # Under DDP, only rank 0 tokenizes + writes the cache; other ranks load it.
+    with training_args.main_process_first():
+        train_ds = tokenize_split(rows["train"], tokenizer, args.max_length, args.doc_stride, args.num_proc)
+        eval_ds = tokenize_split(rows["validation"], tokenizer, args.max_length, args.doc_stride, args.num_proc)
+
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -235,12 +230,13 @@ def main() -> None:
         processing_class=tokenizer,
         compute_metrics=compute_metrics,
     )
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume)
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
 
     if rows["test"]:
-        test_ds = tokenize_split(rows["test"], tokenizer, args.max_length, args.doc_stride)
+        with training_args.main_process_first():
+            test_ds = tokenize_split(rows["test"], tokenizer, args.max_length, args.doc_stride, args.num_proc)
         print("test:", trainer.evaluate(test_ds, metric_key_prefix="test"))
 
 
