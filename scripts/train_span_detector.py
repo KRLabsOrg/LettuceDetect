@@ -171,6 +171,7 @@ def main() -> None:
     ap.add_argument("--eval-steps", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--trust-remote-code", action="store_true", help="Needed for e.g. EuroBERT.")
+    ap.add_argument("--limit", type=int, default=0, help="Cap rows per split (0 = all). For smoke tests.")
     args = ap.parse_args()
     if not args.dataset and not args.data:  # both empty lists
         ap.error("provide --dataset and/or --data")
@@ -180,6 +181,8 @@ def main() -> None:
         args.model_name, use_fast=True, trust_remote_code=args.trust_remote_code
     )
     rows = load_rows(args.dataset, args.data, sources)
+    if args.limit:
+        rows = {split: r[: args.limit] for split, r in rows.items()}
     print({split: len(r) for split, r in rows.items()})
 
     train_ds = tokenize_split(rows["train"], tokenizer, args.max_length, args.doc_stride)
