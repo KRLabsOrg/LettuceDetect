@@ -54,7 +54,7 @@ def main():
     def load_detector():
         return HallucinationDetector(
             method="transformer",
-            model_path="KRLabsOrg/lettucedect-base-modernbert-en-v1",
+            model_path="output/hallucination_detection_ettin_17m",
         )
 
     detector = load_detector()

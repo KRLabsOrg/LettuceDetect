@@ -42,11 +42,11 @@ SPLIT_ALIASES = {"dev": "validation"}
 
 
 def load_rows(
-    dataset: str | None, data_dirs: list[str], sources: list[str] | None
+    datasets_: list[str], data_dirs: list[str], sources: list[str] | None
 ) -> dict[str, list[dict]]:
-    """Return ``{split: [{prompt, answer, labels}, ...]}`` from the hub or local dirs."""
+    """Return ``{split: [{prompt, answer, labels}, ...]}`` merged from hub datasets and/or local dirs."""
     rows: dict[str, list[dict]] = {"train": [], "validation": [], "test": []}
-    if dataset:
+    for dataset in datasets_:
         from datasets import load_dataset
 
         dd = load_dataset(dataset)
@@ -149,7 +149,8 @@ def main() -> None:
     """CLI entry point."""
     ap = argparse.ArgumentParser(description="Train a hallucination span detector (fast path).")
     ap.add_argument(
-        "--dataset", help="HF hub dataset id (e.g. KRLabsOrg/lettucedetect-code-hallucination)."
+        "--dataset", action="append", default=[],
+        help="HF hub dataset id (repeatable; merged across all given).",
     )
     ap.add_argument(
         "--data", action="append", default=[], help="Local data/v2 source dir (repeatable)."
@@ -171,7 +172,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--trust-remote-code", action="store_true", help="Needed for e.g. EuroBERT.")
     args = ap.parse_args()
-    if not args.dataset and not args.data:
+    if not args.dataset and not args.data:  # both empty lists
         ap.error("provide --dataset and/or --data")
 
     sources = args.sources.split(",") if args.sources else None

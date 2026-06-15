@@ -183,3 +183,5 @@ temp/
 # cache/
 lettucedetect/cache/
 testing/
+tool-output-extractor/
+reviews/
