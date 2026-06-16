@@ -25,10 +25,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from datasets import load_dataset  # noqa: E402
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationSample  # noqa: E402
-from lettucedetect.models.evaluator import (  # noqa: E402
-    evaluate_detector_char_level,
-    evaluate_detector_example_level_batch,
-)
 from lettucedetect.models.inference import HallucinationDetector  # noqa: E402
 
 
@@ -73,21 +69,44 @@ def main() -> None:
     detector = HallucinationDetector(method="transformer", model_path=args.model_path, **kw)
     samples = load_samples(args.dataset, args.split, args.limit)
 
+    # Predict each sample ONCE; metrics are computed from the cached spans.
+    from tqdm import tqdm
+
+    rows = []
+    for s in tqdm(samples, desc="predict"):
+        pred = detector.predict_prompt(s.prompt, s.answer, output_format="spans")
+        rows.append((getattr(s, args.by), s.labels, pred))
+
+    def metrics(items: list) -> tuple[float, float, float, float]:
+        ov = pp = gg = 0  # char overlap / predicted / gold
+        etp = efp = efn = 0  # example-level on "has any span"
+        for _key, gold, pred in items:
+            pp += sum(p["end"] - p["start"] for p in pred)
+            gg += sum(g["end"] - g["start"] for g in gold)
+            for p in pred:
+                for g in gold:
+                    ov += max(0, min(p["end"], g["end"]) - max(p["start"], g["start"]))
+            pe, ge = bool(pred), bool(gold)
+            etp += pe and ge
+            efp += pe and not ge
+            efn += ge and not pe
+        cp = ov / pp if pp else 0.0
+        cr = ov / gg if gg else 0.0
+        cf = 2 * cp * cr / (cp + cr) if cp + cr else 0.0
+        ep = etp / (etp + efp) if etp + efp else 0.0
+        er = etp / (etp + efn) if etp + efn else 0.0
+        ef = 2 * ep * er / (ep + er) if ep + er else 0.0
+        return cf, cp, cr, ef
+
     groups: dict[str, list] = collections.defaultdict(list)
-    groups["ALL"] = samples
-    for s in samples:
-        groups[getattr(s, args.by)].append(s)
+    for r in rows:
+        groups[r[0]].append(r)
 
     print(f"{'group':<28} {'n':>6} {'span_f1':>8} {'span_p':>7} {'span_r':>7} {'ex_f1':>7}")
-    for name in ["ALL", *sorted(k for k in groups if k != "ALL")]:
-        grp = groups[name]
-        span = evaluate_detector_char_level(detector, grp)
-        ex = evaluate_detector_example_level_batch(detector, grp, verbose=False)
-        exf1 = ex.get("hallucinated", {}).get("f1", 0.0)
-        print(
-            f"{name:<28} {len(grp):>6} {span['f1']:>8.4f} {span['precision']:>7.4f} "
-            f"{span['recall']:>7.4f} {exf1:>7.4f}"
-        )
+    for name in ["ALL", *sorted(groups)]:
+        grp = rows if name == "ALL" else groups[name]
+        cf, cp, cr, ef = metrics(grp)
+        print(f"{name:<28} {len(grp):>6} {cf:>8.4f} {cp:>7.4f} {cr:>7.4f} {ef:>7.4f}")
 
 
 if __name__ == "__main__":
