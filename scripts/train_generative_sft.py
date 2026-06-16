@@ -109,6 +109,12 @@ def main() -> None:
             max_seq_length=args.max_seq_length,
             packing=False,
             per_device_train_batch_size=args.per_device_train_batch_size,
+            # Long-context eval OOMs when the Trainer materializes full
+            # [batch, seq, vocab] logits (Accelerate upcasts them to fp32).
+            # prediction_loss_only + tiny eval batch + CPU offload fixes it.
+            per_device_eval_batch_size=1,
+            prediction_loss_only=True,
+            eval_accumulation_steps=1,
             gradient_accumulation_steps=args.gradient_accumulation_steps,
             warmup_ratio=0.03,
             num_train_epochs=args.epochs,
