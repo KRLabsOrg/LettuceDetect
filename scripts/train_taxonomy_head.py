@@ -52,9 +52,10 @@ def main() -> None:
     ap.add_argument("--data-dir", type=Path, required=True)
     ap.add_argument("--output-dir", type=Path, required=True)
     ap.add_argument("--model-name", default="jhu-clsp/mmBERT-base")
-    ap.add_argument("--max-length", type=int, default=2048)
+    ap.add_argument("--max-length", type=int, default=1024)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--epochs", type=float, default=2.0)
+    ap.add_argument("--eval-steps", type=int, default=1000)
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--temp", type=float, default=0.05, help="cosine softmax temperature")
     ap.add_argument("--holdout-subcategory", default="", help="exclude from TRAIN, score at test")
@@ -80,8 +81,8 @@ def main() -> None:
 
     def label_vecs(names: list[str], descs: dict) -> "torch.Tensor":
         enc = tok([f"{n}: {descs[n]}" for n in names], padding=True, return_tensors="pt").to(device)
-        h = encoder(input_ids=enc.input_ids, attention_mask=enc.attention_mask).last_hidden_state
-        m = enc.attention_mask.unsqueeze(-1)
+        h = encoder(input_ids=enc.input_ids, attention_mask=enc.attention_mask).last_hidden_state.float()
+        m = enc.attention_mask.unsqueeze(-1).float()
         v = (h * m).sum(1) / m.sum(1).clamp(min=1)  # mean-pool
         return torch.nn.functional.normalize(v, dim=-1)
 
@@ -120,24 +121,62 @@ def main() -> None:
         h = encoder(
             input_ids=batch["input_ids"].to(device),
             attention_mask=batch["attention_mask"].to(device),
-        ).last_hidden_state
-        m = batch["span_mask"].to(device).unsqueeze(-1)
+        ).last_hidden_state.float()
+        m = batch["span_mask"].to(device).unsqueeze(-1).float()
         v = (h * m).sum(1) / m.sum(1).clamp(min=1)
         return torch.nn.functional.normalize(v, dim=-1)
 
+    import collections
+
+    from tqdm import tqdm
+
+    def evaluate(rows: list) -> dict:
+        encoder.eval()
+        correct: dict = collections.Counter()
+        n: dict = collections.Counter()
+        with torch.no_grad():
+            cv = label_vecs(cat_names, CATEGORY_LABELS)
+            svv = label_vecs(sub_names, SUBCATEGORY_LABELS)
+            for i in range(0, len(rows), args.batch_size):
+                batch = collate(rows[i : i + args.batch_size])
+                sv = span_vec(batch)
+                pc = (sv @ cv.T).argmax(-1).cpu()
+                ps = (sv @ svv.T).argmax(-1).cpu()
+                for k in range(len(pc)):
+                    grp = "holdout" if sub_names[batch["sub"][k]] == args.holdout_subcategory else "seen"
+                    n[("cat", grp)] += 1
+                    correct[("cat", grp)] += int(pc[k] == batch["cat"][k])
+                    correct[("sub", grp)] += int(ps[k] == batch["sub"][k])
+        encoder.train()
+        return {
+            g: (correct[("cat", g)] / n[("cat", g)], correct[("sub", g)] / n[("cat", g)], n[("cat", g)])
+            for g in ("seen", "holdout")
+            if n[("cat", g)]
+        }
+
+    def save() -> None:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        encoder.save_pretrained(args.output_dir)
+        tok.save_pretrained(args.output_dir)
+        (args.output_dir / "labels.json").write_text(
+            json.dumps({"category": CATEGORY_LABELS, "subcategory": SUBCATEGORY_LABELS}, indent=2)
+        )
+
     train_rows, val_rows = load("train"), load("validation")
-    print(f"train {len(train_rows)} / val {len(val_rows)} (holdout={args.holdout_subcategory!r})")
+    print(f"train {len(train_rows)} / val {len(val_rows)} (holdout={args.holdout_subcategory!r})", flush=True)
     dl = DataLoader(train_rows, batch_size=args.batch_size, shuffle=True, collate_fn=collate)
     opt = torch.optim.AdamW(encoder.parameters(), lr=args.lr)
     ce = torch.nn.CrossEntropyLoss()
 
     steps_total = int(len(dl) * args.epochs)
+    pbar = tqdm(total=steps_total, desc="train")
     step = 0
     encoder.train()
     while step < steps_total:
         for batch in dl:
             sv = span_vec(batch)
-            cv, svv = label_vecs(cat_names, CATEGORY_LABELS), label_vecs(sub_names, SUBCATEGORY_LABELS)
+            cv = label_vecs(cat_names, CATEGORY_LABELS)
+            svv = label_vecs(sub_names, SUBCATEGORY_LABELS)
             loss = ce((sv @ cv.T) / args.temp, batch["cat"].to(device)) + ce(
                 (sv @ svv.T) / args.temp, batch["sub"].to(device)
             )
@@ -145,44 +184,20 @@ def main() -> None:
             loss.backward()
             opt.step()
             step += 1
-            if step % 50 == 0:
-                print(f"step {step}/{steps_total} loss {loss.item():.4f}")
+            pbar.update(1)
+            pbar.set_postfix(loss=f"{loss.item():.3f}")
+            if step % args.eval_steps == 0:
+                ev = evaluate(val_rows)
+                msg = " ".join(f"{g}:cat={a:.3f}/sub={b:.3f}(n{c})" for g, (a, b, c) in ev.items())
+                tqdm.write(f"step {step}/{steps_total} {msg}")
+                save()  # checkpoint (overwrite latest) — resumable + observable
             if step >= steps_total:
                 break
-
-    # Eval: category + subcategory accuracy (overall and on the held-out subcategory).
-    encoder.eval()
-    import collections
-
-    correct = collections.Counter()
-    n = collections.Counter()
-    with torch.no_grad():
-        cv, svv = label_vecs(cat_names, CATEGORY_LABELS), label_vecs(sub_names, SUBCATEGORY_LABELS)
-        for i in range(0, len(val_rows), args.batch_size):
-            batch = collate(val_rows[i : i + args.batch_size])
-            sv = span_vec(batch)
-            pc = (sv @ cv.T).argmax(-1).cpu()
-            ps = (sv @ svv.T).argmax(-1).cpu()
-            for k in range(len(pc)):
-                grp = "holdout" if sub_names[batch["sub"][k]] == args.holdout_subcategory else "seen"
-                n[("cat", grp)] += 1
-                n[("sub", grp)] += 1
-                correct[("cat", grp)] += int(pc[k] == batch["cat"][k])
-                correct[("sub", grp)] += int(ps[k] == batch["sub"][k])
-    for grp in ("seen", "holdout"):
-        if n[("cat", grp)]:
-            print(
-                f"[{grp}] n={n[('cat', grp)]} cat_acc={correct[('cat', grp)] / n[('cat', grp)]:.4f} "
-                f"sub_acc={correct[('sub', grp)] / n[('sub', grp)]:.4f}"
-            )
-
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    encoder.save_pretrained(args.output_dir)
-    tok.save_pretrained(args.output_dir)
-    (args.output_dir / "labels.json").write_text(
-        json.dumps({"category": CATEGORY_LABELS, "subcategory": SUBCATEGORY_LABELS}, indent=2)
-    )
-    print(f"saved -> {args.output_dir}")
+    pbar.close()
+    for g, (a, b, c) in evaluate(val_rows).items():
+        print(f"[{g}] n={c} cat_acc={a:.4f} sub_acc={b:.4f}", flush=True)
+    save()
+    print(f"saved -> {args.output_dir}", flush=True)
 
 
 if __name__ == "__main__":
