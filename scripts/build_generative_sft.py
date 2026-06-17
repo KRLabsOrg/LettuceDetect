@@ -48,7 +48,9 @@ def _expl_key(answer: str, start: int, end: int) -> str:
     return f"{digest}|{start}|{end}"
 
 
-def to_messages(row: dict, expl_map: dict | None = None) -> dict | None:
+def to_messages(
+    row: dict, expl_map: dict | None = None, explain_sources: set | None = None
+) -> dict | None:
     """One HF row -> {'messages': [...], 'split': ...} or None if degenerate."""
     answer = row["answer"]
     spans = []
@@ -66,7 +68,12 @@ def to_messages(row: dict, expl_map: dict | None = None) -> dict | None:
         if explanation:
             span["explanation"] = explanation
         spans.append(span)
-    system = SYSTEM_EXPL if any("explanation" in s for s in spans) else SYSTEM_BASE
+    # Prompt is chosen by SOURCE, not by span-presence: a source whose answers
+    # carry explanations uses SYSTEM_EXPL for BOTH clean and hallucinated rows,
+    # so the model still has to discriminate (clean rows -> []). Keying on
+    # span-presence would make the prompt a label leak (EXPL <=> hallucinated).
+    use_expl = bool(explain_sources) and row.get("dataset") in explain_sources
+    system = SYSTEM_EXPL if use_expl else SYSTEM_BASE
     user = f"Context:\n{row['context'] or row['prompt']}\n\nAnswer to verify:\n{answer}"
     assistant = json.dumps({"hallucinated_spans": spans}, ensure_ascii=False)
     return {
@@ -85,12 +92,19 @@ def main() -> None:
     ap.add_argument("--dataset", action="append", default=[], required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--explanations-map", type=Path, help="JSON map md5(answer)|start|end -> explanation.")
+    ap.add_argument(
+        "--explain-source",
+        action="append",
+        default=["lettucedetect-code-agent"],
+        help="Dataset name(s) whose rows (clean AND hallucinated) use the explanation prompt.",
+    )
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
 
     from datasets import load_dataset
 
     expl_map = json.loads(args.explanations_map.read_text()) if args.explanations_map else None
+    explain_sources = set(args.explain_source)
     matched = 0
 
     args.out.mkdir(parents=True, exist_ok=True)
@@ -105,7 +119,7 @@ def main() -> None:
             for i, row in enumerate(dd[split]):
                 if args.limit and i >= args.limit:
                     break
-                rec = to_messages(row, expl_map)
+                rec = to_messages(row, expl_map, explain_sources)
                 matched += sum(
                     1 for m in rec["messages"] if m["role"] == "assistant" and '"explanation"' in m["content"]
                 )

@@ -19,16 +19,28 @@ import argparse
 import os
 from pathlib import Path
 
-# Unsloth must be imported before transformers/trl so its patches apply.
-from unsloth import FastLanguageModel  # noqa: E402  isort:skip
-from unsloth.chat_templates import train_on_responses_only  # noqa: E402
-
-import torch  # noqa: E402
-from datasets import load_dataset  # noqa: E402
-from trl import SFTConfig, SFTTrainer  # noqa: E402
-
 # LFM2 module names: in_proj/out_proj (attention), w1/w2/w3 (gated MLP / experts).
-LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "out_proj", "in_proj", "w1", "w2", "w3"]
+# LoRA targets differ by architecture. LFM2: in_proj/out_proj + w1/w2/w3.
+# Qwen3.5 is hybrid (Gated DeltaNet + attention) -> DeltaNet in_proj_* + attn + MLP.
+LORA_TARGETS = {
+    "lfm": ["q_proj", "k_proj", "v_proj", "out_proj", "in_proj", "w1", "w2", "w3"],
+    "qwen": [
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a", "out_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ],
+    "default": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+}
+
+
+def lora_targets_for(model_name: str) -> list[str]:
+    """Pick LoRA target modules by model family."""
+    n = model_name.lower()
+    if "qwen" in n:
+        return LORA_TARGETS["qwen"]
+    if "lfm" in n:
+        return LORA_TARGETS["lfm"]
+    return LORA_TARGETS["default"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,12 +60,21 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--save-steps", type=int, default=500)
     ap.add_argument("--num-proc", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="Cap rows per split (smoke test).")
+    ap.add_argument("--lora-targets", default="", help="Comma-sep LoRA modules (default: by family).")
     ap.add_argument("--resume", action="store_true")
     return ap.parse_args()
 
 
 def main() -> None:
     """Train the LoRA span detector."""
+    # Unsloth must be imported before transformers/trl so its patches apply.
+    from unsloth import FastLanguageModel  # noqa: I001
+    from unsloth.chat_templates import train_on_responses_only
+
+    import torch
+    from datasets import load_dataset
+    from trl import SFTConfig, SFTTrainer
+
     args = parse_args()
 
     # Bind this rank to its own GPU before loading, so Unsloth doesn't pile every
@@ -74,10 +95,11 @@ def main() -> None:
         full_finetuning=False,
         **extra,
     )
+    targets = args.lora_targets.split(",") if args.lora_targets else lora_targets_for(args.model_name)
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_r,
-        target_modules=LORA_TARGETS,
+        target_modules=targets,
         lora_alpha=args.lora_alpha,
         lora_dropout=0,
         bias="none",
