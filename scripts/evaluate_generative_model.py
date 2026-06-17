@@ -85,7 +85,7 @@ def main() -> None:
 
     from build_generative_sft import SYSTEM_BASE
     from datasets import load_dataset
-    from evaluate_span_model import print_metrics_table
+    from span_eval_metrics import print_metrics_table
     from vllm import LLM, SamplingParams
     from vllm.lora.request import LoRARequest
 
