@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Evaluate the generative span detector (LFM2.5 LoRA) with the SAME metrics as the encoder.
 
-Generates the hallucinated-spans JSON with vLLM, maps each emitted span's verbatim
-text back to char offsets in the answer, then scores span char-F1 / example-F1 /
-IoU per dataset/language via the shared metric in evaluate_span_model. This makes
-the generative model directly comparable to mmBERT.
+Queries a vLLM OpenAI-compatible endpoint for the hallucinated-spans JSON, maps
+each emitted span's verbatim text back to char offsets in the answer, then scores
+span char-F1 / example-F1 / IoU per dataset/language via the shared metric. This
+makes the generative model directly comparable to mmBERT.
 
-    # merge the adapter first (scripts/merge_lora.py), then:
-    python scripts/evaluate_generative_model.py \
-        --model /mnt/workspace/users/adamko/lfm2_sft_merged \
+    # 1. serve the merged model (separate process / tmux):
+    TRITON_CACHE_DIR=$HOME/.triton_cache vllm serve <merged_dir> \
+        --served-model-name lfm2-sft --max-model-len 32768 --port 8000
+    # 2. run the eval client (needs only openai + datasets):
+    python scripts/evaluate_generative_model.py --model lfm2-sft \
+        --base-url http://localhost:8000/v1 \
         --dataset KRLabsOrg/lettucedetect-code-hallucination \
         --dataset KRLabsOrg/lettucedetect-prose-hallucination \
         --split test --by dataset
-    # or evaluate the adapter directly without merging:
-    python scripts/evaluate_generative_model.py --model unsloth/LFM2.5-8B-A1B \
-        --lora /mnt/workspace/users/adamko/lfm2_sft/lora --dataset ... --split test
 """
 
 from __future__ import annotations
@@ -70,24 +70,42 @@ def spans_to_offsets(answer: str, span_texts: list[str]) -> list[dict]:
 
 def main() -> None:
     """CLI entry point."""
-    ap = argparse.ArgumentParser(description="Generative span-detector evaluation (vLLM).")
-    ap.add_argument("--model", required=True, help="Merged model dir or base model id.")
-    ap.add_argument("--lora", help="LoRA adapter dir (if --model is the base model).")
+    ap = argparse.ArgumentParser(description="Generative span-detector eval (OpenAI endpoint).")
+    ap.add_argument("--base-url", default="http://localhost:8000/v1", help="vLLM OpenAI URL.")
+    ap.add_argument("--model", required=True, help="Served model name (--served-model-name).")
+    ap.add_argument("--api-key", default="EMPTY")
     ap.add_argument("--dataset", action="append", default=[], required=True)
     ap.add_argument("--split", default="test")
     ap.add_argument("--by", choices=["dataset", "language"], default="dataset")
     ap.add_argument("--only", default="", help="Keep only rows whose `dataset` == this.")
     ap.add_argument("--limit", type=int, default=0)
-    ap.add_argument("--max-seq-length", type=int, default=32768)
     ap.add_argument("--max-new-tokens", type=int, default=1024)
-    ap.add_argument("--tp", type=int, default=1, help="tensor_parallel_size.")
+    ap.add_argument("--concurrency", type=int, default=64)
+    ap.add_argument(
+        "--explain",
+        action="store_true",
+        help="Query ALL rows with the explanation prompt.",
+    )
+    ap.add_argument(
+        "--explain-datasets",
+        action="append",
+        default=[],
+        help="Dataset name(s) whose rows use the explanation prompt (e.g. their training prompt).",
+    )
     args = ap.parse_args()
 
-    from build_generative_sft import SYSTEM_BASE
+    from concurrent.futures import ThreadPoolExecutor
+
+    from build_generative_sft import SYSTEM_BASE, SYSTEM_EXPL
     from datasets import load_dataset
+    from openai import OpenAI
     from span_eval_metrics import print_metrics_table
-    from vllm import LLM, SamplingParams
-    from vllm.lora.request import LoRARequest
+    from tqdm import tqdm
+
+    explain_ds = set(args.explain_datasets)
+
+    def system_for(r: dict) -> str:
+        return SYSTEM_EXPL if args.explain or r.get("dataset") in explain_ds else SYSTEM_BASE
 
     rows_in = []
     for name in args.dataset:
@@ -98,34 +116,34 @@ def main() -> None:
             if args.limit and len(rows_in) >= args.limit:
                 break
 
-    convos = [
-        [
-            {"role": "system", "content": SYSTEM_BASE},
-            {
-                "role": "user",
-                "content": f"Context:\n{r['context'] or r['prompt']}\n\n"
-                f"Answer to verify:\n{r['answer']}",
-            },
-        ]
-        for r in rows_in
-    ]
+    client = OpenAI(base_url=args.base_url, api_key=args.api_key)
 
-    llm = LLM(
-        model=args.model,
-        max_model_len=args.max_seq_length,
-        dtype="bfloat16",
-        tensor_parallel_size=args.tp,
-        enable_lora=bool(args.lora),
-        max_lora_rank=64,
-    )
-    sp = SamplingParams(temperature=0.0, max_tokens=args.max_new_tokens)
-    lora_req = LoRARequest("sft", 1, args.lora) if args.lora else None
-    outputs = llm.chat(convos, sp, lora_request=lora_req)
+    def infer(r: dict) -> str | None:
+        try:
+            resp = client.chat.completions.create(
+                model=args.model,
+                messages=[
+                    {"role": "system", "content": system_for(r)},
+                    {
+                        "role": "user",
+                        "content": f"Context:\n{r['context'] or r['prompt']}\n\n"
+                        f"Answer to verify:\n{r['answer']}",
+                    },
+                ],
+                temperature=0.0,
+                max_tokens=args.max_new_tokens,
+            )
+            return resp.choices[0].message.content
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+        replies = list(tqdm(ex.map(infer, rows_in), total=len(rows_in), desc="generate"))
 
     rows = []
     bad = 0
-    for r, out in zip(rows_in, outputs):
-        texts = parse_spans(out.outputs[0].text)
+    for r, reply in zip(rows_in, replies):
+        texts = parse_spans(reply) if reply is not None else None
         if texts is None:
             bad += 1
             texts = []
@@ -133,7 +151,7 @@ def main() -> None:
         rows.append((r.get(args.by, "?"), r.get("labels") or [], pred))
 
     print_metrics_table(rows, by_label=args.by)
-    print(f"\nunparseable replies: {bad}/{len(rows)}")
+    print(f"\nunparseable/failed replies: {bad}/{len(rows)}")
 
 
 def _selfcheck() -> None:
