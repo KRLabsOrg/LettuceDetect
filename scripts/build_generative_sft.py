@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from taxonomy import SYSTEM_BASE, SYSTEM_EXPL
+from taxonomy import SYSTEM_BASE, SYSTEM_EXPL, build_user_message
 
 SPLIT_ALIASES = {"dev": "validation"}
 # Prompt is chosen by source (see to_messages): code-agent uses SYSTEM_EXPL
@@ -62,7 +62,7 @@ def to_messages(
     # span-presence would make the prompt a label leak (EXPL <=> hallucinated).
     use_expl = bool(explain_sources) and row.get("dataset") in explain_sources
     system = SYSTEM_EXPL if use_expl else SYSTEM_BASE
-    user = f"Context:\n{row['context'] or row['prompt']}\n\nAnswer to verify:\n{answer}"
+    user = build_user_message(row)
     assistant = json.dumps({"hallucinated_spans": spans}, ensure_ascii=False)
     return {
         "messages": [

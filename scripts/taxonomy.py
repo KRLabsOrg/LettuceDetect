@@ -59,3 +59,14 @@ def build_system_prompt(explain: bool = False) -> str:
 
 SYSTEM_BASE = build_system_prompt(explain=False)
 SYSTEM_EXPL = build_system_prompt(explain=True)
+
+
+def build_user_message(row: dict) -> str:
+    """User turn from an HF row: the full generation prompt (request + context) + the answer.
+
+    Uses `prompt` (which uniformly contains "User request: ...\\n\\n<context>" across every
+    source, or the instruction+source for ragtruth), matching what the encoder is fed via
+    predict_prompt. Falls back to `context` only if `prompt` is empty.
+    """
+    source = row.get("prompt") or row.get("context") or ""
+    return f"{source}\n\nAnswer to verify:\n{row['answer']}"

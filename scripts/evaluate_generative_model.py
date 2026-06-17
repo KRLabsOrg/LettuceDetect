@@ -107,10 +107,10 @@ def main() -> None:
 
     from concurrent.futures import ThreadPoolExecutor
 
-    from build_generative_sft import SYSTEM_BASE, SYSTEM_EXPL
     from datasets import load_dataset
     from openai import OpenAI
     from span_eval_metrics import print_metrics_table
+    from taxonomy import SYSTEM_BASE, SYSTEM_EXPL, build_user_message
     from tqdm import tqdm
 
     explain_ds = set(args.explain_datasets)
@@ -136,11 +136,7 @@ def main() -> None:
                 model=args.model,
                 messages=[
                     {"role": "system", "content": system_for(r)},
-                    {
-                        "role": "user",
-                        "content": f"Context:\n{r['context'] or r['prompt']}\n\n"
-                        f"Answer to verify:\n{r['answer']}",
-                    },
+                    {"role": "user", "content": build_user_message(r)},
                 ],
                 temperature=0.0,
                 max_tokens=args.max_new_tokens,
