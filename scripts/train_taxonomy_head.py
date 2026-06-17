@@ -19,30 +19,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-CATEGORY_LABELS = {
-    "contradiction": "a span that conflicts with or contradicts the context: a wrong value, "
-    "number, date, name, or relation",
-    "fabricated_reference": "a span referencing an entity, API, identifier, or section that is "
-    "absent from the context",
-    "unsupported_addition": "a span adding a claim, behavior, or detail the context never states",
-}
-SUBCATEGORY_LABELS = {
-    "entity": "the wrong or invented named entity, object, or symbol",
-    "temporal": "an incorrect date, time, or ordering",
-    "numerical": "an incorrect number, count, or quantity",
-    "value": "a wrong value, field, argument, or configuration",
-    "relational": "an incorrect relationship or association between things",
-    "identifier": "an invented function, method, attribute, or API identifier",
-    "section": "a reference to a section, file, or location that does not exist",
-    "attribute": "an invented or wrong attribute or property",
-    "claim": "an added factual claim the context does not support",
-    "behavior": "added or changed behavior that was never requested",
-    "elaboration": "extra elaboration or detail beyond what the context supports",
-    "subjective": "an unsupported subjective or evaluative statement",
-    "unspecified": "an unsupported span with no more specific subtype",
-}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from taxonomy import (
+    CATEGORY_DESCRIPTIONS as CATEGORY_LABELS,
+)
+from taxonomy import (
+    SUBCATEGORY_DESCRIPTIONS as SUBCATEGORY_LABELS,
+)
+
 SEP = " [CTX] "
 
 
