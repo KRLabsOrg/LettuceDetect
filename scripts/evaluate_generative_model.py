@@ -30,8 +30,8 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(SCRIPTS.parent))
 
 
-def parse_spans(text: str) -> list[str] | None:
-    """Pull hallucinated-span texts out of a model reply. None = unparseable."""
+def parse_spans(text: str) -> list[dict] | None:
+    """Pull hallucinated spans (text + category + subcategory) out of a reply. None = unparseable."""
     obj = None
     try:
         obj = json.loads(text)
@@ -47,21 +47,32 @@ def parse_spans(text: str) -> list[str] | None:
     spans = obj.get("hallucinated_spans")
     if spans is None:
         return None
-    return [s.get("text", "") for s in spans if isinstance(s, dict)]
+    return [s for s in spans if isinstance(s, dict) and s.get("text")]
 
 
-def spans_to_offsets(answer: str, span_texts: list[str]) -> list[dict]:
-    """Map each verbatim span text to its first non-overlapping {start,end} in answer."""
+def spans_to_offsets(answer: str, spans: list[dict]) -> list[dict]:
+    """Map each span's verbatim text to its first non-overlapping {start,end} in answer.
+
+    Carries category/subcategory through so the typed metric can use them.
+    """
     out: list[dict] = []
     used: list[tuple[int, int]] = []
-    for t in span_texts:
+    for s in spans:
+        t = s.get("text", "")
         if not t or not t.strip():
             continue
         start = 0
         while (i := answer.find(t, start)) >= 0:
             j = i + len(t)
             if not any(i < ue and us < j for us, ue in used):
-                out.append({"start": i, "end": j})
+                out.append(
+                    {
+                        "start": i,
+                        "end": j,
+                        "category": s.get("category"),
+                        "subcategory": s.get("subcategory"),
+                    }
+                )
                 used.append((i, j))
                 break
             start = i + 1
@@ -158,15 +169,16 @@ def _selfcheck() -> None:
     """Offline check of parse + offset mapping (no model needed)."""
     ans = "foo bar baz bar"
     reply = '{"hallucinated_spans": [{"text": "bar", "category": "x"}, {"text": "baz"}]}'
-    texts = parse_spans(reply)
-    assert texts == ["bar", "baz"], texts
-    offs = spans_to_offsets(ans, texts)
-    assert offs == [{"start": 4, "end": 7}, {"start": 8, "end": 11}], offs
+    spans = parse_spans(reply)
+    assert spans == [{"text": "bar", "category": "x"}, {"text": "baz"}], spans
+    offs = spans_to_offsets(ans, spans)
+    assert offs == [
+        {"start": 4, "end": 7, "category": "x", "subcategory": None},
+        {"start": 8, "end": 11, "category": None, "subcategory": None},
+    ], offs
     # second "bar" picked when first is taken
-    assert spans_to_offsets(ans, ["bar", "bar"]) == [
-        {"start": 4, "end": 7},
-        {"start": 12, "end": 15},
-    ]
+    two = spans_to_offsets(ans, [{"text": "bar"}, {"text": "bar"}])
+    assert [(o["start"], o["end"]) for o in two] == [(4, 7), (12, 15)], two
     assert parse_spans("garbage no json") is None
     assert parse_spans('{"hallucinated_spans": []}') == []
     print("selfcheck ok")
