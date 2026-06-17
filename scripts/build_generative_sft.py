@@ -21,6 +21,16 @@ import json
 from pathlib import Path
 
 SPLIT_ALIASES = {"dev": "validation"}
+# The taxonomy (label space) is enumerated in the prompt so every system — our
+# trained models, the zero-shot LLM baseline, and inference — is told the same
+# allowed categories/subcategories. This is the label schema, not the answer.
+TAXONOMY = (
+    "Categories: contradiction (conflicts with the context: wrong value/number/date/name/relation); "
+    "fabricated_reference (an entity, API, identifier, or section absent from the context); "
+    "unsupported_addition (a claim, behavior, or detail the context never states). "
+    "Subcategories: entity, temporal, numerical, value, relational, identifier, section, attribute, "
+    "claim, behavior, elaboration, subjective, unspecified."
+)
 # Two prompt variants form an explanation switch: rows whose spans carry an
 # explanation get SYSTEM_EXPL (explanation is a requested field), the rest get
 # SYSTEM_BASE. The model learns to emit explanations only when asked, and the
@@ -28,14 +38,14 @@ SPLIT_ALIASES = {"dev": "validation"}
 SYSTEM_BASE = (
     "You verify a generated answer against its context and list the hallucinated spans. "
     "Quote each unsupported span verbatim from the answer and label it with a category and "
-    "subcategory. "
+    f"subcategory from this taxonomy. {TAXONOMY} "
     'Reply with JSON: {"hallucinated_spans": [{"text": "...", "category": "...", '
     '"subcategory": "..."}]}. If nothing is unsupported, reply {"hallucinated_spans": []}.'
 )
 SYSTEM_EXPL = (
     "You verify a generated answer against its context and list the hallucinated spans. "
     "Quote each unsupported span verbatim from the answer, label it with a category and "
-    "subcategory, and explain why it is unsupported. "
+    f"subcategory from this taxonomy, and explain why it is unsupported. {TAXONOMY} "
     'Reply with JSON: {"hallucinated_spans": [{"text": "...", "category": "...", '
     '"subcategory": "...", "explanation": "..."}]}. '
     'If nothing is unsupported, reply {"hallucinated_spans": []}.'

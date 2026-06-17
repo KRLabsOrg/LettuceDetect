@@ -128,6 +128,7 @@ def main() -> None:
                 break
 
     client = OpenAI(base_url=args.base_url, api_key=args.api_key)
+    usage: list[tuple[int, int]] = []  # (prompt_tokens, completion_tokens) per call
 
     def infer(r: dict) -> str | None:
         try:
@@ -144,6 +145,8 @@ def main() -> None:
                 temperature=0.0,
                 max_tokens=args.max_new_tokens,
             )
+            if resp.usage:
+                usage.append((resp.usage.prompt_tokens, resp.usage.completion_tokens))
             return resp.choices[0].message.content
         except Exception:
             return None
@@ -163,6 +166,14 @@ def main() -> None:
 
     print_metrics_table(rows, by_label=args.by)
     print(f"\nunparseable/failed replies: {bad}/{len(rows)}")
+    if usage:
+        pt = sum(u[0] for u in usage)
+        ct = sum(u[1] for u in usage)
+        n = len(usage)
+        print(
+            f"tokens over {n} calls: prompt {pt} (avg {pt / n:.0f}), "
+            f"completion {ct} (avg {ct / n:.0f}); per-call total avg {(pt + ct) / n:.0f}"
+        )
 
 
 def _selfcheck() -> None:
