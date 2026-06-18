@@ -12,6 +12,7 @@ from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.llm_client import (
     LLMClient,
     build_hallucination_schema,
+    build_verification_schema,
     make_llm_client,
 )
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
@@ -24,6 +25,10 @@ _RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
    `{"hallucination_list": ["substring1", "substring2", …]}`
 
    If none are found, return `{"hallucination_list": []}`."""
+
+_VERIFY_SYSTEM = (
+    "You are a strict fact-checker confirming whether flagged spans are truly unsupported."
+)
 
 
 class LLMDetector:
@@ -42,6 +47,8 @@ class LLMDetector:
         client: LLMClient | None = None,
         include_reasoning: bool = False,
         include_taxonomy: bool | list[str] = False,
+        min_confidence: float = 0.0,
+        verify: bool = False,
         **client_kwargs,
     ):
         """Initialize the LLMDetector.
@@ -63,6 +70,10 @@ class LLMDetector:
             :data:`lettucedetect.datasets.taxonomy.CATEGORY_DEFINITIONS`; pass a list of
             category names to use a custom taxonomy instead. The classification is
             included as a ``category`` key in the returned spans.
+        :param min_confidence: Drop spans whose ``confidence`` is below this threshold.
+            Only meaningful together with ``include_reasoning`` (which produces the score).
+        :param verify: If True, run a second adversarial pass that re-judges each flagged
+            span against the source and discards the ones it cannot confirm.
         :param client_kwargs: Extra keyword arguments forwarded to the provider client constructor.
         """
         if lang not in LANG_TO_PASSAGE:
@@ -73,6 +84,8 @@ class LLMDetector:
         self.lang = lang
         self.zero_shot = zero_shot
         self.include_reasoning = include_reasoning
+        self.min_confidence = min_confidence
+        self.verify = verify
         if isinstance(include_taxonomy, bool):
             self.categories = list(CATEGORY_DEFINITIONS) if include_taxonomy else None
         else:
@@ -100,6 +113,14 @@ class LLMDetector:
         if not template_path.exists():
             raise FileNotFoundError(f"Prompt template not found at {template_path}")
         self.template = Template(template_path.read_text(encoding="utf-8"))
+
+        # Load verification template
+        verify_template_path = (
+            Path(__file__).parent.parent / "prompts" / "hallucination_verification.txt"
+        )
+        if not verify_template_path.exists():
+            raise FileNotFoundError(f"Verification template not found at {verify_template_path}")
+        self.verify_template = Template(verify_template_path.read_text(encoding="utf-8"))
 
         # Set up cache
         if cache_file is None:
@@ -139,13 +160,9 @@ class LLMDetector:
         example: dict = {"text": "substring1"}
         notes = ['- "text" must be an exact substring of the answer.']
         if self.include_reasoning:
-            example["confidence"] = 0.95
-            example["reasoning"] = "why it is unsupported"
+            example["reasoning"] = "compare the span against the source before judging it"
             notes.append(
-                '- "confidence" is your confidence between 0 and 1 that the span is hallucinated.'
-            )
-            notes.append(
-                '- "reasoning" is a brief explanation of why the span contradicts or is unsupported by the source.'
+                '- "reasoning" comes first: weigh the span against the source before scoring or judging it.'
             )
         if self.categories:
             example["category"] = self.categories[0]
@@ -156,18 +173,39 @@ class LLMDetector:
                 for name in self.categories
             )
             notes.append('- "category" classifies the hallucination as one of:\n' + category_lines)
+        if self.include_reasoning:
+            example["confidence"] = 0.95
+            example["is_hallucination"] = True
+            notes.append(
+                '- "confidence" is your confidence between 0 and 1 that the span is hallucinated.'
+            )
+            notes.append(
+                '- "is_hallucination" is your final verdict. You may list a span you suspect and, after '
+                "reasoning, set this to false if you conclude it is actually supported; such spans are "
+                "discarded. Only spans you confirm should be true."
+            )
         notes.append(
             "- Examples above may show only the hallucinated substrings; still return full objects."
         )
 
         example_json = json.dumps(example, ensure_ascii=False)
         notes_block = "\n   ".join(notes)
+        if self.include_reasoning:
+            schema_line = f'`{{"analysis": "...", "hallucination_list": [{example_json}, …]}}`'
+            notes_block = (
+                '- "analysis" (written first) is a brief claim-by-claim comparison of the answer '
+                "against the source; reason here before listing any spans.\n   " + notes_block
+            )
+            empty_line = 'return `{"analysis": "...", "hallucination_list": []}`'
+        else:
+            schema_line = f'`{{"hallucination_list": [{example_json}, …]}}`'
+            empty_line = 'return `{"hallucination_list": []}`'
         return (
             "**Return** a JSON object following *exactly* this schema\n"
             "   (no extra keys, no markdown, no code-block fences):\n\n"
-            f'   `{{"hallucination_list": [{example_json}, …]}}`\n\n'
+            f"   {schema_line}\n\n"
             f"   {notes_block}\n\n"
-            '   If none are found, return `{"hallucination_list": []}`.'
+            f"   If none are found, {empty_line}."
         )
 
     def _build_prompt(self, context: str, answer: str) -> str:
@@ -188,13 +226,18 @@ class LLMDetector:
         )
 
     @staticmethod
-    def _to_spans(items: list[str | dict], answer: str) -> list[dict]:
+    def _to_spans(items: list[str | dict], answer: str, min_confidence: float = 0.0) -> list[dict]:
         """Convert hallucinated items to a list of spans.
 
+        Items the model self-rejected (``is_hallucination`` is False) or scored
+        below ``min_confidence`` are dropped; the ``is_hallucination`` verdict is
+        not carried into the output since every returned span is a hallucination.
+
         :param items: List of hallucinated substrings, or objects with a ``text`` key
-            plus ``confidence``/``reasoning``/``category`` keys depending on the
-            enabled options.
+            plus ``reasoning``/``category``/``confidence``/``is_hallucination`` keys
+            depending on the enabled options.
         :param answer: The answer string.
+        :param min_confidence: Drop spans whose ``confidence`` is below this value.
         :returns: List of spans.
         """
         spans = []
@@ -205,6 +248,12 @@ class LLMDetector:
             sub = item.get("text") if isinstance(item, dict) else item
             if not sub:
                 continue
+            if isinstance(item, dict):
+                if item.get("is_hallucination") is False:
+                    continue
+                confidence = item.get("confidence")
+                if confidence is not None and confidence < min_confidence:
+                    continue
             # Use regex for more reliable matching
             match = re.search(re.escape(sub), answer)
             if not match:
@@ -271,7 +320,56 @@ class LLMDetector:
 
         if not from_cache:
             self.cache.set(cache_key, cached)
-        return self._to_spans(items, answer)
+        spans = self._to_spans(items, answer, self.min_confidence)
+        if self.verify and spans:
+            spans = self._verify(prompt, answer, spans)
+        return spans
+
+    def _verify(self, context: str, answer: str, spans: list[dict]) -> list[dict]:
+        """Re-judge each flagged span against the source and drop the unconfirmed ones.
+
+        Runs one additional, deliberately strict LLM call. Spans the verifier marks
+        ``is_hallucination`` false are removed; spans it does not return are kept, so a
+        malformed or partial verdict never silently discards confirmed detections.
+
+        :param context: The formatted source/context block.
+        :param answer: The answer string.
+        :param spans: Spans produced by the first pass.
+        :returns: The subset of spans the verifier confirms.
+        """
+        candidates = "\n".join(f"- {span['text']}" for span in spans)
+        user = self.verify_template.substitute(
+            lang=PromptUtils.get_full_language_name(self.lang),
+            context=context,
+            answer=answer,
+            candidates=candidates,
+        )
+        cache_key = self.cache._hash(user, self.model, str(self.temperature), "verify")
+        cached = self.cache.get(cache_key)
+        from_cache = cached is not None
+        if not from_cache:
+            cached = self.client.complete(
+                system=_VERIFY_SYSTEM,
+                user=user,
+                model=self.model,
+                temperature=self.temperature,
+                schema=build_verification_schema(),
+            )
+        try:
+            verdicts = json.loads(cached)["verifications"]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.error("Error parsing verification response: %s", e)
+            if from_cache:
+                self.cache.delete(cache_key)
+            return spans
+        if not from_cache:
+            self.cache.set(cache_key, cached)
+        rejected = {
+            v["text"]
+            for v in verdicts
+            if isinstance(v, dict) and v.get("is_hallucination") is False and "text" in v
+        }
+        return [span for span in spans if span["text"] not in rejected]
 
     def predict(
         self,

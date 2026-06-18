@@ -25,7 +25,14 @@ def build_hallucination_schema(
     With no options the response is a plain list of hallucinated substrings;
     enabling either option switches to a list of objects carrying the extra fields.
 
-    :param include_reasoning: Add per-span ``confidence`` and ``reasoning`` fields.
+    Field order matters: the model generates the object keys left-to-right, so
+    ``reasoning`` precedes ``confidence`` and the final ``is_hallucination``
+    verdict, letting each judgement be conditioned on the reasoning that precedes
+    it. With ``include_reasoning`` the response also opens with a top-level
+    ``analysis`` scratchpad, generated before any span is listed.
+
+    :param include_reasoning: Add a top-level ``analysis`` field plus per-span
+        ``reasoning``, ``confidence``, and ``is_hallucination`` fields.
     :param categories: Allowed values for a per-span ``category`` field; omitted when None.
     :returns: JSON schema the response object must conform to.
     """
@@ -42,13 +49,9 @@ def build_hallucination_schema(
             }
         }
         if include_reasoning:
-            properties["confidence"] = {
-                "type": "number",
-                "description": "Confidence between 0 and 1 that the span is hallucinated",
-            }
             properties["reasoning"] = {
                 "type": "string",
-                "description": "Brief explanation of why the span is hallucinated",
+                "description": "Comparison of the span against the source, written before the verdict",
             }
         if categories:
             properties["category"] = {
@@ -56,22 +59,80 @@ def build_hallucination_schema(
                 "enum": list(categories),
                 "description": "Hallucination category of the span",
             }
+        if include_reasoning:
+            properties["confidence"] = {
+                "type": "number",
+                "description": "Confidence between 0 and 1 that the span is hallucinated",
+            }
+            properties["is_hallucination"] = {
+                "type": "boolean",
+                "description": (
+                    "Final verdict: true only if the span is genuinely unsupported by or "
+                    "contradicts the source; false if the reasoning concludes it is supported"
+                ),
+            }
         items = {
             "type": "object",
             "properties": properties,
             "required": list(properties),
             "additionalProperties": False,
         }
+    top_properties: dict = {}
+    if include_reasoning:
+        top_properties["analysis"] = {
+            "type": "string",
+            "description": "Claim-by-claim comparison of the answer against the source, written first",
+        }
+    top_properties["hallucination_list"] = {
+        "type": "array",
+        "items": items,
+        "description": "List of hallucinated spans from the answer",
+    }
+    return {
+        "type": "object",
+        "properties": top_properties,
+        "required": list(top_properties),
+        "additionalProperties": False,
+    }
+
+
+def build_verification_schema() -> dict:
+    """Build the JSON schema for the verification (second-opinion) response.
+
+    Each candidate span flagged by the first pass is re-judged with a binary
+    verdict; ``reasoning`` precedes ``is_hallucination`` so the verdict is
+    conditioned on it.
+
+    :returns: JSON schema the verification response object must conform to.
+    """
     return {
         "type": "object",
         "properties": {
-            "hallucination_list": {
+            "verifications": {
                 "type": "array",
-                "items": items,
-                "description": "List of hallucinated spans from the answer",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "The exact candidate span being re-judged",
+                        },
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Why the span is or is not supported by the source",
+                        },
+                        "is_hallucination": {
+                            "type": "boolean",
+                            "description": "True only if the span genuinely contradicts or is unsupported by the source",
+                        },
+                    },
+                    "required": ["text", "reasoning", "is_hallucination"],
+                    "additionalProperties": False,
+                },
+                "description": "Verdict for each candidate span",
             }
         },
-        "required": ["hallucination_list"],
+        "required": ["verifications"],
         "additionalProperties": False,
     }
 
@@ -152,7 +213,7 @@ class BedrockClient(LLMClient):
     """
 
     _TOOL_NAME = "record_hallucinations"
-    _MAX_TOKENS = 4096
+    _MAX_TOKENS = 8192
 
     def __init__(self, region_name: str | None = None, **client_kwargs) -> None:
         """Initialize the Bedrock runtime client.

@@ -22,6 +22,7 @@ from lettucedetect.detectors.llm_client import (
     LLMClient,
     OpenAIClient,
     build_hallucination_schema,
+    build_verification_schema,
     make_llm_client,
 )
 
@@ -112,12 +113,37 @@ class TestBuildHallucinationSchema:
         schema = build_hallucination_schema()
         assert schema["properties"]["hallucination_list"]["items"]["type"] == "string"
 
-    def test_reasoning_schema_requires_confidence_and_reasoning(self):
-        """include_reasoning adds confidence and reasoning to the span objects."""
+    def test_reasoning_schema_orders_reasoning_before_confidence_and_verdict(self):
+        """include_reasoning generates reasoning first, then confidence, then the verdict."""
         items = build_hallucination_schema(include_reasoning=True)["properties"][
             "hallucination_list"
         ]["items"]
-        assert items["required"] == ["text", "confidence", "reasoning"]
+        assert items["required"] == ["text", "reasoning", "confidence", "is_hallucination"]
+        assert items["properties"]["is_hallucination"]["type"] == "boolean"
+
+    def test_reasoning_schema_adds_top_level_analysis_first(self):
+        """include_reasoning opens the response with an analysis scratchpad."""
+        schema = build_hallucination_schema(include_reasoning=True)
+        assert schema["required"] == ["analysis", "hallucination_list"]
+        assert schema["properties"]["analysis"]["type"] == "string"
+
+    def test_non_reasoning_schemas_have_no_analysis(self):
+        """The plain and taxonomy-only schemas keep a single top-level key and no verdict."""
+        assert build_hallucination_schema()["required"] == ["hallucination_list"]
+        taxonomy = build_hallucination_schema(categories=["a", "b"])
+        assert taxonomy["required"] == ["hallucination_list"]
+        assert taxonomy["properties"]["hallucination_list"]["items"]["required"] == [
+            "text",
+            "category",
+        ]
+
+    def test_build_verification_schema_shape(self):
+        """The verification schema judges each candidate with reasoning before a boolean verdict."""
+        schema = build_verification_schema()
+        assert schema["required"] == ["verifications"]
+        items = schema["properties"]["verifications"]["items"]
+        assert items["required"] == ["text", "reasoning", "is_hallucination"]
+        assert items["properties"]["is_hallucination"]["type"] == "boolean"
 
     def test_categories_become_an_enum(self):
         """Passing categories adds a category field constrained to those values."""
@@ -400,7 +426,13 @@ class TestLLMDetectorWithInjectedClient:
             }
         ]
         items = client.calls[0]["schema"]["properties"]["hallucination_list"]["items"]
-        assert items["required"] == ["text", "confidence", "reasoning", "category"]
+        assert items["required"] == [
+            "text",
+            "reasoning",
+            "category",
+            "confidence",
+            "is_hallucination",
+        ]
 
     def test_missing_key_in_client_output_yields_empty_spans(self, cache_file):
         """A response missing the expected key yields no spans instead of raising."""
@@ -409,6 +441,125 @@ class TestLLMDetectorWithInjectedClient:
 
         spans = detector.predict(["ctx"], "answer", "q?", output_format="spans")
         assert spans == []
+
+
+def _reasoning_response(items: list[dict]) -> str:
+    """Wrap reasoning-mode span objects in a full response payload."""
+    return json.dumps({"analysis": "...", "hallucination_list": items})
+
+
+class TestVerdictAndConfidenceFiltering:
+    """Tests for the self-verdict and ``min_confidence`` filters in ``_to_spans``."""
+
+    def test_self_rejected_span_is_dropped(self, cache_file):
+        """A span the model marks is_hallucination=false is removed; a true one is kept."""
+        answer = "Alpha and Beta are claims."
+        response = _reasoning_response(
+            [
+                {"text": "Alpha", "reasoning": "r", "confidence": 0.9, "is_hallucination": True},
+                {
+                    "text": "Beta",
+                    "reasoning": "actually supported",
+                    "confidence": 0.9,
+                    "is_hallucination": False,
+                },
+            ]
+        )
+        detector = make_detector(FakeClient(response), cache_file, include_reasoning=True)
+
+        spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
+
+        assert [s["text"] for s in spans] == ["Alpha"]
+        assert "is_hallucination" not in spans[0]
+
+    def test_missing_verdict_is_kept(self, cache_file):
+        """A span without an is_hallucination key is kept (back-compatible)."""
+        answer = "Alpha is a claim."
+        response = _reasoning_response([{"text": "Alpha", "reasoning": "r", "confidence": 0.9}])
+        detector = make_detector(FakeClient(response), cache_file, include_reasoning=True)
+
+        spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
+
+        assert [s["text"] for s in spans] == ["Alpha"]
+
+    def test_min_confidence_filters_low_confidence_spans(self, cache_file):
+        """Spans scored below min_confidence are dropped; those at or above are kept."""
+        answer = "Alpha and Beta are claims."
+        response = _reasoning_response(
+            [
+                {"text": "Alpha", "reasoning": "r", "confidence": 0.9, "is_hallucination": True},
+                {"text": "Beta", "reasoning": "r", "confidence": 0.5, "is_hallucination": True},
+            ]
+        )
+        detector = make_detector(
+            FakeClient(response), cache_file, include_reasoning=True, min_confidence=0.7
+        )
+
+        spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
+
+        assert [s["text"] for s in spans] == ["Alpha"]
+
+
+class RoutingClient(LLMClient):
+    """A fake client returning a detection or verification response based on the schema."""
+
+    def __init__(self, detect_response: str, verify_response: str) -> None:
+        """Store both canned responses and prepare a call log."""
+        self.detect_response = detect_response
+        self.verify_response = verify_response
+        self.calls: list[dict] = []
+
+    def complete(self, system, user, model, temperature, schema):
+        """Route on the schema: verification schema → verify response, else detection."""
+        self.calls.append({"schema": schema, "user": user})
+        if "verifications" in schema.get("properties", {}):
+            return self.verify_response
+        return self.detect_response
+
+
+class TestVerificationPass:
+    """Tests for the optional second-opinion verification pass (``verify=True``)."""
+
+    def test_verify_drops_unconfirmed_spans(self, cache_file):
+        """The verifier's is_hallucination=false verdict removes the corresponding span."""
+        answer = "Alpha and Beta are claims."
+        detect = '{"hallucination_list": ["Alpha", "Beta"]}'
+        verify = json.dumps(
+            {
+                "verifications": [
+                    {"text": "Alpha", "reasoning": "r", "is_hallucination": True},
+                    {"text": "Beta", "reasoning": "supported", "is_hallucination": False},
+                ]
+            }
+        )
+        client = RoutingClient(detect, verify)
+        detector = make_detector(client, cache_file, verify=True)
+
+        spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
+
+        assert [s["text"] for s in spans] == ["Alpha"]
+        assert len(client.calls) == 2
+
+    def test_verify_skipped_when_no_spans(self, cache_file):
+        """With no first-pass spans the verifier is never called."""
+        client = RoutingClient('{"hallucination_list": []}', '{"verifications": []}')
+        detector = make_detector(client, cache_file, verify=True)
+
+        spans = detector.predict(["ctx"], "Alpha and Beta are claims.", "q?", output_format="spans")
+
+        assert spans == []
+        assert len(client.calls) == 1
+
+    def test_verify_fail_open_on_unparseable_response(self, cache_file):
+        """A malformed verification response keeps the original spans rather than dropping them."""
+        answer = "Alpha and Beta are claims."
+        client = RoutingClient('{"hallucination_list": ["Alpha", "Beta"]}', "not valid json")
+        detector = make_detector(client, cache_file, verify=True)
+
+        spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
+
+        assert sorted(s["text"] for s in spans) == ["Alpha", "Beta"]
+        assert len(client.calls) == 2
 
 
 class _StubMessage:
