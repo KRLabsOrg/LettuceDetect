@@ -63,6 +63,7 @@ def main() -> None:
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--save-steps", type=int, default=200)
+    ap.add_argument("--resume", action="store_true", help="Resume from last checkpoint in --output-dir.")
     args = ap.parse_args()
 
     from unsloth import FastLanguageModel  # noqa: I001  must precede trl/transformers
@@ -162,7 +163,8 @@ def main() -> None:
         args=cfg,
         train_dataset=ds,
     )
-    trainer.train()
+    has_ckpt = bool(list(args.output_dir.glob("checkpoint-*")))
+    trainer.train(resume_from_checkpoint=args.resume and has_ckpt)
     model.save_pretrained(str(args.output_dir / "lora"))
     tokenizer.save_pretrained(str(args.output_dir / "lora"))
     print(f"saved GRPO LoRA -> {args.output_dir}/lora")
