@@ -56,7 +56,7 @@ def main() -> None:
                     category = lab.get("category")
                     subcategory = lab.get("subcategory") or "unspecified"
                     rec = {
-                        "context": row["context"] or row["prompt"],
+                        "context": row["prompt"] or row["context"],
                         "answer": answer,
                         "start": start,
                         "end": end,
