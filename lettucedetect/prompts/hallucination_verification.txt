@@ -1,0 +1,26 @@
+<task>
+A previous pass flagged spans of an **answer** as possible hallucinations against a **source**.
+Re-examine each candidate **strictly and adversarially** and decide whether it really is one.
+
+- The source and answer are written in **${lang}**. Respond **in ${lang} only**.
+- A span is a hallucination ONLY if it contradicts the source or asserts a fact the source
+  does not support.
+- Reasonable paraphrase, rounding, recombination, or reformatting of information that IS in the
+  source is **not** a hallucination.
+- When genuinely in doubt, judge it **not** a hallucination (``is_hallucination`` = false).
+
+For every candidate return its exact ``text``, brief ``reasoning``, and the boolean
+``is_hallucination``.
+</task>
+
+<source>
+${context}
+</source>
+
+<answer>
+${answer}
+</answer>
+
+<candidates>
+${candidates}
+</candidates>
