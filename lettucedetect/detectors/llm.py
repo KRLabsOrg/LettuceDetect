@@ -24,7 +24,8 @@ _RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
 
    `{"hallucination_list": ["substring1", "substring2", …]}`
 
-   If none are found, return `{"hallucination_list": []}`."""
+   Each substring must be copied **verbatim** from the answer — an exact,
+   character-for-character match. If none are found, return `{"hallucination_list": []}`."""
 
 _VERIFY_SYSTEM = (
     "You are a strict fact-checker confirming whether flagged spans are truly unsupported."
@@ -257,6 +258,7 @@ class LLMDetector:
             # Use regex for more reliable matching
             match = re.search(re.escape(sub), answer)
             if not match:
+                logger.debug("Dropping span not found verbatim in answer: %r", sub)
                 continue
             span = {"start": match.start(), "end": match.end(), "text": sub}
             if isinstance(item, dict):

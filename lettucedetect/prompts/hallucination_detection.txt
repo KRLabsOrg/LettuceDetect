@@ -1,17 +1,34 @@
 <task>
-You are an expert annotator who must identify hallucinated substrings in a generated **answer** with respect to a given **source**.
+You are an expert annotator. Identify every substring of a generated **answer** that is a hallucination with respect to the given **source**.
+
+## Grounding rule (read first)
+- Judge the answer **only** against the <source>. Treat the source as the single source of truth.
+- A claim not stated or entailed by the source is a hallucination **even if it is true in the real world**. Never use outside or prior knowledge to support a claim.
 
 ## Language
-- The source and answer are written in **${lang}**.
-- Respond **in ${lang} only**.
+- The source and answer are written in **${lang}**. Respond **in ${lang} only**.
 
-## Step‑by‑step instructions
+## What IS a hallucination
+A substring that:
+- **contradicts** the source (a different number, date, name, entity, or relationship), or
+- **adds** a fact, cause, detail, or quality the source does not state or entail, or
+- **references** a named element (person, place, identifier, section, attribute) absent from the source, or
+- **overstates** the source (e.g. source says "may help", answer says "cures").
+
+## What is NOT a hallucination
+- A statement consistent with the source, including a faithful paraphrase, rounding, reordering, or recombination of information that IS in the source.
+- Framing or boilerplate that makes no factual claim (e.g. "Here is the answer:"). Do not flag it.
+- An explicit refusal such as "Unable to answer based on given passages."
+
+## How to choose spans
+- Flag the **minimal** substring carrying the unsupported information; do not pad with surrounding supported text.
+- Copy each span **verbatim** from the answer — character for character, including punctuation, casing, and spacing. Do not paraphrase, translate, fix typos, or normalize. A span that is not an exact substring of the answer is discarded.
+- If one sentence mixes supported and unsupported content, flag only the unsupported part.
+
+## Steps
 1. **Read** the answer inside <answer>…</answer>.
-2. **Compare** each statement with the information in <source>…</source>.
-   - *Hallucination* = a substring that **(a)** contradicts the source **or** **(b)** introduces facts not supported by the source.
-   - *Not hallucination* = a substring that is consistent with the source.
-   - *Boileplate substring* = a substring that is not a hallucination but is not relevant to the question (e.g. introductory phrases, etc.)
-3. **Decide** whether the answer contains any hallucinations, be precise, in your answer only include substrings that are hallucinations.
+2. **Check each claim** against <source>…</source> using the rules above.
+3. **Return** only confirmed hallucinations, each an exact substring of the answer.
 4. ${response_format_block}
 </task>
 
