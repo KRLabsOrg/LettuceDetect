@@ -96,6 +96,53 @@ def build_hallucination_schema(
     }
 
 
+def build_generative_schema(explain: bool = False) -> dict:
+    """Build the JSON schema for the fine-tuned span detectors' ``hallucinated_spans`` output.
+
+    Distinct from :func:`build_hallucination_schema` (the LLM-judge contract): this
+    matches what ``lettucedect-v2-*`` generative models were trained to emit ---
+    a typed span object with ``category`` and ``subcategory`` drawn from the unified
+    taxonomy, and an optional ``explanation``. Enums come from the frozen
+    :mod:`lettucedetect.prompts.generative` label set.
+
+    :param explain: Require a per-span ``explanation`` field.
+    :returns: JSON schema for ``{"hallucinated_spans": [...]}``.
+    """
+    from lettucedetect.prompts.generative import (
+        CATEGORY_DESCRIPTIONS,
+        SUBCATEGORY_DESCRIPTIONS,
+    )
+
+    properties: dict = {
+        "text": {"type": "string", "description": "Exact hallucinated substring of the answer"},
+        "category": {"type": "string", "enum": list(CATEGORY_DESCRIPTIONS)},
+        "subcategory": {"type": "string", "enum": list(SUBCATEGORY_DESCRIPTIONS)},
+    }
+    if explain:
+        properties["explanation"] = {
+            "type": "string",
+            "description": "Short explanation of why the span is unsupported by the context",
+        }
+    item = {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "hallucinated_spans": {
+                "type": "array",
+                "items": item,
+                "description": "List of hallucinated spans from the answer",
+            }
+        },
+        "required": ["hallucinated_spans"],
+        "additionalProperties": False,
+    }
+
+
 def build_verification_schema() -> dict:
     """Build the JSON schema for the verification (second-opinion) response.
 

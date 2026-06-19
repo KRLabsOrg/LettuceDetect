@@ -11,13 +11,29 @@ from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS
 from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.llm_client import (
     LLMClient,
+    build_generative_schema,
     build_hallucination_schema,
     build_verification_schema,
     make_llm_client,
 )
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
+from lettucedetect.prompts import generative as gen
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_native(model: str) -> bool:
+    """Heuristic: is ``model`` one of our fine-tuned generative span detectors?
+
+    True for the ``lettucedect-v2`` generative models (Qwen/LFM), which expect the
+    frozen :mod:`lettucedetect.prompts.generative` prompt and emit ``hallucinated_spans``.
+    Excludes the encoder detectors (those go through ``TransformerDetector``). Served
+    under a non-standard name? Pass ``native=True`` explicitly.
+    """
+    m = model.lower()
+    if any(enc in m for enc in ("bert", "modernbert", "eurobert")):
+        return False
+    return "lettucede" in m and any(k in m for k in ("qwen", "lfm", "generative"))
 
 _RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
    (no extra keys, no markdown, no code-block fences):
@@ -50,6 +66,7 @@ class LLMDetector:
         include_taxonomy: bool | list[str] | dict[str, str] = False,
         min_confidence: float = 0.0,
         verify: bool = False,
+        native: bool | None = None,
         **client_kwargs,
     ):
         """Initialize the LLMDetector.
@@ -89,6 +106,10 @@ class LLMDetector:
         self.include_reasoning = include_reasoning
         self.min_confidence = min_confidence
         self.verify = verify
+        # Native mode: serve our fine-tuned generative span detectors (lettucedect-v2-*)
+        # with their frozen training prompt + hallucinated_spans contract, instead of
+        # the zero-shot judge prompt. Auto-detected from the model id; override explicitly.
+        self.native = _looks_native(model) if native is None else native
         if isinstance(include_taxonomy, bool):
             self.categories = dict(CATEGORY_DEFINITIONS) if include_taxonomy else None
         elif isinstance(include_taxonomy, dict):
@@ -298,6 +319,8 @@ class LLMDetector:
         :param answer: The answer string.
         :returns: List of spans.
         """
+        if self.native:
+            return self._predict_native(prompt, answer)
         # Build the full LLM prompt using the template
         llm_prompt = self._build_prompt(prompt, answer)
 
@@ -329,6 +352,37 @@ class LLMDetector:
         spans = self._to_spans(items, answer, self.min_confidence)
         if self.verify and spans:
             spans = self._verify(prompt, answer, spans)
+        return spans
+
+    def _predict_native(self, context: str, answer: str) -> list[dict]:
+        """Native path: serve a fine-tuned generative span detector (lettucedect-v2-*).
+
+        Sends the frozen training prompt and parses the model's ``hallucinated_spans``
+        JSON (typed with category/subcategory, plus explanation when ``include_reasoning``),
+        recovering character offsets by matching each span verbatim in the answer.
+
+        :param context: The formatted source/context block (already includes the request).
+        :param answer: The answer string.
+        :returns: List of typed spans.
+        """
+        system = gen.SYSTEM_EXPL if self.include_reasoning else gen.SYSTEM_BASE
+        user = gen.build_user_message(context, answer)
+        schema = build_generative_schema(explain=self.include_reasoning)
+
+        cache_key = self.cache._hash(system + user, self.model, str(self.temperature), "native")
+        cached = self.cache.get(cache_key)
+        if cached is None:
+            cached = self.client.complete(
+                system=system,
+                user=user,
+                model=self.model,
+                temperature=self.temperature,
+                schema=schema,
+            )
+            self.cache.set(cache_key, cached)
+        spans = gen.spans_to_offsets(answer, gen.parse_spans(cached or ""))
+        if self.verify and spans:
+            spans = self._verify(context, answer, spans)
         return spans
 
     def _verify(self, context: str, answer: str, spans: list[dict]) -> list[dict]:
