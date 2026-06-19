@@ -53,23 +53,152 @@ def example_metrics(gold: list[bool], pred: list[bool]) -> dict[str, float]:
 
 
 def predict_hhem(rows: list[dict], threshold: float, device: str) -> list[bool]:
-    """HHEM-2.1-Open: consistency prob in [0,1] per (premise, answer); <threshold => hallucinated."""
+    """HHEM-2.1-Open consistency, SLIDING-WINDOW over the context.
+
+    HHEM's 512-token window can't fit code-agent contexts (median ~5k tokens), so a
+    single truncated pass makes every answer look unsupported (recall->1). Instead we
+    chunk the context into window-sized pieces, score (chunk, answer) for each, and
+    take the MAX consistency: the answer is grounded if its best-supporting chunk
+    supports it. Hallucinated iff no chunk supports it (max consistency < threshold).
+    """
     import torch
     from transformers import AutoModelForSequenceClassification
 
     model = AutoModelForSequenceClassification.from_pretrained(
         "vectara/hallucination_evaluation_model", trust_remote_code=True
     ).to(device)
-    pairs = [(r["premise"], r["answer"]) for r in rows]
+    chunk, stride, max_chunks, ans_cap = 1000, 800, 30, 400  # chars (~<=512 tok with answer)
+    pairs: list[tuple[str, str]] = []
+    owner: list[int] = []
+    for i, r in enumerate(rows):
+        ctx, ans = r["premise"], r["answer"][:ans_cap]
+        chunks = [ctx[j : j + chunk] for j in range(0, max(1, len(ctx)), stride)][:max_chunks] or [""]
+        for c in chunks:
+            pairs.append((c, ans))
+            owner.append(i)
     scores = []
-    bs = 32
+    bs = 64
     for i in range(0, len(pairs), bs):
         with torch.no_grad():
             scores.extend(model.predict(pairs[i : i + bs]).tolist())
-    return [s < threshold for s in scores]
+    best = [0.0] * len(rows)
+    for o, s in zip(owner, scores):
+        best[o] = max(best[o], s)
+    return [b < threshold for b in best]  # grounded if any chunk supports; else hallucinated
 
 
-BASELINES = {"hhem": predict_hhem}
+LYNX_PROMPT = (
+    "Given the following QUESTION, DOCUMENT and ANSWER you must analyze the provided answer "
+    "and determine whether it is faithful to the contents of the DOCUMENT. The ANSWER must not "
+    "offer new information beyond the context provided in the DOCUMENT. The ANSWER also must not "
+    "contradict information provided in the DOCUMENT. Output your final verdict by strictly "
+    'following this format: "PASS" if the answer is faithful to the DOCUMENT and "FAIL" if the '
+    "answer is not faithful to the DOCUMENT. Show your reasoning.\n\n--\nQUESTION:\n{q}\n--\n"
+    "DOCUMENT:\n{doc}\n--\nANSWER:\n{ans}\n--\n\n"
+    'Your output should be in JSON format with the keys "REASONING" and "SCORE":\n'
+    '{{"REASONING": <bullet points>, "SCORE": <"PASS" or "FAIL">}}'
+)
+
+
+def predict_lynx(rows: list[dict], threshold: float, device: str) -> list[bool]:
+    """Lynx-8B faithfulness judge (vLLM offline); SCORE=FAIL => hallucinated. 8K window."""
+    import re
+
+    from vllm import LLM, SamplingParams
+
+    llm = LLM(
+        model="PatronusAI/Llama-3-Patronus-Lynx-8B-Instruct",
+        max_model_len=8192,
+        gpu_memory_utilization=0.9,
+        dtype="bfloat16",
+    )
+    tok = llm.get_tokenizer()
+
+    def _clip(text: str, n_tok: int) -> str:
+        ids = tok(text, add_special_tokens=False)["input_ids"]
+        return tok.decode(ids[:n_tok]) if len(ids) > n_tok else text
+
+    prompts = []
+    for r in rows:
+        prem = r["premise"]
+        if prem.startswith("User request:"):
+            q, _, doc = prem.partition("\n\n")
+            q = q[len("User request:") :].strip()
+        else:
+            q, doc = "", prem
+        # Budget for the 8K window: doc <=6000 tok, answer <=900 tok, +template/gen.
+        user = LYNX_PROMPT.format(q=q or "(not provided)", doc=_clip(doc, 6000), ans=_clip(r["answer"], 900))
+        prompts.append(
+            tok.apply_chat_template(
+                [{"role": "user", "content": user}], tokenize=False, add_generation_prompt=True
+            )
+        )
+    outs = llm.generate(prompts, SamplingParams(temperature=0.0, max_tokens=600))
+    preds = []
+    for o in outs:
+        t = o.outputs[0].text.upper()
+        m = re.search(r'"?SCORE"?\s*:?\s*"?\s*(PASS|FAIL)', t)
+        preds.append((m.group(1) if m else ("FAIL" if "FAIL" in t else "PASS")) == "FAIL")
+    return preds
+
+
+GRANITE_NOTHINK = (
+    "<no-think>As a judge agent, assess whether the provided text meets the given "
+    "judging criteria using all available information, including conversations, "
+    "documents, and tools. Provide your score immediately without explanation. "
+    "Output empty <think>\\n</think> tags followed by your score in <score></score> tags."
+)
+GRANITE_GROUNDEDNESS = (
+    "A text is considered ungrounded or unfaithful if it includes information "
+    "lacking support from, or directly contradicting, the provided document(s). "
+    "This risk arises when the text fabricates details, misinterprets the content, "
+    "or makes unsupported extrapolations beyond what is explicitly stated in the document(s)."
+)
+
+
+def predict_granite(rows: list[dict], threshold: float, device: str) -> list[bool]:
+    """Granite-Guardian-4.1-8b groundedness (vLLM offline, no-think); <score>yes => hallucinated."""
+    import re
+
+    from transformers import AutoTokenizer
+    from vllm import LLM, SamplingParams
+
+    mid = "ibm-granite/granite-guardian-4.1-8b"
+    tok = AutoTokenizer.from_pretrained(mid)
+    llm = LLM(model=mid, max_model_len=8192, gpu_memory_utilization=0.9, dtype="bfloat16")
+    block = (
+        f"<guardian>{GRANITE_NOTHINK}\n\n### Criteria: {GRANITE_GROUNDEDNESS}\n\n"
+        "### Scoring Schema: If the last assistant's text meets the criteria, "
+        "return 'yes'; otherwise, return 'no'."
+    )
+
+    def _clip(text: str, n: int) -> str:
+        ids = tok(text, add_special_tokens=False)["input_ids"]
+        return tok.decode(ids[:n]) if len(ids) > n else text
+
+    prompts = []
+    for r in rows:
+        docs = [{"doc_id": "0", "text": _clip(r["premise"], 5000)}]
+        msgs = [
+            {"role": "assistant", "content": _clip(r["answer"], 600)},
+            {"role": "user", "content": block},
+        ]
+        prompts.append(
+            tok.apply_chat_template(
+                msgs, tokenize=False, add_generation_prompt=True, documents=docs
+            )
+        )
+    outs = llm.generate(prompts, SamplingParams(temperature=0.0, max_tokens=512))
+    preds = []
+    for o in outs:
+        t = re.sub(r"<think>.*?</think>", "", o.outputs[0].text, flags=re.DOTALL)
+        m = re.findall(r"<score>\s*(.*?)\s*</score>", t, re.DOTALL)
+        v = m[0].strip().lower() if m else ("yes" if "yes" in t.lower() else "no")
+        preds.append(v == "yes")  # yes = ungrounded = hallucinated
+    return preds
+
+
+BASELINES = {"hhem": predict_hhem, "lynx": predict_lynx, "granite": predict_granite}
 
 
 def main() -> None:
