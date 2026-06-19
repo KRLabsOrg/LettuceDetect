@@ -23,11 +23,11 @@ datasets:
 
 ![LettuceCode mascot](https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/lettuce_code.png?raw=true)
 
-# lettucedect-v2-qwen: Generative Hallucination Span Detection
+# lettucedect-v2-qwen-2b: Generative Hallucination Span Detection
 
 ## Overview
 
-`lettucedect-v2-qwen` is a generative hallucination detector for Retrieval-Augmented
+`lettucedect-v2-qwen-2b` is a generative hallucination detector for Retrieval-Augmented
 Generation (RAG) and coding-agent settings. Given a user request, the supporting
 context, and an answer, it emits the **exact spans of the answer that are not
 supported by the context**, each tagged with a hallucination **category** and
@@ -66,7 +66,7 @@ the taxonomy. It replies with JSON; match each returned `text` back into the ans
 get character offsets.
 
 ```bash
-vllm serve KRLabsOrg/lettucedect-v2-qwen --served-model-name lettucedect-v2-qwen
+vllm serve KRLabsOrg/lettucedect-v2-qwen-2b --served-model-name lettucedect-v2-qwen-2b
 ```
 
 The model expects the exact detection prompt it was trained on (below). Send the
@@ -109,7 +109,7 @@ answer = "The capital of France is Paris. Its population is 2 million."
 user = f"User request: {question}\n\n{context}\n\nAnswer to verify:\n{answer}"
 
 resp = client.chat.completions.create(
-    model="lettucedect-v2-qwen", temperature=0.0,
+    model="lettucedect-v2-qwen-2b", temperature=0.0,
     messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}],
 )
 spans = json.loads(resp.choices[0].message.content)["hallucinated_spans"]
@@ -120,8 +120,18 @@ for s in spans:  # recover character offsets in the answer
 #   "subcategory": "numerical", "start": 32, "end": 60}]
 ```
 
-A first-class `HallucinationDetector(method="generative")` API (vLLM-backed, taxonomy +
-explanation built in) is coming to the LettuceDetect package.
+Or via the LettuceDetect package: serve the model with vLLM, point `OPENAI_API_BASE` at
+it, and call
+
+```python
+from lettucedetect.models.inference import HallucinationDetector
+det = HallucinationDetector(method="llm", model="KRLabsOrg/lettucedect-v2-qwen-2b")
+spans = det.predict(context=[context], question=question, answer=answer, output_format="spans")
+```
+
+It auto-routes this model to its native training prompt and `hallucinated_spans` output
+(typed `category`/`subcategory`). Pass `native=True` if served under a different name, and
+`include_reasoning=True` to request per-span explanations.
 
 ## Performance
 
