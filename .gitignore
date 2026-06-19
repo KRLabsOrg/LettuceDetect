@@ -183,3 +183,5 @@ temp/
 # cache/
 lettucedetect/cache/
 testing/
+
+CLAUDE.md
