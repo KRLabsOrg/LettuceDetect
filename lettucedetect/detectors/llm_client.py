@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 def build_hallucination_schema(
     include_reasoning: bool = False,
     categories: list[str] | None = None,
+    subcategories: list[str] | None = None,
 ) -> dict:
     """Build the JSON schema for the hallucination-detection response.
 
@@ -36,7 +37,7 @@ def build_hallucination_schema(
     :param categories: Allowed values for a per-span ``category`` field; omitted when None.
     :returns: JSON schema the response object must conform to.
     """
-    if not include_reasoning and not categories:
+    if not include_reasoning and not categories and not subcategories:
         items: dict = {
             "type": "string",
             "description": "Exact text span from the answer that is hallucinated",
@@ -58,6 +59,12 @@ def build_hallucination_schema(
                 "type": "string",
                 "enum": list(categories),
                 "description": "Hallucination category of the span",
+            }
+        if subcategories:
+            properties["subcategory"] = {
+                "type": "string",
+                "enum": list(subcategories),
+                "description": "Hallucination subcategory of the span",
             }
         if include_reasoning:
             properties["confidence"] = {

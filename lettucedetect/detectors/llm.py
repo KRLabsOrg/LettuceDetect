@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from string import Template
 
-from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS
+from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS, SUBCATEGORY_DEFINITIONS
 from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.llm_client import (
     LLMClient,
@@ -112,15 +112,20 @@ class LLMDetector:
         self.native = _looks_native(model) if native is None else native
         if isinstance(include_taxonomy, bool):
             self.categories = dict(CATEGORY_DEFINITIONS) if include_taxonomy else None
+            # The unified taxonomy is category + subcategory; enabling it types both.
+            self.subcategories = dict(SUBCATEGORY_DEFINITIONS) if include_taxonomy else None
         elif isinstance(include_taxonomy, dict):
             self.categories = dict(include_taxonomy) or None
+            self.subcategories = None  # custom category set: no defined subcategories
         else:
             self.categories = {
                 name: CATEGORY_DEFINITIONS.get(name) for name in include_taxonomy
             } or None
+            self.subcategories = None
         self.schema = build_hallucination_schema(
             include_reasoning=include_reasoning,
             categories=list(self.categories) if self.categories else None,
+            subcategories=list(self.subcategories) if self.subcategories else None,
         )
         self.client = client or make_llm_client(provider, **client_kwargs)
 
@@ -199,6 +204,15 @@ class LLMDetector:
                 for name, desc in self.categories.items()
             )
             notes.append('- "category" classifies the hallucination as one of:\n' + category_lines)
+        if self.subcategories:
+            example["subcategory"] = next(iter(self.subcategories))
+            subcategory_lines = "\n".join(
+                f'     - "{name}": {desc}' if desc else f'     - "{name}"'
+                for name, desc in self.subcategories.items()
+            )
+            notes.append(
+                '- "subcategory" further classifies the span as one of:\n' + subcategory_lines
+            )
         if self.include_reasoning:
             example["confidence"] = 0.95
             example["is_hallucination"] = True
@@ -287,7 +301,7 @@ class LLMDetector:
                 continue
             span = {"start": match.start(), "end": match.end(), "text": sub}
             if isinstance(item, dict):
-                for key in ("confidence", "reasoning", "category"):
+                for key in ("confidence", "reasoning", "category", "subcategory"):
                     if key in item:
                         span[key] = item[key]
             spans.append(span)
@@ -381,6 +395,9 @@ class LLMDetector:
             )
             self.cache.set(cache_key, cached)
         spans = gen.spans_to_offsets(answer, gen.parse_spans(cached or ""))
+        for span in spans:  # unify the rationale key with the judge path
+            if "explanation" in span:
+                span["reasoning"] = span.pop("explanation")
         if self.verify and spans:
             spans = self._verify(context, answer, spans)
         return spans
