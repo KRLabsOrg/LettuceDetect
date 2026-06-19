@@ -113,11 +113,13 @@ def main() -> None:
     if args.limit:
         ds = {k: ds[k].select(range(min(args.limit, len(ds[k])))) for k in ds}
 
+    bos = tokenizer.bos_token or ""  # Qwen3.5 has no BOS; avoid removeprefix(None)
+
     def to_text(batch: dict) -> dict:
         texts = tokenizer.apply_chat_template(
             batch["messages"], tokenize=False, add_generation_prompt=False
         )
-        return {"text": [t.removeprefix(tokenizer.bos_token) for t in texts]}
+        return {"text": [t.removeprefix(bos) for t in texts]}
 
     ds = {k: ds[k].map(to_text, batched=True, num_proc=args.num_proc) for k in ds}
 
