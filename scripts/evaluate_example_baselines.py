@@ -29,6 +29,7 @@ def load_rows(dataset: str, split: str, only: str | None, limit: int) -> list[di
                 "premise": r["prompt"] or r["context"],
                 "answer": r["answer"],
                 "gold": bool(r.get("labels")),
+                "source": r.get("dataset"),
             }
         )
         if limit and len(rows) >= limit:
@@ -198,7 +199,35 @@ def predict_granite(rows: list[dict], threshold: float, device: str) -> list[boo
     return preds
 
 
-BASELINES = {"hhem": predict_hhem, "lynx": predict_lynx, "granite": predict_granite}
+def predict_minicheck(rows: list[dict], threshold: float, device: str) -> list[bool]:
+    """Bespoke-MiniCheck-7B faithfulness; support prob < threshold => hallucinated.
+
+    MiniCheck chunks long documents internally and max-pools support over chunks, so
+    no manual sliding window is needed (unlike HHEM). claim = the answer.
+    """
+    from minicheck.minicheck import MiniCheck
+
+    scorer = MiniCheck(model_name="Bespoke-MiniCheck-7B", enable_prefix_caching=False)
+    _, raw_prob, _, _ = scorer.score(
+        docs=[r["premise"] for r in rows], claims=[r["answer"] for r in rows]
+    )
+    return [p < threshold for p in raw_prob]  # low support => hallucinated
+
+
+BASELINES = {
+    "hhem": predict_hhem,
+    "lynx": predict_lynx,
+    "granite": predict_granite,
+    "minicheck": predict_minicheck,
+}
+
+
+def _report(label: str, gold: list[bool], pred: list[bool]) -> None:
+    m = example_metrics(gold, pred)
+    print(
+        f"  {label:24s} P {m['precision']:.3f}  R {m['recall']:.3f}  F1 {m['f1']:.3f}  "
+        f"BAcc {m['bacc']:.3f}  Acc {m['accuracy']:.3f}  (n={m['n']})"
+    )
 
 
 def main() -> None:
@@ -208,6 +237,7 @@ def main() -> None:
     ap.add_argument("--dataset", required=True)
     ap.add_argument("--split", default="test")
     ap.add_argument("--only", help="Keep only rows whose `dataset` field == this.")
+    ap.add_argument("--by-source", action="store_true", help="Report per-source + ALL (one model load).")
     ap.add_argument("--threshold", type=float, default=0.5)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--limit", type=int, default=0)
@@ -216,11 +246,14 @@ def main() -> None:
     rows = load_rows(args.dataset, args.split, args.only, args.limit)
     print(f"{args.baseline}: {len(rows)} rows ({sum(r['gold'] for r in rows)} hallucinated)")
     pred = BASELINES[args.baseline](rows, args.threshold, args.device)
-    m = example_metrics([r["gold"] for r in rows], pred)
-    print(
-        f"  P {m['precision']:.3f}  R {m['recall']:.3f}  F1 {m['f1']:.3f}  "
-        f"BAcc {m['bacc']:.3f}  Acc {m['accuracy']:.3f}  (n={m['n']})"
-    )
+    gold = [r["gold"] for r in rows]
+    if args.by_source:
+        _report("ALL", gold, pred)
+        for s in sorted({r["source"] for r in rows}):
+            idx = [i for i, r in enumerate(rows) if r["source"] == s]
+            _report(s, [gold[i] for i in idx], [pred[i] for i in idx])
+    else:
+        _report(args.baseline, gold, pred)
 
 
 def _selfcheck() -> None:
