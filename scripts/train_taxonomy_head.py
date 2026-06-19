@@ -46,6 +46,13 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=2e-5)
     ap.add_argument("--temp", type=float, default=0.05, help="cosine softmax temperature")
     ap.add_argument("--holdout-subcategory", default="", help="exclude from TRAIN, score at test")
+    ap.add_argument(
+        "--eval-checkpoint",
+        type=Path,
+        default=None,
+        help="Load this saved encoder and ONLY eval (no training). Reports binary zero-shot "
+        "detection of --holdout-subcategory (cosine to that label alone, no trained-label argmax).",
+    )
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
 
@@ -54,8 +61,9 @@ def main() -> None:
     from transformers import AutoModel, AutoTokenizer
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    tok = AutoTokenizer.from_pretrained(args.model_name)
-    encoder = AutoModel.from_pretrained(args.model_name, dtype=torch.bfloat16).to(device)
+    source = str(args.eval_checkpoint) if args.eval_checkpoint else args.model_name
+    tok = AutoTokenizer.from_pretrained(source)
+    encoder = AutoModel.from_pretrained(source, dtype=torch.bfloat16).to(device)
 
     cat_names = list(CATEGORY_LABELS)
     sub_names = list(SUBCATEGORY_LABELS)
@@ -141,6 +149,42 @@ def main() -> None:
             if n[("cat", g)]
         }
 
+    def holdout_detection(rows: list) -> dict:
+        """Binary zero-shot detection of the held-out subcategory in ISOLATION.
+
+        Each span is scored by cosine to the held-out label's description ALONE — no
+        argmax against the trained labels, so the result measures whether the
+        description-conditioning transfers, not whether the unseen label out-competes
+        seen ones. positives = spans whose true subcategory == the held-out one.
+        """
+        import numpy as np
+
+        encoder.eval()
+        hv_idx = sub_names.index(args.holdout_subcategory)
+        scores: list[float] = []
+        labels: list[int] = []
+        with torch.no_grad():
+            hv = label_vecs(sub_names, SUBCATEGORY_LABELS)[hv_idx : hv_idx + 1]
+            for i in range(0, len(rows), args.batch_size):
+                batch = collate(rows[i : i + args.batch_size])
+                s = (span_vec(batch) @ hv.T).squeeze(-1).cpu()
+                scores.extend(s.tolist())
+                labels.extend(int(x == hv_idx) for x in batch["sub"].tolist())
+        encoder.train()
+        sc, y = np.array(scores), np.array(labels)
+        npos, nneg = int(y.sum()), int(len(y) - y.sum())
+        ranks = np.empty(len(sc)); ranks[sc.argsort()] = np.arange(1, len(sc) + 1)
+        auc = (ranks[y == 1].sum() - npos * (npos + 1) / 2) / (npos * nneg) if npos and nneg else float("nan")
+        order = sc.argsort()[::-1]
+        ys = y[order]
+        tp, fp = np.cumsum(ys), np.cumsum(1 - ys)
+        prec, rec = tp / (tp + fp), tp / npos
+        f1 = 2 * prec * rec / (prec + rec + 1e-9)
+        bi = int(f1.argmax())
+        ap = float((np.diff(np.concatenate([[0.0], rec])) * prec).sum())
+        return {"n": len(y), "n_pos": npos, "auc": float(auc), "ap": ap,
+                "best_f1": float(f1[bi]), "p": float(prec[bi]), "r": float(rec[bi]), "thr": float(sc[order][bi])}
+
     def save() -> None:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         encoder.save_pretrained(args.output_dir)
@@ -148,6 +192,17 @@ def main() -> None:
         (args.output_dir / "labels.json").write_text(
             json.dumps({"category": CATEGORY_LABELS, "subcategory": SUBCATEGORY_LABELS}, indent=2)
         )
+
+    if args.eval_checkpoint:
+        val_rows = load("validation")
+        print(f"eval-only {args.eval_checkpoint} / val {len(val_rows)} (holdout={args.holdout_subcategory!r})", flush=True)
+        det = holdout_detection(val_rows)
+        print("[holdout-detection] " + " ".join(
+            f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in det.items()
+        ), flush=True)
+        for g, (a, b, c) in evaluate(val_rows).items():
+            print(f"[{g}] n={c} cat_acc={a:.4f} sub_acc={b:.4f} (argmax-over-all-labels)", flush=True)
+        return
 
     train_rows, val_rows = load("train"), load("validation")
     print(f"train {len(train_rows)} / val {len(val_rows)} (holdout={args.holdout_subcategory!r})", flush=True)
