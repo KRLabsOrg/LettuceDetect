@@ -47,7 +47,7 @@ class LLMDetector:
         provider: str = "openai",
         client: LLMClient | None = None,
         include_reasoning: bool = False,
-        include_taxonomy: bool | list[str] = False,
+        include_taxonomy: bool | list[str] | dict[str, str] = False,
         min_confidence: float = 0.0,
         verify: bool = False,
         **client_kwargs,
@@ -68,9 +68,11 @@ class LLMDetector:
             in the returned spans.
         :param include_taxonomy: If True, ask the LLM to classify each span into one of
             the unified taxonomy categories defined in
-            :data:`lettucedetect.datasets.taxonomy.CATEGORY_DEFINITIONS`; pass a list of
-            category names to use a custom taxonomy instead. The classification is
-            included as a ``category`` key in the returned spans.
+            :data:`lettucedetect.datasets.taxonomy.CATEGORY_DEFINITIONS`. Pass a
+            ``{category: description}`` dict to use a custom taxonomy with your own
+            definitions, or a list of category names (definitions are reused from the
+            unified taxonomy where the name matches, otherwise omitted). The
+            classification is included as a ``category`` key in the returned spans.
         :param min_confidence: Drop spans whose ``confidence`` is below this threshold.
             Only meaningful together with ``include_reasoning`` (which produces the score).
         :param verify: If True, run a second adversarial pass that re-judges each flagged
@@ -88,12 +90,16 @@ class LLMDetector:
         self.min_confidence = min_confidence
         self.verify = verify
         if isinstance(include_taxonomy, bool):
-            self.categories = list(CATEGORY_DEFINITIONS) if include_taxonomy else None
+            self.categories = dict(CATEGORY_DEFINITIONS) if include_taxonomy else None
+        elif isinstance(include_taxonomy, dict):
+            self.categories = dict(include_taxonomy) or None
         else:
-            self.categories = list(include_taxonomy) or None
+            self.categories = {
+                name: CATEGORY_DEFINITIONS.get(name) for name in include_taxonomy
+            } or None
         self.schema = build_hallucination_schema(
             include_reasoning=include_reasoning,
-            categories=self.categories,
+            categories=list(self.categories) if self.categories else None,
         )
         self.client = client or make_llm_client(provider, **client_kwargs)
 
@@ -166,12 +172,10 @@ class LLMDetector:
                 '- "reasoning" comes first: weigh the span against the source before scoring or judging it.'
             )
         if self.categories:
-            example["category"] = self.categories[0]
+            example["category"] = next(iter(self.categories))
             category_lines = "\n".join(
-                f'     - "{name}": {CATEGORY_DEFINITIONS[name]}'
-                if name in CATEGORY_DEFINITIONS
-                else f'     - "{name}"'
-                for name in self.categories
+                f'     - "{name}": {desc}' if desc else f'     - "{name}"'
+                for name, desc in self.categories.items()
             )
             notes.append('- "category" classifies the hallucination as one of:\n' + category_lines)
         if self.include_reasoning:
