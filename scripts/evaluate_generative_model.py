@@ -103,6 +103,11 @@ def main() -> None:
         default=[],
         help="Dataset name(s) whose rows use the explanation prompt (e.g. their training prompt).",
     )
+    ap.add_argument(
+        "--extra-system",
+        default="",
+        help="Extra instruction appended to the system prompt (e.g. anti-over-flagging nudge for a judge baseline). Does not alter the shared taxonomy prompt.",
+    )
     args = ap.parse_args()
 
     from concurrent.futures import ThreadPoolExecutor
@@ -116,7 +121,8 @@ def main() -> None:
     explain_ds = set(args.explain_datasets)
 
     def system_for(r: dict) -> str:
-        return SYSTEM_EXPL if args.explain or r.get("dataset") in explain_ds else SYSTEM_BASE
+        base = SYSTEM_EXPL if args.explain or r.get("dataset") in explain_ds else SYSTEM_BASE
+        return f"{base}\n\n{args.extra_system}" if args.extra_system else base
 
     rows_in = []
     for name in args.dataset:
@@ -130,22 +136,30 @@ def main() -> None:
     client = OpenAI(base_url=args.base_url, api_key=args.api_key)
     usage: list[tuple[int, int]] = []  # (prompt_tokens, completion_tokens) per call
 
+    import time
+
+    errors: list[str] = []  # exception type names from calls that exhausted retries
+
     def infer(r: dict) -> str | None:
-        try:
-            resp = client.chat.completions.create(
-                model=args.model,
-                messages=[
-                    {"role": "system", "content": system_for(r)},
-                    {"role": "user", "content": build_user_message(r)},
-                ],
-                temperature=0.0,
-                max_tokens=args.max_new_tokens,
-            )
-            if resp.usage:
-                usage.append((resp.usage.prompt_tokens, resp.usage.completion_tokens))
-            return resp.choices[0].message.content
-        except Exception:
-            return None
+        for attempt in range(6):
+            try:
+                resp = client.chat.completions.create(
+                    model=args.model,
+                    messages=[
+                        {"role": "system", "content": system_for(r)},
+                        {"role": "user", "content": build_user_message(r)},
+                    ],
+                    temperature=0.0,
+                    max_tokens=args.max_new_tokens,
+                )
+                if resp.usage:
+                    usage.append((resp.usage.prompt_tokens, resp.usage.completion_tokens))
+                return resp.choices[0].message.content
+            except Exception as e:  # retry transient errors (rate limits, timeouts) with backoff
+                if attempt == 5:
+                    errors.append(type(e).__name__)
+                    return None
+                time.sleep(min(2**attempt, 30))
 
     with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
         replies = list(tqdm(ex.map(infer, rows_in), total=len(rows_in), desc="generate"))
@@ -162,6 +176,10 @@ def main() -> None:
 
     print_metrics_table(rows, by_label=args.by)
     print(f"\nunparseable/failed replies: {bad}/{len(rows)}")
+    if errors:
+        from collections import Counter
+
+        print(f"call errors (after retries): {dict(Counter(errors))}")
     if usage:
         pt = sum(u[0] for u in usage)
         ct = sum(u[1] for u in usage)

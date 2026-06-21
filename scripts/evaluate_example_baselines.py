@@ -200,18 +200,32 @@ def predict_granite(rows: list[dict], threshold: float, device: str) -> list[boo
 
 
 def predict_minicheck(rows: list[dict], threshold: float, device: str) -> list[bool]:
-    """Bespoke-MiniCheck-7B faithfulness; support prob < threshold => hallucinated.
+    """Bespoke-MiniCheck-7B, CLAIM-level (atomic line per claim).
 
-    MiniCheck chunks long documents internally and max-pools support over chunks, so
-    no manual sliding window is needed (unlike HHEM). claim = the answer.
+    MiniCheck is a sentence/claim-level checker, so scoring a whole multi-line answer
+    as ONE claim degenerates (it returns unsupported almost always). The faithful use
+    is to decompose the answer into atomic units and score each against the context.
+    For code-agent answers the atomic unit is a LINE. The answer is hallucinated if ANY
+    line is unsupported (support prob < threshold). MiniCheck chunks long docs internally.
     """
     from minicheck.minicheck import MiniCheck
 
     scorer = MiniCheck(model_name="Bespoke-MiniCheck-7B", enable_prefix_caching=False)
-    _, raw_prob, _, _ = scorer.score(
-        docs=[r["premise"] for r in rows], claims=[r["answer"] for r in rows]
-    )
-    return [p < threshold for p in raw_prob]  # low support => hallucinated
+    docs: list[str] = []
+    claims: list[str] = []
+    owner: list[int] = []
+    for i, r in enumerate(rows):
+        for ln in r["answer"].splitlines():
+            ln = ln.strip()
+            if len(ln) >= 3 and any(c.isalnum() for c in ln):  # skip bare braces/punctuation
+                docs.append(r["premise"])
+                claims.append(ln)
+                owner.append(i)
+    _, raw_prob, _, _ = scorer.score(docs=docs, claims=claims)
+    min_sup = [1.0] * len(rows)  # answers with no scorable line stay "supported"
+    for o, p in zip(owner, raw_prob):
+        min_sup[o] = min(min_sup[o], p)
+    return [s < threshold for s in min_sup]  # any line unsupported => hallucinated
 
 
 BASELINES = {
