@@ -26,6 +26,12 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 
 ## 🚀 Latest Updates
 
+- **June 2026 — LettuceDetect grows up: code, tool output & agentic workflows 🥬👨‍💻**
+  <p align="center"><img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/lettuce_code.png?raw=true" alt="LettuceCode mascot" width="240"/></p>
+  LettuceDetect now detects hallucinations in **coding-agent** answers — grounded in repository source and developer-tool output, not only prose. The new detectors localize (and type) unsupported spans of an answer: invented APIs/identifiers, wrong values, and behavior the request never asked for.
+  - **Models:** `lettucedect-v2-qwen-2b` (generative, emits typed spans in one pass) and `lettucedect-v2-mmbert-base` (fast encoder) — a single model across code, tool output, and prose (including 14-language [PsiloQA](https://huggingface.co/datasets/s-nlp/PsiloQA) and [RAGTruth](https://aclanthology.org/2024.acl-long.585/)).
+  - **Benchmark:** a span-annotated code + tool-output + structured-document hallucination dataset — [KRLabsOrg/lettucedetect-code-hallucination](https://huggingface.co/datasets/KRLabsOrg/lettucedetect-code-hallucination).
+  - On code-agent answers, the fine-tuned 2B detector substantially outperforms the off-the-shelf detectors and large LLM judges we evaluated, which over-flag generated code.
 - **August 31, 2025** - Released version **0.1.8**: Added TinyLettuce Ettin models for 17M, 32M, and 68M variants, Hallucination generation pipeline and added RAGFactChecker for triplet-based hallucination detection.
   - See [TinyLettuce Blog Post](https://huggingface.co/blog/adaamko/tinylettuce) for more details.
   - Our collection on Hugging Face: [TinyLettuce](https://huggingface.co/collections/KRLabsOrg/tinylettuce-68b42a66b8b6aaa4bf287bf4)
