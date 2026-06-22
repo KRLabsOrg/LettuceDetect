@@ -171,12 +171,8 @@ collapse, and where this model's value is clearest:
 | Granite-Guardian-4.1-8B | — | 0.663 | BAcc 0.538 |
 | MiniCheck-7B (claim-level) | — | 0.670 | flags every answer, BAcc 0.500 |
 
-The faithfulness models and the 550B judge over-flag because a generated code patch is not
-literally present in the context. Note their example-F1 (~0.61–0.67) is **not** real skill:
-at the ~50/50 split, blindly flagging every answer already scores example-F1 ≈ 0.67, which
-is why their balanced accuracy sits at chance (~0.50). Only a model trained on the task —
-which this one is, example-F1 0.835, BAcc well above chance — separates correct new code
-from genuine fabrications/contradictions.
+The off-the-shelf detectors and the 550B judge over-flag on code-agent (balanced accuracy
+near chance) because a generated code patch is not literally present in the context.
 
 ## Citing
 
