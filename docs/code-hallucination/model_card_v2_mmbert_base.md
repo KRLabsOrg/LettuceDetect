@@ -23,6 +23,17 @@ datasets:
 
 # lettucedect-v2-mmbert-base: Encoder Hallucination Span Detection
 
+## TL;DR — results
+
+A **fast encoder** (binary token classifier) for span-level hallucination detection across **code, tool output, and prose**, single forward pass:
+
+- **Unified test set (10,698):** span-F1 **0.642**, example-F1 **0.869**, IoU 0.671.
+- **Code-agent answers:** span-F1 **0.508** — close to the generative 2B (0.602) at a fraction of the size, and far above the off-the-shelf detectors and LLM judges we tested (HHEM / Lynx / Granite / MiniCheck / Nemotron-550B / gpt-oss-120b), which sit near chance.
+- **Prose:** RAGTruth example-F1 74.3 (above GPT-4 63.4 and Luna 65.4); multilingual PsiloQA across 14 languages.
+- Emits **binary** spans; for typed spans (category + subcategory) use `lettucedect-v2-qwen-2b` or the taxonomy-head cascade.
+
+The small, fast option when throughput/cost matter and binary spans suffice.
+
 ## Overview
 
 `lettucedect-v2-mmbert-base` is a lightweight **encoder** hallucination detector for
@@ -55,6 +66,44 @@ spans = detector.predict(context=[context], question=question, answer=answer, ou
 # [{"start": ..., "end": ..., "text": "...", "confidence": ...}]
 ```
 
+### Plain `transformers` (no lettucedetect)
+
+It's a standard token classifier — tokenize `(context, answer)` as a pair and read the labels
+over the answer segment (1 = unsupported):
+
+```python
+import torch
+from transformers import AutoModelForTokenClassification, AutoTokenizer
+
+model_id = "KRLabsOrg/lettucedect-v2-mmbert-base"
+tok = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForTokenClassification.from_pretrained(model_id).eval()
+
+context = "France is in Western Europe. Its capital Paris had about 2.1 million people in 2019."
+answer = "The capital of France is Paris, with a population of about 4.5 million people."
+
+enc = tok(context, answer, truncation="only_first", max_length=4096,
+          return_offsets_mapping=True, return_tensors="pt")
+with torch.no_grad():
+    preds = model(input_ids=enc.input_ids, attention_mask=enc.attention_mask).logits.argmax(-1)[0]
+
+seq_ids, offsets, spans, cur = enc.sequence_ids(0), enc["offset_mapping"][0].tolist(), [], None
+for i, (sid, (a, b)) in enumerate(zip(seq_ids, offsets)):
+    if sid != 1 or a == b:                  # keep only answer-segment, non-special tokens
+        continue
+    if preds[i].item() == 1:                # unsupported
+        cur = [a, b] if cur is None else [cur[0], b]
+    elif cur:
+        spans.append(cur); cur = None
+if cur:
+    spans.append(cur)
+print([{"text": answer[s:e], "start": s, "end": e} for s, e in spans])
+# -> [{'text': '4.5 million', 'start': 59, 'end': 70}]
+```
+
+For category/subcategory typing, use the `lettucedetect` cascade (`taxonomy_head=...`) or the
+generative `lettucedect-v2-qwen-2b`.
+
 ## Performance
 
 Char-level span metrics on the unified test set (10,698 samples), per source. These are
@@ -73,9 +122,33 @@ the detector's span numbers (typing is not produced by this model).
 
 The generative `lettucedect-v2-qwen-2b` scores higher on span-F1 (ALL 0.689 vs 0.642) and
 adds typing, but this encoder is far smaller and faster — a strong choice when throughput
-or cost matters and binary spans suffice. Both vastly outperform off-the-shelf detectors
-(HHEM, Lynx-8B, Granite-Guardian-8B) and a frontier LLM-as-judge on code, which sit near
-chance there.
+or cost matters and binary spans suffice.
+
+### Code-agent: vs other detectors
+
+| detector | span-F1 | example-F1 |
+|---|--:|--:|
+| lettucedect-v2-qwen-2b (generative 2B) | 0.602 | 0.835 |
+| lettucedect-v2-lfm-8b (generative 8B) | 0.507 | 0.811 |
+| **lettucedect-v2-mmbert-base (this)** | **0.508** | **0.770** |
+| Nemotron-3-Ultra-550B (LLM judge, task-aware) | 0.216 | 0.700 |
+| gpt-oss-120b (LLM judge, task-aware) | 0.212 | 0.691 |
+| HHEM-2.1 / Lynx-8B / Granite-Guardian / MiniCheck | — | ≈ chance (BAcc ~0.50) |
+
+This base encoder matches the 8B generative model on code-agent span-F1 and crushes the
+off-the-shelf detectors and large LLM judges, which over-flag generated code.
+
+### Prose benchmarks
+
+**RAGTruth** (official test, example-level F1): this multilingual+code base encoder scores
+**74.3** — below the RAGTruth-specialized LettuceDetect-large v1 (79.2) and the generative
+`lettucedect-v2-qwen-2b` (81.8), but above prompt-based GPT-4 (63.4) and Luna (65.4). It
+trades a little RAGTruth-specific accuracy for unified code+tool+multilingual coverage at
+base size; `lettucedect-v2-mmbert-large` is stronger.
+
+**PsiloQA** (14 languages): span-F1 0.714, IoU 0.627 — competitive multilingual span
+detection from a base encoder (the PsiloQA paper's strongest LLM judge reaches IoU ~0.40 on
+English; their fine-tuned encoder, trained on PsiloQA only, ~0.71).
 
 ## Typed spans (optional cascade)
 
