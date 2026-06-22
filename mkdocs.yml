@@ -95,6 +95,10 @@ nav:
       - Pipeline Phases: code-hallucination/phases.md
       - Configuration: code-hallucination/configuration.md
       - Architecture Research: code-hallucination/architecture-research.md
+      - Model Cards (v2):
+        - Generative (Qwen-2b): code-hallucination/model_card_v2_qwen.md
+        - Encoder (mmBERT-base): code-hallucination/model_card_v2_mmbert_base.md
+        - Taxonomy Head: code-hallucination/model_card_v2_taxonomy_head.md
   - Research:
     - TinyLettuce: TINYLETTUCE.md
     - Multilingual (EuroBERT): EUROBERT.md

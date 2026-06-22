@@ -11,6 +11,8 @@ LettuceDetect is an encoder-based model built on [ModernBERT](https://github.com
 ## Highlights
 
 - **Token-level precision** — identifies exact hallucinated spans, not just "this answer has a problem"
+- **Typed spans** — the v2 models label each span with a hallucination category and subcategory
+- **Code, tool output & agentic workflows** — v2 models extend detection beyond prose to coding-agent answers, tool output, and structured documents
 - **Fast inference** — 30-60 samples/sec on A100, suitable for production
 - **Long context** — supports up to 4K tokens (ModernBERT) or 8K tokens (EuroBERT)
 - **Multilingual** — English, German, French, Spanish, Italian, Polish, Chinese, Hungarian
@@ -47,7 +49,8 @@ Evaluated on [RAGTruth](https://aclanthology.org/2024.acl-long.585/) test set. S
 
 ## What's New
 
-- **[Code Hallucination Dataset](code-hallucination/index.md)** — A pipeline for generating span-level code hallucination data from SWE-bench (~18k samples across 53 repos)
+- **v2 models — code, tool & agentic detection with typed spans** — a new family trained on a unified code + tool-output + prose benchmark that emits **typed** spans (category + subcategory) in one pass: generative [`lettucedect-v2-qwen-2b`](https://huggingface.co/KRLabsOrg/lettucedect-v2-qwen-2b), fast encoder [`lettucedect-v2-mmbert-base`](https://huggingface.co/KRLabsOrg/lettucedect-v2-mmbert-base), and the [`lettucedect-v2-taxonomy-head`](https://huggingface.co/KRLabsOrg/lettucedect-v2-taxonomy-head) typing head. See [Quick Start](getting-started/quickstart.md#typed-spans-v2) and [Models](getting-started/models.md).
+- **[Code Hallucination Dataset](code-hallucination/index.md)** — A pipeline for generating span-level code hallucination data from SWE-bench
 - **Multilingual models** — EuroBERT-based models for 8 languages
 - **Web API** — FastAPI server with async client support
 

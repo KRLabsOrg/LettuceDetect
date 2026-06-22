@@ -1,5 +1,15 @@
 # Models
 
+## Code / Tool / Agentic Models (v2)
+
+A unified family trained on the [code + tool-output + prose benchmark](https://huggingface.co/datasets/KRLabsOrg/lettucedetect-code-hallucination). One model covers coding-agent answers, tool output, and prose, and emits **typed** spans (category + subcategory).
+
+| Model | Base | Output | Notes |
+|-------|------|--------|-------|
+| [lettucedect-v2-qwen-2b](https://huggingface.co/KRLabsOrg/lettucedect-v2-qwen-2b) | Qwen3.5-2B | typed spans (+ reasoning) | generative; detection and typing in one pass |
+| [lettucedect-v2-mmbert-base](https://huggingface.co/KRLabsOrg/lettucedect-v2-mmbert-base) | mmBERT-base | binary spans | fast encoder detector |
+| [lettucedect-v2-taxonomy-head](https://huggingface.co/KRLabsOrg/lettucedect-v2-taxonomy-head) | mmBERT-base | span typing | types encoder spans (cascade) — see [Quick Start](quickstart.md#typed-spans-v2) |
+
 ## English Models
 
 | Model | Base | Max Tokens | Example F1 | Span F1 |
