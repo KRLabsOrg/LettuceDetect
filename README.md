@@ -15,6 +15,7 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 [![Hugging Face](https://img.shields.io/badge/🤗-Models-yellow.svg)](https://huggingface.co/KRLabsOrg)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1Ubca5aMaBGdHtJ1rpqj3Ke9SLEr-PaDn?usp=sharing)
 [![arXiv](https://img.shields.io/badge/arXiv-2502.17125-b31b1b.svg)](https://arxiv.org/abs/2502.17125)
+[![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/RspnGxJNMa)
 
 ## Highlights
 
@@ -334,6 +335,10 @@ print(response.predictions)
 
 See `demo/detection_api.ipynb` for more examples.
 For async support use the `LettuceClientAsync` class instead.
+
+## Community
+
+Join us on [Discord](https://discord.gg/RspnGxJNMa) for questions, ideas, and to get involved. New contributors welcome — check the [`good first issue`](https://github.com/KRLabsOrg/LettuceDetect/issues?q=is%3Aopen+label%3A%22good+first+issue%22) and [`help wanted`](https://github.com/KRLabsOrg/LettuceDetect/issues?q=is%3Aopen+label%3A%22help+wanted%22) issues.
 
 ## License
 
