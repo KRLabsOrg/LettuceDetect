@@ -24,15 +24,20 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 - Our models currently **outperform** all other encoder-based and prompt-based models on the RAGTruth dataset and are significantly faster and smaller 
 - Achieves higher score than some fine-tuned LLMs e.g. LLAMA-2-13B presented in [RAGTruth](https://aclanthology.org/2024.acl-long.585/), coming up just short of the LLM fine-tuned in the [RAG-HAT paper](https://aclanthology.org/2024.emnlp-industry.113.pdf)
 
+## 🥬👨‍💻 New (June 2026): code, tool output & agentic workflows
+
+<p align="center"><img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/lettuce_code.png?raw=true" alt="LettuceCode mascot" width="220"/></p>
+
+LettuceDetect now detects hallucinations in **coding-agent** answers — grounded in repository source and developer-tool output, not only prose. The new detectors localize (and type) unsupported spans of an answer: invented APIs/identifiers, wrong values, and behavior the request never asked for.
+
+- **Models:** `lettucedect-v2-qwen-2b` (generative, emits typed spans in one pass) and `lettucedect-v2-mmbert-base` (fast encoder) — a single model across code, tool output, and prose (including 14-language [PsiloQA](https://huggingface.co/datasets/s-nlp/PsiloQA) and [RAGTruth](https://aclanthology.org/2024.acl-long.585/)).
+- **Benchmark:** a span-annotated code + tool-output + structured-document hallucination dataset — [KRLabsOrg/lettucedetect-code-hallucination](https://huggingface.co/datasets/KRLabsOrg/lettucedetect-code-hallucination).
+- On code-agent answers, the fine-tuned 2B detector substantially outperforms the off-the-shelf detectors and large LLM judges we evaluated, which over-flag generated code:
+
+<p align="center"><img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/code_agent_comparison.png?raw=true" alt="Code-agent hallucination detection comparison" width="560"/></p>
+
 ## 🚀 Latest Updates
 
-- **June 2026 — LettuceDetect grows up: code, tool output & agentic workflows 🥬👨‍💻**
-  <p align="center"><img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/lettuce_code.png?raw=true" alt="LettuceCode mascot" width="240"/></p>
-  LettuceDetect now detects hallucinations in **coding-agent** answers — grounded in repository source and developer-tool output, not only prose. The new detectors localize (and type) unsupported spans of an answer: invented APIs/identifiers, wrong values, and behavior the request never asked for.
-  - **Models:** `lettucedect-v2-qwen-2b` (generative, emits typed spans in one pass) and `lettucedect-v2-mmbert-base` (fast encoder) — a single model across code, tool output, and prose (including 14-language [PsiloQA](https://huggingface.co/datasets/s-nlp/PsiloQA) and [RAGTruth](https://aclanthology.org/2024.acl-long.585/)).
-  - **Benchmark:** a span-annotated code + tool-output + structured-document hallucination dataset — [KRLabsOrg/lettucedetect-code-hallucination](https://huggingface.co/datasets/KRLabsOrg/lettucedetect-code-hallucination).
-  - On code-agent answers, the fine-tuned 2B detector substantially outperforms the off-the-shelf detectors and large LLM judges we evaluated, which over-flag generated code.
-  <p align="center"><img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/code_agent_comparison.png?raw=true" alt="Code-agent hallucination detection comparison" width="560"/></p>
 - **August 31, 2025** - Released version **0.1.8**: Added TinyLettuce Ettin models for 17M, 32M, and 68M variants, Hallucination generation pipeline and added RAGFactChecker for triplet-based hallucination detection.
   - See [TinyLettuce Blog Post](https://huggingface.co/blog/adaamko/tinylettuce) for more details.
   - Our collection on Hugging Face: [TinyLettuce](https://huggingface.co/collections/KRLabsOrg/tinylettuce-68b42a66b8b6aaa4bf287bf4)
@@ -134,6 +139,25 @@ detector = HallucinationDetector(method="llm", lang="de")
 # Then predict the same way
 predictions = detector.predict(context=contexts, question=question, answer=answer, output_format="spans")
 ```
+
+### Typed spans (v2)
+
+The v2 models go beyond "hallucinated / not" and assign each span a **category** and **subcategory** from the hallucination taxonomy. With the encoder cascade, add a typing head on top of the fast binary detector:
+
+```python
+from lettucedetect.models.inference import HallucinationDetector
+
+detector = HallucinationDetector(
+    method="transformer",
+    model_path="KRLabsOrg/lettucedect-v2-mmbert-base",        # finds spans
+    taxonomy_head="KRLabsOrg/lettucedect-v2-taxonomy-head",   # types them
+)
+predictions = detector.predict(context=contexts, question=question, answer=answer, output_format="spans")
+# [{'start': 31, 'end': 71, 'text': ' The population of France is 69 million.',
+#   'category': 'contradiction', 'subcategory': 'numerical'}]
+```
+
+The generative model `lettucedect-v2-qwen-2b` produces the same typed spans in a single pass (no separate head) and can also return a short reason per span.
 
 ## Performance
 

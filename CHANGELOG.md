@@ -2,9 +2,15 @@
 
 All notable changes to LettuceDetect are documented here.
 
-## [Unreleased]
+## [0.2.0] - 2026-06-22
 
 ### Added
+- **Code, tool-output and agentic-workflow hallucination detection** — a new family of v2 detectors trained on a unified span-level benchmark spanning SWE-bench coding-agent traces, developer tool output and structured documents (ACL / README / Wikipedia), alongside RAGTruth and 14-language PsiloQA:
+  - `lettucedect-v2-qwen-2b` — generative detector that emits **typed** hallucination spans (category + subcategory) in a single pass, with optional reasoning
+  - `lettucedect-v2-mmbert-base` — fast encoder detector (binary token-level spans)
+  - `lettucedect-v2-taxonomy-head` — label-conditioned typing head that types encoder spans without a generative model
+- **Typed encoder cascade** — `TransformerDetector(taxonomy_head=...)` attaches a `category`/`subcategory` to each binary span via the taxonomy head (`HallucinationDetector(method="transformer", model_path=..., taxonomy_head=...)`)
+- **Native generative-detector support in `LLMDetector`** — auto-detects the v2 generative models and routes them to their detection prompt with structured typed-span output
 - Automatic context chunking for long inputs — when context exceeds `max_length`, passages are split into groups and scored independently with `max()` aggregation
 - Hungarian language support (prompts and summary templates)
 - GitHub Pages documentation site with KR Labs branding
