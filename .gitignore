@@ -187,3 +187,6 @@ tool-output-extractor/
 reviews/
 
 CLAUDE.md
+
+# Server-specific experiment launchers + one-off diagnostics (maszat box paths; not for public repo)
+scripts/experiments/
