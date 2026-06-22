@@ -31,6 +31,56 @@ print(predictions)
 #   'text': ' The population of France is 69 million.'}]
 ```
 
+## Use with plain Transformers
+
+The encoder models are standard Hugging Face token classifiers, so you can use them without
+installing `lettucedetect`. Tokenize the context and answer as a pair, then map label `1`
+(unsupported) over the answer segment back to character spans:
+
+```python
+import torch
+from transformers import AutoModelForTokenClassification, AutoTokenizer
+
+model_id = "KRLabsOrg/lettucedect-v2-mmbert-base"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForTokenClassification.from_pretrained(model_id).eval()
+
+context = "France is in Western Europe. Its capital Paris had about 2.1 million people in 2019."
+answer = "The capital of France is Paris, with a population of about 4.5 million people."
+
+encoding = tokenizer(
+    context,
+    answer,
+    truncation="only_first",
+    max_length=4096,
+    return_offsets_mapping=True,
+    return_tensors="pt",
+)
+with torch.no_grad():
+    predictions = model(
+        input_ids=encoding.input_ids,
+        attention_mask=encoding.attention_mask,
+    ).logits.argmax(-1)[0]
+
+sequence_ids = encoding.sequence_ids(0)
+offsets = encoding["offset_mapping"][0].tolist()
+spans = []
+current_span = None
+for index, (sequence_id, (start, end)) in enumerate(zip(sequence_ids, offsets)):
+    if sequence_id != 1 or start == end:
+        continue
+    if predictions[index].item() == 1:
+        current_span = [start, end] if current_span is None else [current_span[0], end]
+    elif current_span:
+        spans.append(current_span)
+        current_span = None
+if current_span:
+    spans.append(current_span)
+
+print([{"text": answer[start:end], "start": start, "end": end} for start, end in spans])
+# [{'text': '4.5 million', 'start': 59, 'end': 70}]
+```
+
 ## Available Models
 
 | Model | Language | Context | Size |
