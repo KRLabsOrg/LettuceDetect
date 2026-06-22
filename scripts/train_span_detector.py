@@ -107,18 +107,25 @@ def tokenize_split(
 
     def tok(batch: dict) -> dict:
         enc = tokenizer(
-            batch["prompt"], batch["answer"],
+            batch["prompt"],
+            batch["answer"],
             # longest_first (not only_first): if an answer alone exceeds max_length,
             # only_first can't fit it by truncating the prompt and the fast tokenizer
             # errors. longest_first still truncates only the prompt in the common
             # (long-prompt) case, keeping the answer and its label offsets intact.
-            truncation="longest_first", max_length=max_length, return_offsets_mapping=True,
+            truncation="longest_first",
+            max_length=max_length,
+            return_offsets_mapping=True,
         )
         labels = [
             token_labels(enc.sequence_ids(i), enc["offset_mapping"][i], batch["labels"][i])
             for i in range(len(batch["prompt"]))
         ]
-        return {"input_ids": enc["input_ids"], "attention_mask": enc["attention_mask"], "labels": labels}
+        return {
+            "input_ids": enc["input_ids"],
+            "attention_mask": enc["attention_mask"],
+            "labels": labels,
+        }
 
     ds = Dataset.from_list(rows)
     return ds.map(tok, batched=True, num_proc=num_proc, remove_columns=ds.column_names)
@@ -144,7 +151,9 @@ def main() -> None:
     """CLI entry point."""
     ap = argparse.ArgumentParser(description="Train a hallucination span detector (fast path).")
     ap.add_argument(
-        "--dataset", action="append", default=[],
+        "--dataset",
+        action="append",
+        default=[],
         help="HF hub dataset id (repeatable; merged across all given).",
     )
     ap.add_argument(
@@ -166,9 +175,13 @@ def main() -> None:
     ap.add_argument("--eval-steps", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--trust-remote-code", action="store_true", help="Needed for e.g. EuroBERT.")
-    ap.add_argument("--limit", type=int, default=0, help="Cap rows per split (0 = all). For smoke tests.")
+    ap.add_argument(
+        "--limit", type=int, default=0, help="Cap rows per split (0 = all). For smoke tests."
+    )
     ap.add_argument("--num-proc", type=int, default=8, help="Tokenization workers.")
-    ap.add_argument("--resume", action="store_true", help="Resume from last checkpoint in --output-dir.")
+    ap.add_argument(
+        "--resume", action="store_true", help="Resume from last checkpoint in --output-dir."
+    )
     args = ap.parse_args()
     if not args.dataset and not args.data:  # both empty lists
         ap.error("provide --dataset and/or --data")
@@ -222,8 +235,12 @@ def main() -> None:
     )
     # Under DDP, only rank 0 tokenizes + writes the cache; other ranks load it.
     with training_args.main_process_first():
-        train_ds = tokenize_split(rows["train"], tokenizer, args.max_length, args.doc_stride, args.num_proc)
-        eval_ds = tokenize_split(rows["validation"], tokenizer, args.max_length, args.doc_stride, args.num_proc)
+        train_ds = tokenize_split(
+            rows["train"], tokenizer, args.max_length, args.doc_stride, args.num_proc
+        )
+        eval_ds = tokenize_split(
+            rows["validation"], tokenizer, args.max_length, args.doc_stride, args.num_proc
+        )
 
     trainer = Trainer(
         model=model,
@@ -243,7 +260,9 @@ def main() -> None:
 
     if rows["test"]:
         with training_args.main_process_first():
-            test_ds = tokenize_split(rows["test"], tokenizer, args.max_length, args.doc_stride, args.num_proc)
+            test_ds = tokenize_split(
+                rows["test"], tokenizer, args.max_length, args.doc_stride, args.num_proc
+            )
         print("test:", trainer.evaluate(test_ds, metric_key_prefix="test"))
 
 

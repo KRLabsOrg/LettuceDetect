@@ -35,6 +35,7 @@ def _looks_native(model: str) -> bool:
         return False
     return "lettucede" in m and any(k in m for k in ("qwen", "lfm", "generative"))
 
+
 _RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
    (no extra keys, no markdown, no code-block fences):
 

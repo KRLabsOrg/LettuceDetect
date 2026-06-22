@@ -25,9 +25,18 @@ from pathlib import Path
 LORA_TARGETS = {
     "lfm": ["q_proj", "k_proj", "v_proj", "out_proj", "in_proj", "w1", "w2", "w3"],
     "qwen": [
-        "q_proj", "k_proj", "v_proj", "o_proj",
-        "in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a", "out_proj",
-        "gate_proj", "up_proj", "down_proj",
+        "q_proj",
+        "k_proj",
+        "v_proj",
+        "o_proj",
+        "in_proj_qkv",
+        "in_proj_z",
+        "in_proj_b",
+        "in_proj_a",
+        "out_proj",
+        "gate_proj",
+        "up_proj",
+        "down_proj",
     ],
     "default": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
 }
@@ -60,7 +69,9 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--save-steps", type=int, default=500)
     ap.add_argument("--num-proc", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="Cap rows per split (smoke test).")
-    ap.add_argument("--lora-targets", default="", help="Comma-sep LoRA modules (default: by family).")
+    ap.add_argument(
+        "--lora-targets", default="", help="Comma-sep LoRA modules (default: by family)."
+    )
     ap.add_argument("--resume", action="store_true")
     return ap.parse_args()
 
@@ -95,7 +106,9 @@ def main() -> None:
         full_finetuning=False,
         **extra,
     )
-    targets = args.lora_targets.split(",") if args.lora_targets else lora_targets_for(args.model_name)
+    targets = (
+        args.lora_targets.split(",") if args.lora_targets else lora_targets_for(args.model_name)
+    )
     model = FastLanguageModel.get_peft_model(
         model,
         r=args.lora_r,

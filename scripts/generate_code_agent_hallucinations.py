@@ -382,7 +382,9 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=30)
     ap.add_argument("--out", default="data/v2/code_agent")
     ap.add_argument("--ratio", type=float, default=HALLUCINATION_RATIO)
-    ap.add_argument("--repos", help="comma-separated instance-id prefixes to include (e.g. Lightning-AI)")
+    ap.add_argument(
+        "--repos", help="comma-separated instance-id prefixes to include (e.g. Lightning-AI)"
+    )
     ap.add_argument("--exclude-repos", help="comma-separated instance-id prefixes to exclude")
     ap.add_argument(
         "--edit-ratio",
@@ -453,7 +455,11 @@ def main() -> None:
         else:
             it["style"] = "edit" if rng.random() < args.edit_ratio else "files"
     if args.hall_ids_file:
-        wanted = {line.strip() for line in Path(args.hall_ids_file).read_text().splitlines() if line.strip()}
+        wanted = {
+            line.strip()
+            for line in Path(args.hall_ids_file).read_text().splitlines()
+            if line.strip()
+        }
         hall_items = [it for it in items if it["id"] in wanted]
     else:
         n_hall = int(len(items) * args.ratio)

@@ -52,7 +52,9 @@ def main() -> None:
     from lettucedetect.models.inference import HallucinationDetector
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    det = HallucinationDetector(method="transformer", model_path=args.detector, max_length=args.max_length)
+    det = HallucinationDetector(
+        method="transformer", model_path=args.detector, max_length=args.max_length
+    )
 
     tok = AutoTokenizer.from_pretrained(args.head)
     enc = AutoModel.from_pretrained(args.head, dtype=torch.bfloat16).to(device).eval()
@@ -74,11 +76,16 @@ def main() -> None:
         if not spans:
             return []
         e = tok(
-            answer + SEP + context, truncation=True, max_length=args.head_max_length,
-            return_offsets_mapping=True, return_tensors="pt",
+            answer + SEP + context,
+            truncation=True,
+            max_length=args.head_max_length,
+            return_offsets_mapping=True,
+            return_tensors="pt",
         )
         offs = e.pop("offset_mapping")[0].tolist()
-        h = enc(input_ids=e.input_ids.to(device), attention_mask=e.attention_mask.to(device)).last_hidden_state.float()[0]
+        h = enc(
+            input_ids=e.input_ids.to(device), attention_mask=e.attention_mask.to(device)
+        ).last_hidden_state.float()[0]
         out = []
         for sp in spans:
             s, en = sp["start"], sp["end"]
@@ -87,12 +94,17 @@ def main() -> None:
             )
             if mask.sum() == 0:  # span truncated away -> CLS fallback (matches training)
                 mask[0] = 1.0
-            v = torch.nn.functional.normalize((h * mask.unsqueeze(-1)).sum(0) / mask.sum().clamp(min=1), dim=-1)
-            out.append({
-                "start": s, "end": en,
-                "category": cat_names[int((v @ cv.T).argmax())],
-                "subcategory": sub_names[int((v @ sv.T).argmax())],
-            })
+            v = torch.nn.functional.normalize(
+                (h * mask.unsqueeze(-1)).sum(0) / mask.sum().clamp(min=1), dim=-1
+            )
+            out.append(
+                {
+                    "start": s,
+                    "end": en,
+                    "category": cat_names[int((v @ cv.T).argmax())],
+                    "subcategory": sub_names[int((v @ sv.T).argmax())],
+                }
+            )
         return out
 
     rows_in = []

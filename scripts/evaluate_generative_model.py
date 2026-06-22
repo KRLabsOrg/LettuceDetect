@@ -146,7 +146,9 @@ def main() -> None:
 
     errors: list[str] = []  # exception type names from calls that exhausted retries
 
-    extra = {"extra_body": {"reasoning_effort": args.reasoning_effort}} if args.reasoning_effort else {}
+    extra = (
+        {"extra_body": {"reasoning_effort": args.reasoning_effort}} if args.reasoning_effort else {}
+    )
 
     def infer(r: dict) -> str | None:
         for attempt in range(6):

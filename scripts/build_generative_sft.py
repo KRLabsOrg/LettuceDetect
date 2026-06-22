@@ -79,7 +79,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Build span-text SFT data from HF datasets.")
     ap.add_argument("--dataset", action="append", default=[], required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--explanations-map", type=Path, help="JSON map md5(answer)|start|end -> explanation.")
+    ap.add_argument(
+        "--explanations-map", type=Path, help="JSON map md5(answer)|start|end -> explanation."
+    )
     ap.add_argument(
         "--explain-source",
         action="append",
@@ -109,7 +111,9 @@ def main() -> None:
                     break
                 rec = to_messages(row, expl_map, explain_sources)
                 matched += sum(
-                    1 for m in rec["messages"] if m["role"] == "assistant" and '"explanation"' in m["content"]
+                    1
+                    for m in rec["messages"]
+                    if m["role"] == "assistant" and '"explanation"' in m["content"]
                 )
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 counts[out_split] = counts.get(out_split, 0) + 1

@@ -23,6 +23,7 @@ def build_source_context(source_data: dict) -> str:
     context = "\n\n".join(parts)
     return context[:MAX_PROMPT_CHARS] if len(context) > MAX_PROMPT_CHARS else context
 
+
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com"
 
 

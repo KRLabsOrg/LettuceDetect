@@ -50,7 +50,14 @@ def example_metrics(gold: list[bool], pred: list[bool]) -> dict[str, float]:
     tnr = tn / (tn + fp) if tn + fp else 0.0
     bacc = (tpr + tnr) / 2
     acc = (tp + tn) / len(gold) if gold else 0.0
-    return {"precision": prec, "recall": rec, "f1": f1, "bacc": bacc, "accuracy": acc, "n": len(gold)}
+    return {
+        "precision": prec,
+        "recall": rec,
+        "f1": f1,
+        "bacc": bacc,
+        "accuracy": acc,
+        "n": len(gold),
+    }
 
 
 def predict_hhem(rows: list[dict], threshold: float, device: str) -> list[bool]:
@@ -73,7 +80,9 @@ def predict_hhem(rows: list[dict], threshold: float, device: str) -> list[bool]:
     owner: list[int] = []
     for i, r in enumerate(rows):
         ctx, ans = r["premise"], r["answer"][:ans_cap]
-        chunks = [ctx[j : j + chunk] for j in range(0, max(1, len(ctx)), stride)][:max_chunks] or [""]
+        chunks = [ctx[j : j + chunk] for j in range(0, max(1, len(ctx)), stride)][:max_chunks] or [
+            ""
+        ]
         for c in chunks:
             pairs.append((c, ans))
             owner.append(i)
@@ -128,7 +137,9 @@ def predict_lynx(rows: list[dict], threshold: float, device: str) -> list[bool]:
         else:
             q, doc = "", prem
         # Budget for the 8K window: doc <=6000 tok, answer <=900 tok, +template/gen.
-        user = LYNX_PROMPT.format(q=q or "(not provided)", doc=_clip(doc, 6000), ans=_clip(r["answer"], 900))
+        user = LYNX_PROMPT.format(
+            q=q or "(not provided)", doc=_clip(doc, 6000), ans=_clip(r["answer"], 900)
+        )
         prompts.append(
             tok.apply_chat_template(
                 [{"role": "user", "content": user}], tokenize=False, add_generation_prompt=True
@@ -251,7 +262,9 @@ def main() -> None:
     ap.add_argument("--dataset", required=True)
     ap.add_argument("--split", default="test")
     ap.add_argument("--only", help="Keep only rows whose `dataset` field == this.")
-    ap.add_argument("--by-source", action="store_true", help="Report per-source + ALL (one model load).")
+    ap.add_argument(
+        "--by-source", action="store_true", help="Report per-source + ALL (one model load)."
+    )
     ap.add_argument("--threshold", type=float, default=0.5)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--limit", type=int, default=0)

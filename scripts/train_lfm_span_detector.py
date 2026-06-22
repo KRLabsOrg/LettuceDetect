@@ -102,7 +102,9 @@ def main() -> None:
         ap.error("provide --dataset and/or --data")
 
     sources = args.sources.split(",") if args.sources else None
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name, use_fast=True, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model_name, use_fast=True, trust_remote_code=True
+    )
     rows = load_rows(args.dataset, args.data, sources)
     if args.limit:
         rows = {split: r[: args.limit] for split, r in rows.items()}

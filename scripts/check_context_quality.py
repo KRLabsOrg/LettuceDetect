@@ -58,7 +58,9 @@ def main() -> None:
         return
     hall = [s for s in samples if s["labels"]]
 
-    print(f"=== {len(samples)} samples ({len(hall)} hallucinated, {len(samples) - len(hall)} clean) ===\n")
+    print(
+        f"=== {len(samples)} samples ({len(hall)} hallucinated, {len(samples) - len(hall)} clean) ===\n"
+    )
 
     # Grounding: answer references not evidenced in the context.
     examples: list[tuple] = []
@@ -86,9 +88,14 @@ def main() -> None:
     cats = collections.Counter(label["category"] for s in hall for label in s["labels"])
     modes = collections.Counter(s["metadata"].get("hallucination_mode") for s in hall)
     fmts = collections.Counter(s["metadata"].get("answer_style") for s in samples)
-    empty_expl = sum(1 for s in hall for label in s["labels"] if not label.get("explanation", "").strip())
+    empty_expl = sum(
+        1 for s in hall for label in s["labels"] if not label.get("explanation", "").strip()
+    )
     nedits = [len(s["labels"]) for s in hall]
-    covs = [sum(label["end"] - label["start"] for label in s["labels"]) / max(len(s["answer"]), 1) for s in hall]
+    covs = [
+        sum(label["end"] - label["start"] for label in s["labels"]) / max(len(s["answer"]), 1)
+        for s in hall
+    ]
     alens = sorted(len(s["answer"]) for s in samples)
 
     print("\nLABELS:")
@@ -98,8 +105,10 @@ def main() -> None:
     print(f"  empty explanations: {empty_expl}")
     if covs:
         print(f"  span coverage: median {statistics.median(covs):.0%}, max {max(covs):.0%}")
-    print(f"  answer length chars: median {statistics.median(alens):.0f}, "
-          f"p90 {alens[int(len(alens) * 0.9)]}, max {max(alens)}")
+    print(
+        f"  answer length chars: median {statistics.median(alens):.0f}, "
+        f"p90 {alens[int(len(alens) * 0.9)]}, max {max(alens)}"
+    )
 
     if examples:
         print("\nUNGROUNDED EXAMPLES:")

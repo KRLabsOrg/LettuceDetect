@@ -55,7 +55,7 @@ SQUEEZ_TARGETS = [
 ]
 
 
-def _menu_injector(source_key: str, prompt: str) -> 'Injector':
+def _menu_injector(source_key: str, prompt: str) -> "Injector":
     async def run(client: AsyncOpenAI, sample: dict, _i: int) -> InjectionResult:
         return await inject_menu_async(
             client,
@@ -85,7 +85,7 @@ async def _squeez_injector(client: AsyncOpenAI, sample: dict, i: int) -> Injecti
     )
 
 
-def _build_injector(source: str) -> 'Injector':
+def _build_injector(source: str) -> "Injector":
     if source == "squeez":
         return _squeez_injector
     if source == "paper":
@@ -127,8 +127,10 @@ async def convert_split(
     cleans = [i for i, s in enumerate(samples) if not s["labels"] and len(s["answer"]) >= 80]
     rng = random.Random(seed)  # noqa: S311 - reproducibility, not crypto
     rng.shuffle(cleans)
-    print(f"{path.name}: {hall}/{len(samples)} hall, need {needed} conversions, "
-          f"{len(cleans)} candidates")
+    print(
+        f"{path.name}: {hall}/{len(samples)} hall, need {needed} conversions, "
+        f"{len(cleans)} candidates"
+    )
     if not needed:
         return
 

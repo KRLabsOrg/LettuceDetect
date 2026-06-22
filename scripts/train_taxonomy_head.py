@@ -70,13 +70,19 @@ def main() -> None:
 
     def encode(texts: list[str], max_len: int) -> dict:
         return tok(
-            texts, truncation=True, max_length=max_len, padding=True,
-            return_offsets_mapping=True, return_tensors="pt",
+            texts,
+            truncation=True,
+            max_length=max_len,
+            padding=True,
+            return_offsets_mapping=True,
+            return_tensors="pt",
         )
 
     def label_vecs(names: list[str], descs: dict) -> "torch.Tensor":
         enc = tok([f"{n}: {descs[n]}" for n in names], padding=True, return_tensors="pt").to(device)
-        h = encoder(input_ids=enc.input_ids, attention_mask=enc.attention_mask).last_hidden_state.float()
+        h = encoder(
+            input_ids=enc.input_ids, attention_mask=enc.attention_mask
+        ).last_hidden_state.float()
         m = enc.attention_mask.unsqueeze(-1).float()
         v = (h * m).sum(1) / m.sum(1).clamp(min=1)  # mean-pool
         return torch.nn.functional.normalize(v, dim=-1)
@@ -138,13 +144,21 @@ def main() -> None:
                 pc = (sv @ cv.T).argmax(-1).cpu()
                 ps = (sv @ svv.T).argmax(-1).cpu()
                 for k in range(len(pc)):
-                    grp = "holdout" if sub_names[batch["sub"][k]] == args.holdout_subcategory else "seen"
+                    grp = (
+                        "holdout"
+                        if sub_names[batch["sub"][k]] == args.holdout_subcategory
+                        else "seen"
+                    )
                     n[("cat", grp)] += 1
                     correct[("cat", grp)] += int(pc[k] == batch["cat"][k])
                     correct[("sub", grp)] += int(ps[k] == batch["sub"][k])
         encoder.train()
         return {
-            g: (correct[("cat", g)] / n[("cat", g)], correct[("sub", g)] / n[("cat", g)], n[("cat", g)])
+            g: (
+                correct[("cat", g)] / n[("cat", g)],
+                correct[("sub", g)] / n[("cat", g)],
+                n[("cat", g)],
+            )
             for g in ("seen", "holdout")
             if n[("cat", g)]
         }
@@ -173,8 +187,13 @@ def main() -> None:
         encoder.train()
         sc, y = np.array(scores), np.array(labels)
         npos, nneg = int(y.sum()), int(len(y) - y.sum())
-        ranks = np.empty(len(sc)); ranks[sc.argsort()] = np.arange(1, len(sc) + 1)
-        auc = (ranks[y == 1].sum() - npos * (npos + 1) / 2) / (npos * nneg) if npos and nneg else float("nan")
+        ranks = np.empty(len(sc))
+        ranks[sc.argsort()] = np.arange(1, len(sc) + 1)
+        auc = (
+            (ranks[y == 1].sum() - npos * (npos + 1) / 2) / (npos * nneg)
+            if npos and nneg
+            else float("nan")
+        )
         order = sc.argsort()[::-1]
         ys = y[order]
         tp, fp = np.cumsum(ys), np.cumsum(1 - ys)
@@ -182,8 +201,16 @@ def main() -> None:
         f1 = 2 * prec * rec / (prec + rec + 1e-9)
         bi = int(f1.argmax())
         ap = float((np.diff(np.concatenate([[0.0], rec])) * prec).sum())
-        return {"n": len(y), "n_pos": npos, "auc": float(auc), "ap": ap,
-                "best_f1": float(f1[bi]), "p": float(prec[bi]), "r": float(rec[bi]), "thr": float(sc[order][bi])}
+        return {
+            "n": len(y),
+            "n_pos": npos,
+            "auc": float(auc),
+            "ap": ap,
+            "best_f1": float(f1[bi]),
+            "p": float(prec[bi]),
+            "r": float(rec[bi]),
+            "thr": float(sc[order][bi]),
+        }
 
     def save() -> None:
         args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -195,17 +222,29 @@ def main() -> None:
 
     if args.eval_checkpoint:
         val_rows = load("validation")
-        print(f"eval-only {args.eval_checkpoint} / val {len(val_rows)} (holdout={args.holdout_subcategory!r})", flush=True)
+        print(
+            f"eval-only {args.eval_checkpoint} / val {len(val_rows)} (holdout={args.holdout_subcategory!r})",
+            flush=True,
+        )
         det = holdout_detection(val_rows)
-        print("[holdout-detection] " + " ".join(
-            f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in det.items()
-        ), flush=True)
+        print(
+            "[holdout-detection] "
+            + " ".join(
+                f"{k}={v:.4f}" if isinstance(v, float) else f"{k}={v}" for k, v in det.items()
+            ),
+            flush=True,
+        )
         for g, (a, b, c) in evaluate(val_rows).items():
-            print(f"[{g}] n={c} cat_acc={a:.4f} sub_acc={b:.4f} (argmax-over-all-labels)", flush=True)
+            print(
+                f"[{g}] n={c} cat_acc={a:.4f} sub_acc={b:.4f} (argmax-over-all-labels)", flush=True
+            )
         return
 
     train_rows, val_rows = load("train"), load("validation")
-    print(f"train {len(train_rows)} / val {len(val_rows)} (holdout={args.holdout_subcategory!r})", flush=True)
+    print(
+        f"train {len(train_rows)} / val {len(val_rows)} (holdout={args.holdout_subcategory!r})",
+        flush=True,
+    )
     dl = DataLoader(train_rows, batch_size=args.batch_size, shuffle=True, collate_fn=collate)
     opt = torch.optim.AdamW(encoder.parameters(), lr=args.lr)
     ce = torch.nn.CrossEntropyLoss()

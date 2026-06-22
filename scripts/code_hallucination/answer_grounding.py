@@ -30,6 +30,7 @@ def _import_names(piece_group: str) -> list[str]:
             names.append(name)
     return names
 
+
 _BUILTINS = frozenset(
     "len str int float bool list dict tuple set print range enumerate sorted map filter "
     "zip open isinstance getattr setattr hasattr super type repr min max sum abs all any "
@@ -263,7 +264,9 @@ def resolve_definitions(
     return grounded
 
 
-_SECTION = frozenset({"description", "usage", "parameters", "returns", "example", "examples", "note"})
+_SECTION = frozenset(
+    {"description", "usage", "parameters", "returns", "example", "examples", "note"}
+)
 
 
 def _signatures(doc: str, max_lines: int = 24) -> str:

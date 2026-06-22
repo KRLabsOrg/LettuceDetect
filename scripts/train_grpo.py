@@ -51,8 +51,12 @@ def main() -> None:
     ap.add_argument("--n-ragtruth", type=int, default=1500, help="GRPO prompts from ragtruth.")
     ap.add_argument("--n-code", type=int, default=1500, help="GRPO prompts from code-agent.")
     ap.add_argument("--n-other", type=int, default=300, help="GRPO prompts per OTHER source.")
-    ap.add_argument("--beta-recall", type=float, default=2.0, help="F-beta for the reward (>1 = recall).")
-    ap.add_argument("--kl-beta", type=float, default=0.04, help="GRPO KL coefficient (anchor to SFT).")
+    ap.add_argument(
+        "--beta-recall", type=float, default=2.0, help="F-beta for the reward (>1 = recall)."
+    )
+    ap.add_argument(
+        "--kl-beta", type=float, default=0.04, help="GRPO KL coefficient (anchor to SFT)."
+    )
     ap.add_argument("--num-generations", type=int, default=6)
     ap.add_argument("--max-prompt-length", type=int, default=8192)
     ap.add_argument("--max-completion-length", type=int, default=512)
@@ -63,7 +67,9 @@ def main() -> None:
     ap.add_argument("--grad-accum", type=int, default=4)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--save-steps", type=int, default=200)
-    ap.add_argument("--resume", action="store_true", help="Resume from last checkpoint in --output-dir.")
+    ap.add_argument(
+        "--resume", action="store_true", help="Resume from last checkpoint in --output-dir."
+    )
     args = ap.parse_args()
 
     from unsloth import FastLanguageModel  # noqa: I001  must precede trl/transformers
@@ -111,18 +117,29 @@ def main() -> None:
     rng = random.Random(3407)
     picked = []
     for src, group in by_src.items():
-        n = args.n_ragtruth if src == "ragtruth" else args.n_code if src in explain_src else args.n_other
+        n = (
+            args.n_ragtruth
+            if src == "ragtruth"
+            else args.n_code
+            if src in explain_src
+            else args.n_other
+        )
         rng.shuffle(group)
         picked += group[: min(n, len(group))]
     rng.shuffle(picked)
     if args.limit:
         picked = picked[: args.limit]
-    print(f"GRPO prompts: {len(picked)} (per-source caps rt={args.n_ragtruth} code={args.n_code} other={args.n_other})")
+    print(
+        f"GRPO prompts: {len(picked)} (per-source caps rt={args.n_ragtruth} code={args.n_code} other={args.n_other})"
+    )
 
     def to_grpo(r: dict) -> dict:
         src = r.get("dataset")
         system = SYSTEM_EXPL if src in explain_src else SYSTEM_BASE
-        prompt = [{"role": "system", "content": system}, {"role": "user", "content": build_user_message(r)}]
+        prompt = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": build_user_message(r)},
+        ]
         gold = [{"start": lab["start"], "end": lab["end"]} for lab in (r.get("labels") or [])]
         return {"prompt": prompt, "answer": r["answer"], "gold": json.dumps(gold)}
 
