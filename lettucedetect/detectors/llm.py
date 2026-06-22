@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def _looks_native(model: str) -> bool:
-    """Heuristic: is ``model`` one of our fine-tuned generative span detectors?
+    """Heuristically decide whether ``model`` is one of our fine-tuned generative detectors.
 
     True for the ``lettucedect-v2`` generative models (Qwen/LFM), which expect the
     frozen :mod:`lettucedetect.prompts.generative` prompt and emit ``hallucinated_spans``.
