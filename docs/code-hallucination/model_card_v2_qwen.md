@@ -58,20 +58,6 @@ to verify. It replies with a JSON object listing each hallucinated span verbatim
 with its category and subcategory; a fully supported answer returns an empty list.
 Span offsets are recovered by matching each returned substring back into the answer.
 
-## Scope — what it detects
-
-The model flags **grounding** failures: content not supported by the context. The three
-categories are contradictions (a wrong value, number, date, signature), fabricated
-references (an identifier, method, API, or section absent from the context), and
-unsupported additions (a claim or behavior the context never states — including, for
-code, behavior an agent added that the request/context did not call for).
-
-It is **not** an instruction-adherence or spec-compliance checker: valid, correctly-grounded
-code that simply does *more than asked* (e.g. an extra-but-reasonable option) is not a
-hallucination by this definition and is generally not flagged. As a span model its main
-limitation is recall — it reliably finds the salient errors but may miss the *n*-th subtle
-one in a dense answer.
-
 ## Usage
 
 The model is a generative span detector: serve it with vLLM (OpenAI-compatible) and
@@ -167,6 +153,24 @@ On RAGTruth the example-F1 (0.818) is above LettuceDetect-large (0.792); on Psil
 the IoU (0.687) is competitive with PsiloQA-specialist encoders. Its strength is
 **unified cross-domain coverage** — one model handling code, prose, and 14 languages
 — rather than a single-benchmark record.
+
+### Baselines on code-agent
+
+Code-agent (2,015 samples) is where off-the-shelf detectors and even frontier LLM judges
+collapse, and where this model's value is clearest:
+
+| detector | code-agent span-F1 | notes |
+|---|--:|---|
+| **lettucedect-v2-qwen-2b (this model)** | **0.602** | balanced (P 0.60 / R 0.61) |
+| lettucedect-v2-mmbert-base | 0.508 | encoder counterpart |
+| lettucedect-large (v1, EN/RAGTruth span model) | 0.172 | trained on prose RAG |
+| Nemotron-3-Ultra-550B (zero-shot LLM judge) | 0.186 / 0.216 | naive / task-aware prompt |
+| HHEM-2.1, Lynx-8B, Granite-Guardian-4.1-8B | — | answer-level **BAcc ≈ 0.50** (chance) |
+| MiniCheck-7B (claim-level) | — | flags **every** answer (BAcc 0.50) |
+
+The faithfulness models (HHEM/Lynx/Granite/MiniCheck) and the 550B judge over-flag because
+a generated code patch is not literally present in the context; only a model trained on the
+task distinguishes correct new code from genuine fabrications/contradictions.
 
 ## Citing
 
