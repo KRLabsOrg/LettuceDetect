@@ -108,6 +108,12 @@ def main() -> None:
         default="",
         help="Extra instruction appended to the system prompt (e.g. anti-over-flagging nudge for a judge baseline). Does not alter the shared taxonomy prompt.",
     )
+    ap.add_argument(
+        "--reasoning-effort",
+        default="",
+        help="For reasoning models (e.g. gpt-oss): low/medium/high, passed as extra_body. "
+        "Without it gpt-oss spends the whole budget reasoning and returns empty content.",
+    )
     args = ap.parse_args()
 
     from concurrent.futures import ThreadPoolExecutor
@@ -140,6 +146,8 @@ def main() -> None:
 
     errors: list[str] = []  # exception type names from calls that exhausted retries
 
+    extra = {"extra_body": {"reasoning_effort": args.reasoning_effort}} if args.reasoning_effort else {}
+
     def infer(r: dict) -> str | None:
         for attempt in range(6):
             try:
@@ -151,6 +159,7 @@ def main() -> None:
                     ],
                     temperature=0.0,
                     max_tokens=args.max_new_tokens,
+                    **extra,
                 )
                 if resp.usage:
                     usage.append((resp.usage.prompt_tokens, resp.usage.completion_tokens))
