@@ -58,6 +58,20 @@ to verify. It replies with a JSON object listing each hallucinated span verbatim
 with its category and subcategory; a fully supported answer returns an empty list.
 Span offsets are recovered by matching each returned substring back into the answer.
 
+## Scope — what it detects
+
+The model flags **grounding** failures: content not supported by the context. The three
+categories are contradictions (a wrong value, number, date, signature), fabricated
+references (an identifier, method, API, or section absent from the context), and
+unsupported additions (a claim or behavior the context never states — including, for
+code, behavior an agent added that the request/context did not call for).
+
+It is **not** an instruction-adherence or spec-compliance checker: valid, correctly-grounded
+code that simply does *more than asked* (e.g. an extra-but-reasonable option) is not a
+hallucination by this definition and is generally not flagged. As a span model its main
+limitation is recall — it reliably finds the salient errors but may miss the *n*-th subtle
+one in a dense answer.
+
 ## Usage
 
 The model is a generative span detector: serve it with vLLM (OpenAI-compatible) and
