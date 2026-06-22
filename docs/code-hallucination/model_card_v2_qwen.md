@@ -159,18 +159,24 @@ the IoU (0.687) is competitive with PsiloQA-specialist encoders. Its strength is
 Code-agent (2,015 samples) is where off-the-shelf detectors and even frontier LLM judges
 collapse, and where this model's value is clearest:
 
-| detector | code-agent span-F1 | notes |
-|---|--:|---|
-| **lettucedect-v2-qwen-2b (this model)** | **0.602** | balanced (P 0.60 / R 0.61) |
-| lettucedect-v2-mmbert-base | 0.508 | encoder counterpart |
-| lettucedect-large (v1, EN/RAGTruth span model) | 0.172 | trained on prose RAG |
-| Nemotron-3-Ultra-550B (zero-shot LLM judge) | 0.186 / 0.216 | naive / task-aware prompt |
-| HHEM-2.1, Lynx-8B, Granite-Guardian-4.1-8B | — | answer-level **BAcc ≈ 0.50** (chance) |
-| MiniCheck-7B (claim-level) | — | flags **every** answer (BAcc 0.50) |
+| detector | span-F1 | example-F1 | notes |
+|---|--:|--:|---|
+| **lettucedect-v2-qwen-2b (this model)** | **0.602** | **0.835** | balanced (span P 0.60 / R 0.61) |
+| lettucedect-v2-mmbert-base | 0.508 | 0.770 | encoder counterpart |
+| lettucedect-large (v1, EN/RAGTruth span model) | 0.172 | 0.684 | trained on prose RAG |
+| Nemotron-3-Ultra-550B (zero-shot judge, naive prompt) | 0.186 | 0.655 | BAcc ≈ 0.50 |
+| Nemotron-3-Ultra-550B (task-aware prompt) | 0.216 | 0.700 | BAcc ≈ 0.50 |
+| HHEM-2.1 (sliding-window) | — | 0.632 | BAcc 0.497 |
+| Lynx-8B | — | 0.609 | BAcc 0.526 |
+| Granite-Guardian-4.1-8B | — | 0.663 | BAcc 0.538 |
+| MiniCheck-7B (claim-level) | — | 0.670 | flags every answer, BAcc 0.500 |
 
-The faithfulness models (HHEM/Lynx/Granite/MiniCheck) and the 550B judge over-flag because
-a generated code patch is not literally present in the context; only a model trained on the
-task distinguishes correct new code from genuine fabrications/contradictions.
+The faithfulness models and the 550B judge over-flag because a generated code patch is not
+literally present in the context. Note their example-F1 (~0.61–0.67) is **not** real skill:
+at the ~50/50 split, blindly flagging every answer already scores example-F1 ≈ 0.67, which
+is why their balanced accuracy sits at chance (~0.50). Only a model trained on the task —
+which this one is, example-F1 0.835, BAcc well above chance — separates correct new code
+from genuine fabrications/contradictions.
 
 ## Citing
 
