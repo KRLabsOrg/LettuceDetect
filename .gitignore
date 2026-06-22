@@ -196,3 +196,7 @@ docs/code-hallucination/paper/
 
 # Large local data artifact
 source_cache.zip
+
+# Local scratch / personal working files
+stuff/
+AGENTS.md
