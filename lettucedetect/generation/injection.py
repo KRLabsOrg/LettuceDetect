@@ -58,7 +58,7 @@ PROMPT_RESIDUE: tuple[str, ...] = (
 )
 MAX_LABEL_COVERAGE = 0.40
 MAX_LABEL_SPAN_CHARS = 500
-MIN_LABEL_SPAN_CHARS = 12
+MIN_LABEL_SPAN_CHARS = 4
 
 
 @dataclass
@@ -96,15 +96,29 @@ def _find_all_occurrences(text: str, pattern: str) -> list[dict]:
 
 
 def _locate_original_change(original_answer: str, change: dict) -> dict | None:
-    """Locate a replacement span in the original answer by exact unique match."""
+    """Locate a replacement span in the original answer.
+
+    Uses the first occurrence when the snippet recurs. Returns None for missing
+    fields, a snippet absent from the answer, or a no-op (original and hallucinated
+    identical once whitespace is collapsed).
+    """
     original_span = change.get("original", "")
     hallucinated_span = change.get("hallucinated", "")
     if not original_span or not hallucinated_span:
         return None
+    if " ".join(original_span.split()) == " ".join(hallucinated_span.split()):
+        return None
 
     offsets = _find_all_occurrences(original_answer, original_span)
-    if len(offsets) != 1:
-        return None
+    if not offsets:
+        # Retry on the whitespace-stripped core if the exact snippet isn't found.
+        stripped = original_span.strip()
+        if stripped and stripped != original_span:
+            offsets = _find_all_occurrences(original_answer, stripped)
+            if offsets:
+                original_span, hallucinated_span = stripped, hallucinated_span.strip()
+        if not offsets:
+            return None
 
     return {
         "start": offsets[0]["start"],
@@ -227,15 +241,18 @@ def _contains_leakage(text: str, leaky_terms: tuple[str, ...]) -> bool:
 
 
 def _max_allowed_coverage(answer_len: int, base_cap: float) -> float:
-    """Coverage cap by answer length.
+    """Coverage cap, decreasing monotonically with answer length.
 
-    Short answers/fragments (<=400 chars) get a 0.40 cap, medium answers
-    (<=800) a tighter 0.35, and longer answers fall back to ``base_cap``.
+    A single genuine edit is a large fraction of a short answer, so short answers
+    get a lenient cap; long answers where most of the text is flagged are the
+    suspicious case and fall back to ``base_cap``.
     """
-    if answer_len <= 400:
-        return 0.40
-    if answer_len <= 800:
-        return 0.35
+    if answer_len <= 200:
+        return 0.80
+    if answer_len <= 500:
+        return 0.60
+    if answer_len <= 1500:
+        return 0.45
     return base_cap
 
 
@@ -649,10 +666,20 @@ def _menu_user_msg(context: str, answer: str, context_chars: int) -> str:
 
 
 def _map_menu_labels(result: InjectionResult, source: str) -> InjectionResult:
-    """Attach unified category/subcategory to each span via the source's type map."""
+    """Attach unified category/subcategory to each span via the source's type map.
+
+    An edit whose native label is not in the source's map fails the whole
+    sample (``validation:unknown_native_label``) rather than emitting it.
+    """
     if result.ok:
         for lab in result.labels:
-            category, subcategory = map_label(lab["label"], source)
+            try:
+                category, subcategory = map_label(lab["label"], source)
+            except ValueError:
+                return InjectionResult(
+                    ok=False,
+                    reason=f"validation:unknown_native_label ({lab['label']!r})",
+                )
             lab["category"] = category
             lab["subcategory"] = subcategory
     return result

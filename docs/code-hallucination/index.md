@@ -1,294 +1,251 @@
-# Code Hallucination Dataset Pipeline
+# Code-Agent Hallucination Dataset
 
-A modular 9-phase pipeline for generating span-level code hallucination detection datasets from [SWE-bench](https://www.swebench.com/). Produces training data where each sample contains source code context, a code answer, and character-level annotations marking hallucinated spans.
+A pipeline for generating span-level code hallucination detection data from
+[SWE-bench](https://www.swebench.com/). Each sample pairs repository context and a
+developer request with a coding-assistant answer that is either correct or carries
+character-level annotations marking the hallucinated spans.
 
-## Why This Dataset?
+Published as the `lettucedetect-code-agent` source of
+[`KRLabsOrg/lettucedetect-code-hallucination`](https://huggingface.co/datasets/KRLabsOrg/lettucedetect-code-hallucination).
 
-Existing hallucination detection datasets (RAGTruth, RAGBench) focus on **text** — question answering, summarization, data-to-text. There is no established **span-level code hallucination dataset**. CodeMirage classifies entire snippets but doesn't localize where the hallucination is.
+## Why this dataset
 
-This pipeline generates samples where an LLM coding assistant answers a developer's question about a real codebase, and we know exactly which character spans in the answer are hallucinated — enabling training of both token-level classifiers (ModernBERT) and generative span detectors (decoder LLMs).
+Existing hallucination-detection datasets (RAGTruth, RAGBench) focus on **text** —
+question answering, summarization, data-to-text. There is no established
+**span-level code hallucination dataset**; CodeMirage classifies whole snippets
+but doesn't localize where the hallucination is. Here a coding assistant answers a
+developer's request about a real codebase and we know exactly which character
+spans of the answer are hallucinated — enabling training of both token-level
+classifiers (ModernBERT) and generative span detectors (decoder LLMs).
 
-## Dataset Overview
+## The task it models
+
+A coding agent is given a developer request plus repository context and produces a
+solution. The answer is the project's **real fix** (the gold patch, rendered as an
+edit), into which realistic, **request-grounded** mistakes are injected — the
+failure modes coding agents actually exhibit:
+
+| Injected type | Unified category | What it is |
+|---|---|---|
+| `wrong_implementation` | `contradiction` | addresses the request but with the wrong logic, condition, field, or value |
+| `unrequested_change` | `unsupported_addition` | also does something the request never asked for (an extra block or side effect) |
+| `fabricated_api` | `fabricated_reference` | references a method/attribute/keyword that does not exist on a real object |
+
+Clean samples are the gold fix with no labels. Symbols the answer references that
+are missing from the truncated context are **grounded** — their real definitions
+are pulled into the context — so a clean reference is never confused with a
+fabrication. Grounding has four tiers (see [Phases](phases.md)):
+
+1. the patch's modified functions and the full changed files,
+2. modules the answer **imports** (resolved anywhere in the repo),
+3. modules the **changed file imports** — base-class mixins and sibling modules,
+   which grounds cross-module `self.method` calls,
+4. for third-party APIs, **Context7** signatures (e.g. the real `torch.cuda.set_device`),
+   added as a `Library signatures` block for structural samples.
+
+Tiers 1–3 append a `Referenced definitions` block; tier 4 a `Library signatures`
+block. `GITHUB_TOKEN` (repo fetches) and `CONTEXT7_API_KEY` (third-party docs)
+raise the respective rate limits.
+
+## Dataset overview
 
 | Property | Value |
-|----------|-------|
-| **Source** | SWE-bench (all splits) |
-| **Total instances** | ~21,500 (19k train + 225 dev + 2.3k test) |
-| **Repos** | 53 unique repos, zero overlap between splits |
-| **Clean/hallucinated ratio** | ~60% clean / ~40% hallucinated |
-| **Hallucination types** | Structural, behavioral, semantic |
-| **Answer formats** | Code with explanation, complete function, fragment, edit-style |
-| **Annotation granularity** | Character-level spans |
+|---|---|
+| Source | SWE-bench (all splits, repository-disjoint) |
+| Samples | ~16.8k (≈73% clean / ≈27% hallucinated) |
+| Repos | 44+ unique repos, zero overlap between splits |
+| Answer form | the gold fix as `function` (a patched function), `fragment` (the hunk), or `edit` (`In file X, replace Y with Z`) |
+| Annotation | character-level spans, unified taxonomy |
 
-## Quick Start
+## How it runs
 
-### Test with a few examples
+Two steps. Preparation is cached and only runs once; generation is the part you
+re-run.
 
-```bash
-# Using Groq (fast, free tier available)
-OPENAI_API_KEY=your_groq_key \
-  python -m scripts.code_hallucination.pipeline --test 5
-
-# Using any OpenAI-compatible API
-OPENAI_API_KEY=your_key \
-API_BASE_URL=https://api.example.com/v1 \
-MODEL=your-model-name \
-  python -m scripts.code_hallucination.pipeline --test 10
-```
-
-### Run the full pipeline
+### 1. Prepare (cached inputs)
 
 ```bash
-# Run all 9 phases
 python -m scripts.code_hallucination.pipeline --all
-
-# Run specific phases
-python -m scripts.code_hallucination.pipeline --phase 1 2 3
-
-# Override LLM settings via CLI
-python -m scripts.code_hallucination.pipeline --all \
-  --api-key YOUR_KEY \
-  --base-url https://api.groq.com/openai/v1 \
-  --model moonshotai/kimi-k2-instruct-0905
 ```
 
-### Run with local vLLM (recommended for bulk generation)
+Three prep phases write to `data/code_hallucination/`:
+
+1. **load** — SWE-bench instances → `swebench_instances.json`
+2. **fetch source** — repository files at the base commit → `source_cache/{instance_id}.json`
+3. **rewrite requests** — issue text → a natural developer request → `queries.jsonl`
+
+### 2. Generate
 
 ```bash
-# Terminal 1: Start vLLM
-vllm serve Qwen/Qwen3.5-2B --port 8000
-
-# Terminal 2: Run pipeline with batch processing
-BATCH_SIZE=16 \
-API_BASE_URL=http://localhost:8000/v1 \
-OPENAI_API_KEY=dummy \
-MODEL=Qwen/Qwen3.5-2B \
-  python -m scripts.code_hallucination.pipeline --all
+GITHUB_TOKEN=... \
+API_BASE_URL=http://localhost:8000/v1 OPENAI_API_KEY=EMPTY MODEL=google/gemma-4-31B-it \
+  python scripts/generate_code_agent_hallucinations.py \
+    --answer-source gold --ratio 0.4 --struct-ratio 0.15 \
+    --batch-size 32 --out data/v2/code_agent
 ```
 
-`BATCH_SIZE>1` enables async concurrent requests — no rate limiting, full GPU saturation.
+The generator reads the cached prep, takes the gold fix as the answer, injects the
+mistakes above, grounds referenced definitions from GitHub, and writes
+`{train,dev,test}.jsonl`. It keeps `batch-size` requests in flight continuously
+and is resumable — re-run the same command into the same `--out` to continue.
 
-### CLI Options
+| Flag / env | Description |
+|---|---|
+| `--answer-source` | `gold` (the PR fix verbatim, no generation) or `generated` (an LLM-written solution) |
+| `--ratio` | share of instances that receive an injected hallucination |
+| `--struct-ratio` | share of hallucinated samples that get a fabricated-API edit |
+| `--repos` / `--exclude-repos` | comma-separated instance-id prefixes to include / exclude (e.g. `Lightning-AI`) |
+| `--batch-size` / `BATCH_SIZE` | concurrent in-flight requests |
+| `MAX_ANSWER_CHARS` | skip an instance whose chosen answer exceeds this (default 10000) — keeps answers trainable |
+| `GITHUB_TOKEN` | raises the GitHub raw rate limit for repo grounding |
+| `CONTEXT7_API_KEY` | enables Context7 third-party signature grounding |
+| `API_BASE_URL` / `OPENAI_API_KEY` / `MODEL` | OpenAI-compatible endpoint |
 
-| Flag | Description |
-|------|-------------|
-| `--test N` | Test mode: run pipeline on N random test instances using GitHub API (no repo cloning) |
-| `--all` | Run all 9 phases |
-| `--phase 1 2 3` | Run specific phases (1-9) |
-| `--api-key` | LLM API key (or set `OPENAI_API_KEY` env var) |
-| `--base-url` | LLM API base URL (or set `API_BASE_URL` env var) |
-| `--model` | LLM model name (or set `MODEL` env var) |
+## Output format
 
-| Environment Variable | Description |
-|---------------------|-------------|
-| `BATCH_SIZE` | Number of concurrent requests (default: 1). Set >1 for local vLLM |
-| `OPENAI_API_KEY` | API key for the LLM provider |
-| `API_BASE_URL` | OpenAI-compatible API endpoint |
-| `MODEL` | Model name |
-| `CONTEXT7_API_KEY` | API key for Context7 documentation service |
-
-## Pipeline Architecture
-
-```mermaid
-graph TD
-    A[Phase 1: Load SWE-bench] --> B[Phase 2: Fetch Sources]
-    B --> C[Phase 3: Rewrite Queries]
-    B --> D[Phase 4: Fetch Docs]
-    B --> E[Phase 5: Assign Formats]
-    A --> F[Phase 8: Select Targets]
-    C --> G[Phase 6: Inject Hallucinations]
-    E --> G
-    F --> G
-    D --> H[Phase 7: Assemble Samples]
-    G --> H
-    E --> H
-    C --> H
-    H --> I[Phase 9: Validate]
-```
-
-Phases 3 and 4 can run in parallel. Phase 8 (target selection) runs before Phase 6 (injection).
-
-## Output Format
-
-Each sample follows the `HallucinationSample` format used by LettuceDetect:
+Each line is one `HallucinationSample`:
 
 ```json
 {
-  "prompt": "File: django/http/response.py\n```python\n...\n```\n\nUser request: How do I fix the Content-Type header issue?",
-  "answer": "def fix_content_type(self):\n    self.headers['Content-Type'] = response.get_type()\n    ...",
+  "prompt": "User request: ...\n\nFile: ...\n```python\n...\n```",
+  "context": "...repository source + Referenced definitions...",
+  "question": "the developer request",
+  "answer": "In file ...py, replace:\n```python\n...\n```\nwith:\n```python\n...\n```",
   "labels": [
-    {"start": 55, "end": 75, "label": "structural"}
+    {"start": 41, "end": 64, "label": "fabricated_api",
+     "category": "fabricated_reference", "subcategory": "identifier"}
   ],
-  "split": "test",
+  "split": "train",
   "task_type": "code_generation",
-  "dataset": "swebench_code",
-  "language": "en"
+  "dataset": "lettucedetect-code-agent",
+  "language": "en",
+  "context_modality": "code",
+  "category": "fabricated_reference",
+  "subcategory": "identifier",
+  "metadata": "{\"instance_id\": \"...\", \"is_hallucinated\": true, \"hallucination_mode\": \"structural\", \"answer_style\": \"gold\"}"
 }
 ```
 
-- **`prompt`**: Source code files + documentation + user query
-- **`answer`**: Code in one of four formats (code with explanation, complete function, fragment, edit-style)
-- **`labels`**: Character-level span annotations (empty for clean samples)
-- **`split`**: train/dev/test (inherited from SWE-bench, zero repo overlap)
+Splits come straight from SWE-bench and are repository-disjoint, so test
+performance measures generalization to unseen codebases. The HuggingFace build
+renames `dev` to `validation`.
 
-## Supported LLM Providers
+## Quality controls
 
-The pipeline works with any OpenAI-compatible API. Tested with:
+Injection runs through the shared
+[`lettucedetect.generation.injection`](../generation.md) engine, which rejects
+edits that leak hint words, mislocate, over-cover the answer, or are no-ops, and
+the generator skips trivial gold answers, over-long answers, and fabrications that
+are not truly absent from the context. See [Phases](phases.md) for the per-step detail,
+and [Provenance](provenance.md) for how the published data was audited and repaired.
 
-| Provider | Model | Notes |
-|----------|-------|-------|
-| [Groq](https://groq.com) | `openai/gpt-oss-120b` | Best quality, recommended |
-| [Groq](https://groq.com) | `moonshotai/kimi-k2-instruct-0905` | Fast |
-| [Novita AI](https://novita.ai) | `qwen/qwen3.5-27b` | Good for bulk generation |
-| Local (vLLM/Ollama) | Any model | Free, best for large runs |
-
-## Directory Structure
-
-```
-scripts/code_hallucination/
-├── __init__.py              # Package declaration
-├── pipeline.py              # CLI orchestrator
-├── config.py                # Constants, paths, API settings
-├── swebench_loader.py       # Phase 1: Load SWE-bench instances
-├── source_fetcher.py        # Phase 2: Clone repos, fetch source files
-├── query_rewriter.py        # Phase 3: LLM query rewriting
-├── context7_docs.py         # Phase 4: Fetch library documentation
-├── format_builder.py        # Phase 5: Assign answer formats
-├── hallucination_injector.py # Phase 6: LLM hallucination injection
-├── sample_assembler.py      # Phase 7: Assemble final samples
-├── splitter.py              # Phase 8: Select hallucination targets
-└── validator.py             # Phase 9: Quality validation
-```
-
-Output data:
-
-```
-data/code_hallucination/
-├── swebench_instances.json          # Phase 1 output
-├── repos/                           # Phase 2: cloned repos (bare)
-├── source_cache/                    # Phase 2: per-instance source data
-│   └── {instance_id}.json
-├── queries.jsonl                    # Phase 3 output
-├── documentation.jsonl              # Phase 4 output
-├── formats.jsonl                    # Phase 5 output
-├── hallucinated_samples.jsonl       # Phase 6 output
-├── code_hallucination_data.json     # Phase 7: final dataset
-├── code_hallucination_metadata.json # Phase 7: metadata
-└── validation_report.txt            # Phase 9 output
-```
-
-## Design Decisions
-
-### One sample per instance
-Each SWE-bench instance produces exactly one sample — either clean (gold patch answer) or hallucinated (LLM-injected). No instance appears in both classes. This avoids the artificial pairing problem where models learn to distinguish the specific instance rather than the hallucination.
-
-### JSON-based span annotations
-Hallucination spans are extracted from the LLM's structured JSON response, not from difflib character-level diffs. The LLM returns `{"hallucinated_code": "...", "changes": [{"original": "...", "hallucinated": "..."}]}` and spans are found by string matching. Quality controls enforce 2-3 spans per sample (avg 2.8), minimum 15 chars per span, and total coverage under 60%.
-
-### 20% documentation split
-A subset of instances (20%) include Context7 library documentation, filtered to only the repo's primary library. Documentation is also passed to the hallucination injector, enabling semantic hallucinations that contradict documented API behavior.
-
-### Zero repo overlap between splits
-SWE-bench's train/dev/test splits naturally have zero repository overlap across 53 unique repos. This means test performance measures generalization to completely unseen codebases.
-
-## Training on This Dataset
-
-Once you've generated the dataset, there are two training approaches. See [Architecture Research](architecture-research.md) for the full rationale behind each.
-
-### Approach A: Token Classification (ModernBERT)
-
-The standard LettuceDetect approach — a lightweight encoder that labels each token as supported or hallucinated.
+## Inspect and audit
 
 ```bash
-# Code data only
-python scripts/train_code_hallucination.py \
-    --code-data-path data/code_hallucination/code_hallucination_data.json \
-    --model-name answerdotai/ModernBERT-base \
-    --output-dir output/code_hallucination_detector \
-    --batch-size 4 \
-    --epochs 6 \
-    --learning-rate 1e-5
+# grounding coverage + label-quality report for a generated dir
+python scripts/check_context_quality.py --data data/v2/code_agent
 
-# Code + RAGTruth combined (better generalization across text and code)
-python scripts/train_code_hallucination.py \
-    --code-data-path data/code_hallucination/code_hallucination_data.json \
-    --ragtruth-path data/ragtruth/ragtruth_data.json \
-    --model-name answerdotai/ModernBERT-base \
-    --output-dir output/code_hallucination_detector \
-    --batch-size 4 \
-    --epochs 6
+# browse samples with hallucinated spans highlighted by category
+streamlit run demo/code_hallucination_viewer.py
 ```
 
-The training script uses SWE-bench splits directly — train for training, dev for validation, test held out. Zero repository overlap between splits.
+`check_context_quality.py` reports the share of samples with an ungrounded
+reference (the missed-grounding signal) alongside category/format distributions,
+span coverage, and answer length.
 
-### Approach D: Generative Span Detection (Qwen SFT)
+## Design decisions
 
-Fine-tune a decoder LLM to read context + answer and generate a JSON list of hallucinated spans with explanations. This is the reverse of the injection pipeline.
+- **One sample per instance.** Each SWE-bench instance produces one sample —
+  clean (the gold fix) or hallucinated (gold fix + injected edits). No instance
+  appears in both classes, so models can't learn to recognize the instance
+  instead of the hallucination.
+- **JSON-based span annotations.** Spans come from the model's structured
+  `{"changes": [{"original": ..., "hallucinated": ...}]}` output applied
+  deterministically, not from a character diff — clean, meaningful spans with no
+  alignment noise.
+- **Zero repo overlap between splits.** SWE-bench's train/dev/test are
+  repository-disjoint, so test performance measures generalization to unseen
+  codebases.
+
+## Providers
+
+The pipeline works with any OpenAI-compatible endpoint. Bulk generation is
+fastest against a local vLLM server; set `BATCH_SIZE`/`--batch-size > 1` to keep
+the GPU saturated with concurrent requests. The generation reported here used
+`google/gemma-4-31B-it` via vLLM; hosted endpoints (e.g. Mistral) work the same
+way through `API_BASE_URL` / `MODEL`.
+
+## Layout
+
+```
+scripts/code_hallucination/      # preparation (cached, run once)
+├── pipeline.py                  # prep CLI: load, fetch source, rewrite requests
+├── config.py                    # paths and settings
+├── swebench_loader.py           # load SWE-bench instances
+├── source_fetcher.py            # fetch source, derive the gold edit
+├── query_rewriter.py            # rewrite issues into developer requests
+├── answer_grounding.py          # 4-tier repo + Context7 grounding of answer references
+└── context7_docs.py             # Context7 client (third-party API docs)
+scripts/generate_code_agent_hallucinations.py   # generation
+scripts/build_hf_dataset.py                      # merge sources + publish
+scripts/check_context_quality.py                 # audit: grounding coverage + label QC
+demo/code_hallucination_viewer.py                # Streamlit viewer (highlighted spans)
+```
+
+```
+data/code_hallucination/         # prep outputs (cached)
+├── swebench_instances.json
+├── source_cache/{instance_id}.json
+└── queries.jsonl
+data/v2/code_agent/              # generation outputs
+└── {train,dev,test}.jsonl  (+ matching .failures.jsonl)
+```
+
+## End-to-end
 
 ```bash
-# Requires: pip install peft
-python scripts/train_generative_detector.py \
-    --code-data-path data/code_hallucination/code_hallucination_data.json \
-    --model-name Qwen/Qwen3.5-2B \
-    --output-dir output/generative_detector \
-    --batch-size 2 \
-    --epochs 3 \
-    --lora-r 16
+# 1. Prepare (once)
+python -m scripts.code_hallucination.pipeline --all
+
+# 2. Generate (local vLLM, resumable)
+GITHUB_TOKEN=... \
+API_BASE_URL=http://localhost:8000/v1 OPENAI_API_KEY=EMPTY MODEL=google/gemma-4-31B-it \
+  python scripts/generate_code_agent_hallucinations.py \
+    --answer-source gold --ratio 0.4 --struct-ratio 0.15 --batch-size 32 \
+    --out data/v2/code_agent
+
+# 3. Publish (or --dry-run to preview counts)
+python scripts/build_hf_dataset.py \
+  --source data/v2/code_agent \
+  --repo-id KRLabsOrg/lettucedetect-code-hallucination
 ```
 
-The model learns to output:
+## Training
 
-```json
-{"hallucinated_spans": [{"text": "response.json_decode()", "explanation": "method is json(), not json_decode()"}]}
-```
-
-For clean samples it outputs `{"hallucinated_spans": []}`.
-
-Training uses [LoRA](https://arxiv.org/abs/2106.09685) for memory efficiency (~5-8GB VRAM). Only the model's response tokens contribute to the loss — context and prompt tokens are masked.
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--model-name` | `Qwen/Qwen3.5-2B` | Any HuggingFace causal LM |
-| `--lora-r` | 16 | LoRA rank (higher = more capacity, more memory) |
-| `--lora-alpha` | 32 | LoRA scaling factor |
-| `--batch-size` | 2 | Training batch size |
-| `--epochs` | 3 | Number of training epochs |
-| `--learning-rate` | 2e-4 | Learning rate |
-| `--gradient-accumulation-steps` | 4 | Accumulate gradients over N steps (simulates larger batch) |
-
-### Evaluate
+The samples use the standard `HallucinationSample` schema. Token-classification
+training uses `scripts/train_span_detector.py` — a fast HF-Trainer path that
+tokenizes once to an arrow dataset, trains in bf16 with dynamic padding and
+step-based eval, and selects the best checkpoint by hallucinated-token F1:
 
 ```bash
-python scripts/evaluate_code_hallucination.py \
-    --model_path output/code_hallucination_detector \
-    --data_path data/code_hallucination/code_hallucination_data.json \
-    --evaluation_type example_level
+# From the published dataset (all sources)
+python scripts/train_span_detector.py \
+    --dataset KRLabsOrg/lettucedetect-code-hallucination \
+    --model-name jhu-clsp/mmBERT-base \
+    --output-dir output/mmbert_span_detector
+
+# From local generation outputs, code source only
+python scripts/train_span_detector.py \
+    --data data/v2/code_agent \
+    --model-name jhu-clsp/mmBERT-base \
+    --output-dir output/code_span_detector
 ```
 
-## End-to-End Example
+Useful flags: `--sources` filters by the `dataset` field when training from the
+hub; `--doc-stride N` windows long prompts instead of truncating them (for 4k
+encoders); `--trust-remote-code` for models like EuroBERT; `--max-length`
+defaults to 8192. Splits come from the data (`dev` is used as validation, test
+is held out and scored after training), so the SWE-bench repository-disjoint
+split is preserved.
 
-```bash
-# 1. Generate dataset (local vLLM for speed)
-vllm serve Qwen/Qwen3.5-2B --port 8000  # in another terminal
-
-BATCH_SIZE=16 \
-API_BASE_URL=http://localhost:8000/v1 \
-OPENAI_API_KEY=dummy \
-MODEL=Qwen/Qwen3.5-2B \
-  python -m scripts.code_hallucination.pipeline --all
-
-# 2. Train
-python scripts/train_code_hallucination.py \
-    --code-data-path data/code_hallucination/code_hallucination_data.json \
-    --model-name answerdotai/ModernBERT-base \
-    --output-dir output/code_hallucination_detector \
-    --batch-size 4 --epochs 6
-
-# 3. Evaluate
-python scripts/evaluate_code_hallucination.py \
-    --model_path output/code_hallucination_detector \
-    --data_path data/code_hallucination/code_hallucination_data.json \
-    --evaluation_type example_level
-```
-
-The pipeline is **fully resumable** — every slow phase saves results incrementally to JSONL. If it crashes, re-run the same command and it picks up where it left off.
+LLM baselines on the same data run through `scripts/evaluate_llm.py`.

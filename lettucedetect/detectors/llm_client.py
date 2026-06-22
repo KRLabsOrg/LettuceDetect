@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 def build_hallucination_schema(
     include_reasoning: bool = False,
     categories: list[str] | None = None,
+    subcategories: list[str] | None = None,
 ) -> dict:
     """Build the JSON schema for the hallucination-detection response.
 
@@ -36,7 +37,7 @@ def build_hallucination_schema(
     :param categories: Allowed values for a per-span ``category`` field; omitted when None.
     :returns: JSON schema the response object must conform to.
     """
-    if not include_reasoning and not categories:
+    if not include_reasoning and not categories and not subcategories:
         items: dict = {
             "type": "string",
             "description": "Exact text span from the answer that is hallucinated",
@@ -58,6 +59,12 @@ def build_hallucination_schema(
                 "type": "string",
                 "enum": list(categories),
                 "description": "Hallucination category of the span",
+            }
+        if subcategories:
+            properties["subcategory"] = {
+                "type": "string",
+                "enum": list(subcategories),
+                "description": "Hallucination subcategory of the span",
             }
         if include_reasoning:
             properties["confidence"] = {
@@ -92,6 +99,53 @@ def build_hallucination_schema(
         "type": "object",
         "properties": top_properties,
         "required": list(top_properties),
+        "additionalProperties": False,
+    }
+
+
+def build_generative_schema(explain: bool = False) -> dict:
+    """Build the JSON schema for the fine-tuned span detectors' ``hallucinated_spans`` output.
+
+    Distinct from :func:`build_hallucination_schema` (the LLM-judge contract): this
+    matches what ``lettucedect-v2-*`` generative models were trained to emit ---
+    a typed span object with ``category`` and ``subcategory`` drawn from the unified
+    taxonomy, and an optional ``explanation``. Enums come from the frozen
+    :mod:`lettucedetect.prompts.generative` label set.
+
+    :param explain: Require a per-span ``explanation`` field.
+    :returns: JSON schema for ``{"hallucinated_spans": [...]}``.
+    """
+    from lettucedetect.prompts.generative import (
+        CATEGORY_DESCRIPTIONS,
+        SUBCATEGORY_DESCRIPTIONS,
+    )
+
+    properties: dict = {
+        "text": {"type": "string", "description": "Exact hallucinated substring of the answer"},
+        "category": {"type": "string", "enum": list(CATEGORY_DESCRIPTIONS)},
+        "subcategory": {"type": "string", "enum": list(SUBCATEGORY_DESCRIPTIONS)},
+    }
+    if explain:
+        properties["explanation"] = {
+            "type": "string",
+            "description": "Short explanation of why the span is unsupported by the context",
+        }
+    item = {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+    return {
+        "type": "object",
+        "properties": {
+            "hallucinated_spans": {
+                "type": "array",
+                "items": item,
+                "description": "List of hallucinated spans from the answer",
+            }
+        },
+        "required": ["hallucinated_spans"],
         "additionalProperties": False,
     }
 

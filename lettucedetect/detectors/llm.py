@@ -7,17 +7,34 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from string import Template
 
-from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS
+from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS, SUBCATEGORY_DEFINITIONS
 from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.llm_client import (
     LLMClient,
+    build_generative_schema,
     build_hallucination_schema,
     build_verification_schema,
     make_llm_client,
 )
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
+from lettucedetect.prompts import generative as gen
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_native(model: str) -> bool:
+    """Heuristically decide whether ``model`` is one of our fine-tuned generative detectors.
+
+    True for the ``lettucedect-v2`` generative models (Qwen/LFM), which expect the
+    frozen :mod:`lettucedetect.prompts.generative` prompt and emit ``hallucinated_spans``.
+    Excludes the encoder detectors (those go through ``TransformerDetector``). Served
+    under a non-standard name? Pass ``native=True`` explicitly.
+    """
+    m = model.lower()
+    if any(enc in m for enc in ("bert", "modernbert", "eurobert")):
+        return False
+    return "lettucede" in m and any(k in m for k in ("qwen", "lfm", "generative"))
+
 
 _RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
    (no extra keys, no markdown, no code-block fences):
@@ -50,6 +67,7 @@ class LLMDetector:
         include_taxonomy: bool | list[str] | dict[str, str] = False,
         min_confidence: float = 0.0,
         verify: bool = False,
+        native: bool | None = None,
         **client_kwargs,
     ):
         """Initialize the LLMDetector.
@@ -89,17 +107,26 @@ class LLMDetector:
         self.include_reasoning = include_reasoning
         self.min_confidence = min_confidence
         self.verify = verify
+        # Native mode: serve our fine-tuned generative span detectors (lettucedect-v2-*)
+        # with their frozen training prompt + hallucinated_spans contract, instead of
+        # the zero-shot judge prompt. Auto-detected from the model id; override explicitly.
+        self.native = _looks_native(model) if native is None else native
         if isinstance(include_taxonomy, bool):
             self.categories = dict(CATEGORY_DEFINITIONS) if include_taxonomy else None
+            # The unified taxonomy is category + subcategory; enabling it types both.
+            self.subcategories = dict(SUBCATEGORY_DEFINITIONS) if include_taxonomy else None
         elif isinstance(include_taxonomy, dict):
             self.categories = dict(include_taxonomy) or None
+            self.subcategories = None  # custom category set: no defined subcategories
         else:
             self.categories = {
                 name: CATEGORY_DEFINITIONS.get(name) for name in include_taxonomy
             } or None
+            self.subcategories = None
         self.schema = build_hallucination_schema(
             include_reasoning=include_reasoning,
             categories=list(self.categories) if self.categories else None,
+            subcategories=list(self.subcategories) if self.subcategories else None,
         )
         self.client = client or make_llm_client(provider, **client_kwargs)
 
@@ -178,6 +205,15 @@ class LLMDetector:
                 for name, desc in self.categories.items()
             )
             notes.append('- "category" classifies the hallucination as one of:\n' + category_lines)
+        if self.subcategories:
+            example["subcategory"] = next(iter(self.subcategories))
+            subcategory_lines = "\n".join(
+                f'     - "{name}": {desc}' if desc else f'     - "{name}"'
+                for name, desc in self.subcategories.items()
+            )
+            notes.append(
+                '- "subcategory" further classifies the span as one of:\n' + subcategory_lines
+            )
         if self.include_reasoning:
             example["confidence"] = 0.95
             example["is_hallucination"] = True
@@ -266,7 +302,7 @@ class LLMDetector:
                 continue
             span = {"start": match.start(), "end": match.end(), "text": sub}
             if isinstance(item, dict):
-                for key in ("confidence", "reasoning", "category"):
+                for key in ("confidence", "reasoning", "category", "subcategory"):
                     if key in item:
                         span[key] = item[key]
             spans.append(span)
@@ -298,6 +334,8 @@ class LLMDetector:
         :param answer: The answer string.
         :returns: List of spans.
         """
+        if self.native:
+            return self._predict_native(prompt, answer)
         # Build the full LLM prompt using the template
         llm_prompt = self._build_prompt(prompt, answer)
 
@@ -329,6 +367,40 @@ class LLMDetector:
         spans = self._to_spans(items, answer, self.min_confidence)
         if self.verify and spans:
             spans = self._verify(prompt, answer, spans)
+        return spans
+
+    def _predict_native(self, context: str, answer: str) -> list[dict]:
+        """Native path: serve a fine-tuned generative span detector (lettucedect-v2-*).
+
+        Sends the frozen training prompt and parses the model's ``hallucinated_spans``
+        JSON (typed with category/subcategory, plus explanation when ``include_reasoning``),
+        recovering character offsets by matching each span verbatim in the answer.
+
+        :param context: The formatted source/context block (already includes the request).
+        :param answer: The answer string.
+        :returns: List of typed spans.
+        """
+        system = gen.SYSTEM_EXPL if self.include_reasoning else gen.SYSTEM_BASE
+        user = gen.build_user_message(context, answer)
+        schema = build_generative_schema(explain=self.include_reasoning)
+
+        cache_key = self.cache._hash(system + user, self.model, str(self.temperature), "native")
+        cached = self.cache.get(cache_key)
+        if cached is None:
+            cached = self.client.complete(
+                system=system,
+                user=user,
+                model=self.model,
+                temperature=self.temperature,
+                schema=schema,
+            )
+            self.cache.set(cache_key, cached)
+        spans = gen.spans_to_offsets(answer, gen.parse_spans(cached or ""))
+        for span in spans:  # unify the rationale key with the judge path
+            if "explanation" in span:
+                span["reasoning"] = span.pop("explanation")
+        if self.verify and spans:
+            spans = self._verify(context, answer, spans)
         return spans
 
     def _verify(self, context: str, answer: str, spans: list[dict]) -> list[dict]:

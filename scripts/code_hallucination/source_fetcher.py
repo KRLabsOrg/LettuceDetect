@@ -2,6 +2,7 @@
 
 import ast
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -10,7 +11,18 @@ from pathlib import Path
 
 import requests
 
-from .config import MAX_FILE_CHARS, REPOS_DIR, SOURCE_CACHE_DIR
+from .config import MAX_FILE_CHARS, MAX_PROMPT_CHARS, REPOS_DIR, SOURCE_CACHE_DIR
+
+
+def build_source_context(source_data: dict) -> str:
+    """Build the source-code context string from cached source data (truncated)."""
+    parts = [
+        f"File: {filepath}\n```python\n{content}\n```"
+        for filepath, content in source_data.get("source_files", {}).items()
+    ]
+    context = "\n\n".join(parts)
+    return context[:MAX_PROMPT_CHARS] if len(context) > MAX_PROMPT_CHARS else context
+
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com"
 
@@ -122,16 +134,32 @@ def clone_repo(repo: str, repos_dir: Path = REPOS_DIR) -> Path | None:
     return repo_dir
 
 
+class TransientFetchError(Exception):
+    """A fetch failure that may succeed on retry (timeout, rate limit, 5xx)."""
+
+
 def fetch_file_from_github(repo: str, commit: str, filepath: str) -> str | None:
-    """Fallback: fetch a file from GitHub raw API (for when repo isn't cloned)."""
+    """Fetch a file from GitHub raw.
+
+    Works unauthenticated for public repos; a ``GITHUB_TOKEN`` env var, when set,
+    is sent to raise the request rate limit for large runs.
+
+    Returns None only on a definitive miss (404 etc.); raises
+    :class:`TransientFetchError` on timeouts, rate limits, and server errors so
+    callers don't treat (or cache) a transient failure as a permanent miss.
+    """
     url = f"{GITHUB_RAW_BASE}/{repo}/{commit}/{filepath}"
+    token = os.environ.get("GITHUB_TOKEN")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        r = requests.get(url, timeout=15)
-        if r.status_code == 200:
-            return r.text
-        return None
-    except Exception:
-        return None
+        r = requests.get(url, headers=headers, timeout=15)
+    except requests.RequestException as exc:
+        raise TransientFetchError(f"{url}: {exc}") from exc
+    if r.status_code == 200:
+        return r.text
+    if r.status_code in (403, 429) or r.status_code >= 500:
+        raise TransientFetchError(f"{url}: HTTP {r.status_code}")
+    return None
 
 
 def fetch_file_at_commit(repo_dir: Path, commit: str, filepath: str) -> str | None:
@@ -702,7 +730,11 @@ def fetch_source_for_instance(
         import time
 
         for filepath in changed_files:
-            content = fetch_file_from_github(repo, commit, filepath)
+            try:
+                content = fetch_file_from_github(repo, commit, filepath)
+            except TransientFetchError as exc:
+                print(f"    transient fetch failure, skipping {filepath}: {exc}")
+                content = None
             if content:
                 source_files[filepath] = content
             time.sleep(0.3)
@@ -715,7 +747,11 @@ def fetch_source_for_instance(
 
             print(f"    Falling back to GitHub API for {repo}")
             for filepath in changed_files:
-                content = fetch_file_from_github(repo, commit, filepath)
+                try:
+                    content = fetch_file_from_github(repo, commit, filepath)
+                except TransientFetchError as exc:
+                    print(f"    transient fetch failure, skipping {filepath}: {exc}")
+                    content = None
                 if content:
                     source_files[filepath] = content
                 time.sleep(0.3)

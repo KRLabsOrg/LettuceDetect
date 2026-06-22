@@ -95,3 +95,5 @@ ignore = [
 "lettucedetect/models/evaluator.py" = ["ANN001", "ANN201", "D401"]
 "lettucedetect_api/test_server.py" = ["S101"]
 "lettucedetect_api/test_client.py" = ["S101"]
+"scripts/evaluate_generative_model.py" = ["S101"]
+"scripts/train_grpo.py" = ["S101", "S311"]

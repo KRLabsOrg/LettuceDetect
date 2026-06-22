@@ -31,6 +31,7 @@ class TransformerDetector(BaseDetector):
         max_length: int = 4096,
         device: torch.device | str | None = None,
         lang: Lang = "en",
+        taxonomy_head: str | None = None,
         **tok_kwargs: object,
     ) -> None:
         """Initialize the transformer detector.
@@ -39,6 +40,8 @@ class TransformerDetector(BaseDetector):
         :param max_length: Maximum length of the input sequence.
         :param device: Device to use for inference.
         :param lang: Language of the model.
+        :param taxonomy_head: Optional path/HF id of a label-conditioned typing head. When set,
+            ``"spans"`` predictions are typed with a ``category``/``subcategory`` (cascade mode).
         :param tok_kwargs: Additional keyword arguments for the tokenizer.
         """
         if lang not in LANG_TO_PASSAGE:
@@ -50,6 +53,11 @@ class TransformerDetector(BaseDetector):
             torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         )
         self.model.to(self.device).eval()
+        self.typer = None
+        if taxonomy_head is not None:
+            from lettucedetect.detectors.taxonomy_head import TaxonomyTyper
+
+            self.typer = TaxonomyTyper(taxonomy_head, device=self.device)
 
     # ------------------------------------------------------------------
     # Chunking helpers
@@ -358,10 +366,16 @@ class TransformerDetector(BaseDetector):
 
         if len(groups) == 1:
             prompt = PromptUtils.format_context(groups[0], question, self.lang)
-            return self._predict_single(prompt, answer, output_format)
+            result = self._predict_single(prompt, answer, output_format)
+        else:
+            chunk_prompts = [
+                PromptUtils.format_context(group, question, self.lang) for group in groups
+            ]
+            result = self._predict_chunked(chunk_prompts, answer, output_format)
 
-        chunk_prompts = [PromptUtils.format_context(group, question, self.lang) for group in groups]
-        return self._predict_chunked(chunk_prompts, answer, output_format)
+        if output_format == "spans" and self.typer is not None:
+            result = self.typer.type_spans(answer, "\n".join(context), result)
+        return result
 
     def predict_prompt(self, prompt: str, answer: str, output_format: str = "tokens") -> list:
         """Predict hallucination tokens or spans from the provided prompt and answer.
@@ -393,7 +407,10 @@ class TransformerDetector(BaseDetector):
                 total_tokens,
                 self.max_length,
             )
-        return self._predict_single(prompt, answer, output_format)
+        spans = self._predict_single(prompt, answer, output_format)
+        if output_format == "spans" and self.typer is not None:
+            spans = self.typer.type_spans(answer, prompt, spans)
+        return spans
 
     def predict_prompt_batch(
         self, prompts: list[str], answers: list[str], output_format: str = "tokens"

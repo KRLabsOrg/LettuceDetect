@@ -93,6 +93,14 @@ CODE_MAP: dict[str, tuple[str, str | None]] = {
     "semantic": ("unsupported_addition", "behavior"),
 }
 
+# LD code-agent hallucination; the injector returns one of these per edit
+CODE_AGENT_MAP: dict[str, tuple[str, str | None]] = {
+    "wrong_implementation": ("contradiction", "value"),
+    "unrequested_change": ("unsupported_addition", "behavior"),
+    "omission": ("omission", None),
+    "fabricated_api": ("fabricated_reference", "identifier"),
+}
+
 # LD generic markdown hallucination (READMEs, wiki); one type per edit
 MARKDOWN_MAP: dict[str, tuple[str, str | None]] = {
     "NUMERICAL": ("contradiction", "numerical"),
@@ -128,6 +136,7 @@ _ALL_MAPS: dict[str, dict[str, tuple[str, str | None]]] = {
     "ragtruth": RAGTRUTH_MAP,
     "prose_generator": PROSE_GENERATOR_MAP,
     "code": CODE_MAP,
+    "code_agent": CODE_AGENT_MAP,
     "markdown": MARKDOWN_MAP,
     "fava": FAVA_MAP,
     "paper": PAPER_MAP,
@@ -137,11 +146,15 @@ _ALL_MAPS: dict[str, dict[str, tuple[str, str | None]]] = {
 def map_label(native_label: str, source: str) -> tuple[str, str | None]:
     """Map a native source label to (category, subcategory).
 
-    Falls back to (native_label, None) when the label is not in the map,
-    so callers don't need to handle KeyError.
+    Raises ValueError on an unknown source or native label so invalid labels
+    are rejected at the boundary instead of leaking into generated data.
     """
-    mapping = _ALL_MAPS.get(source, {})
-    return mapping.get(native_label, (native_label, None))
+    if source not in _ALL_MAPS:
+        raise ValueError(f"unknown taxonomy source {source!r}")
+    mapping = _ALL_MAPS[source]
+    if native_label not in mapping:
+        raise ValueError(f"unknown native label {native_label!r} for source {source!r}")
+    return mapping[native_label]
 
 
 def is_ragtruth_fabricated(span_text: str, context: str) -> bool:

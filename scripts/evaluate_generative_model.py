@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Evaluate the generative span detector (LFM2.5 LoRA) with the SAME metrics as the encoder.
+
+Queries a vLLM OpenAI-compatible endpoint for the hallucinated-spans JSON, maps
+each emitted span's verbatim text back to char offsets in the answer, then scores
+span char-F1 / example-F1 / IoU per dataset/language via the shared metric. This
+makes the generative model directly comparable to mmBERT.
+
+    # 1. serve the merged model (separate process / tmux):
+    TRITON_CACHE_DIR=$HOME/.triton_cache vllm serve <merged_dir> \
+        --served-model-name lfm2-sft --max-model-len 32768 --port 8000
+    # 2. run the eval client (needs only openai + datasets):
+    python scripts/evaluate_generative_model.py --model lfm2-sft \
+        --base-url http://localhost:8000/v1 \
+        --dataset KRLabsOrg/lettucedetect-code-hallucination \
+        --dataset KRLabsOrg/lettucedetect-prose-hallucination \
+        --split test --by dataset
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+SCRIPTS = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(SCRIPTS.parent))
+
+
+def parse_spans(text: str) -> list[dict] | None:
+    """Pull hallucinated spans (text + category + subcategory) out of a reply. None = unparseable."""
+    obj = None
+    try:
+        obj = json.loads(text)
+    except (ValueError, TypeError):
+        m = re.search(r"\{.*\}", text, re.S)
+        if m:
+            try:
+                obj = json.loads(m.group(0))
+            except (ValueError, TypeError):
+                obj = None
+    if not isinstance(obj, dict):
+        return None
+    spans = obj.get("hallucinated_spans")
+    if spans is None:
+        return None
+    return [s for s in spans if isinstance(s, dict) and s.get("text")]
+
+
+def spans_to_offsets(answer: str, spans: list[dict]) -> list[dict]:
+    """Map each span's verbatim text to its first non-overlapping {start,end} in answer.
+
+    Carries category/subcategory through so the typed metric can use them.
+    """
+    out: list[dict] = []
+    used: list[tuple[int, int]] = []
+    for s in spans:
+        t = s.get("text", "")
+        if not t or not t.strip():
+            continue
+        start = 0
+        while (i := answer.find(t, start)) >= 0:
+            j = i + len(t)
+            if not any(i < ue and us < j for us, ue in used):
+                out.append(
+                    {
+                        "start": i,
+                        "end": j,
+                        "category": s.get("category"),
+                        "subcategory": s.get("subcategory"),
+                    }
+                )
+                used.append((i, j))
+                break
+            start = i + 1
+    return out
+
+
+def main() -> None:
+    """CLI entry point."""
+    ap = argparse.ArgumentParser(description="Generative span-detector eval (OpenAI endpoint).")
+    ap.add_argument("--base-url", default="http://localhost:8000/v1", help="vLLM OpenAI URL.")
+    ap.add_argument("--model", required=True, help="Served model name (--served-model-name).")
+    ap.add_argument("--api-key", default="EMPTY")
+    ap.add_argument("--dataset", action="append", default=[], required=True)
+    ap.add_argument("--split", default="test")
+    ap.add_argument("--by", choices=["dataset", "language"], default="dataset")
+    ap.add_argument("--only", default="", help="Keep only rows whose `dataset` == this.")
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--max-new-tokens", type=int, default=1024)
+    ap.add_argument("--concurrency", type=int, default=64)
+    ap.add_argument(
+        "--explain",
+        action="store_true",
+        help="Query ALL rows with the explanation prompt.",
+    )
+    ap.add_argument(
+        "--explain-datasets",
+        action="append",
+        default=[],
+        help="Dataset name(s) whose rows use the explanation prompt (e.g. their training prompt).",
+    )
+    ap.add_argument(
+        "--extra-system",
+        default="",
+        help="Extra instruction appended to the system prompt (e.g. anti-over-flagging nudge for a judge baseline). Does not alter the shared taxonomy prompt.",
+    )
+    ap.add_argument(
+        "--reasoning-effort",
+        default="",
+        help="For reasoning models (e.g. gpt-oss): low/medium/high, passed as extra_body. "
+        "Without it gpt-oss spends the whole budget reasoning and returns empty content.",
+    )
+    args = ap.parse_args()
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    from datasets import load_dataset
+    from openai import OpenAI
+    from span_eval_metrics import print_metrics_table
+    from taxonomy import SYSTEM_BASE, SYSTEM_EXPL, build_user_message
+    from tqdm import tqdm
+
+    explain_ds = set(args.explain_datasets)
+
+    def system_for(r: dict) -> str:
+        base = SYSTEM_EXPL if args.explain or r.get("dataset") in explain_ds else SYSTEM_BASE
+        return f"{base}\n\n{args.extra_system}" if args.extra_system else base
+
+    rows_in = []
+    for name in args.dataset:
+        for r in load_dataset(name, split=args.split):
+            if args.only and r.get("dataset") != args.only:
+                continue
+            rows_in.append(r)
+            if args.limit and len(rows_in) >= args.limit:
+                break
+
+    client = OpenAI(base_url=args.base_url, api_key=args.api_key)
+    usage: list[tuple[int, int]] = []  # (prompt_tokens, completion_tokens) per call
+
+    import time
+
+    errors: list[str] = []  # exception type names from calls that exhausted retries
+
+    extra = (
+        {"extra_body": {"reasoning_effort": args.reasoning_effort}} if args.reasoning_effort else {}
+    )
+
+    def infer(r: dict) -> str | None:
+        for attempt in range(6):
+            try:
+                resp = client.chat.completions.create(
+                    model=args.model,
+                    messages=[
+                        {"role": "system", "content": system_for(r)},
+                        {"role": "user", "content": build_user_message(r)},
+                    ],
+                    temperature=0.0,
+                    max_tokens=args.max_new_tokens,
+                    **extra,
+                )
+                if resp.usage:
+                    usage.append((resp.usage.prompt_tokens, resp.usage.completion_tokens))
+                return resp.choices[0].message.content
+            except Exception as e:  # retry transient errors (rate limits, timeouts) with backoff
+                if attempt == 5:
+                    errors.append(type(e).__name__)
+                    return None
+                time.sleep(min(2**attempt, 30))
+
+    with ThreadPoolExecutor(max_workers=args.concurrency) as ex:
+        replies = list(tqdm(ex.map(infer, rows_in), total=len(rows_in), desc="generate"))
+
+    rows = []
+    bad = 0
+    for r, reply in zip(rows_in, replies):
+        texts = parse_spans(reply) if reply is not None else None
+        if texts is None:
+            bad += 1
+            texts = []
+        pred = spans_to_offsets(r["answer"], texts)
+        rows.append((r.get(args.by, "?"), r.get("labels") or [], pred))
+
+    print_metrics_table(rows, by_label=args.by)
+    print(f"\nunparseable/failed replies: {bad}/{len(rows)}")
+    if errors:
+        from collections import Counter
+
+        print(f"call errors (after retries): {dict(Counter(errors))}")
+    if usage:
+        pt = sum(u[0] for u in usage)
+        ct = sum(u[1] for u in usage)
+        n = len(usage)
+        print(
+            f"tokens over {n} calls: prompt {pt} (avg {pt / n:.0f}), "
+            f"completion {ct} (avg {ct / n:.0f}); per-call total avg {(pt + ct) / n:.0f}"
+        )
+
+
+def _selfcheck() -> None:
+    """Offline check of parse + offset mapping (no model needed)."""
+    ans = "foo bar baz bar"
+    reply = '{"hallucinated_spans": [{"text": "bar", "category": "x"}, {"text": "baz"}]}'
+    spans = parse_spans(reply)
+    assert spans == [{"text": "bar", "category": "x"}, {"text": "baz"}], spans
+    offs = spans_to_offsets(ans, spans)
+    assert offs == [
+        {"start": 4, "end": 7, "category": "x", "subcategory": None},
+        {"start": 8, "end": 11, "category": None, "subcategory": None},
+    ], offs
+    # second "bar" picked when first is taken
+    two = spans_to_offsets(ans, [{"text": "bar"}, {"text": "bar"}])
+    assert [(o["start"], o["end"]) for o in two] == [(4, 7), (12, 15)], two
+    assert parse_spans("garbage no json") is None
+    assert parse_spans('{"hallucinated_spans": []}') == []
+    print("selfcheck ok")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 1:
+        _selfcheck()
+    else:
+        main()

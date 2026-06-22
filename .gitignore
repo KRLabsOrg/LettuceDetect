@@ -183,5 +183,20 @@ temp/
 # cache/
 lettucedetect/cache/
 testing/
+tool-output-extractor/
+reviews/
 
 CLAUDE.md
+
+# Server-specific experiment launchers + one-off diagnostics (maszat box paths; not for public repo)
+scripts/experiments/
+
+# Working paper draft — never committed (per project policy)
+docs/code-hallucination/paper/
+
+# Large local data artifact
+source_cache.zip
+
+# Local scratch / personal working files
+stuff/
+AGENTS.md

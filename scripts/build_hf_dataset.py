@@ -56,6 +56,11 @@ SPLIT_RENAME = {"dev": "validation"}
 
 
 def _norm_label(label: dict) -> dict:
+    from lettucedetect.datasets.taxonomy import SUBCATEGORIES
+
+    category = label.get("category")
+    if category not in SUBCATEGORIES:
+        raise ValueError(f"invalid span category {category!r} (label: {label!r})")
     return {k: label.get(k) for k in LABEL_FIELDS}
 
 

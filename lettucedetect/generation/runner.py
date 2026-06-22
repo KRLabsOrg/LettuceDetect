@@ -75,7 +75,9 @@ async def run_batched(
     - Skips items whose ``key_of(item)`` matches an already-written record.
       Resumability keys are derived from existing records via ``record_key`` (so
       output records are written verbatim, with no extra bookkeeping field).
-    - Appends each success record to ``out_path`` and flushes per batch, so a
+    - Keeps ``batch_size`` items in flight continuously (a semaphore admits the
+      next item the moment one finishes), so a few slow items never stall the rest.
+    - Appends each success record to ``out_path`` and flushes periodically, so a
       crash never loses completed work.
     - Logs each failure to ``failures_path`` (if given) as ``{key, reason, ...}``.
 
@@ -88,40 +90,47 @@ async def run_batched(
     todo = [it for it in items if key_of(it) not in done_keys]
     stats = {"total": len(todo), "ok": 0, "fail": 0}
 
+    sem = asyncio.Semaphore(batch_size)
+
+    async def guarded(item: object) -> tuple[object, object]:
+        async with sem:
+            try:
+                return item, await process(item)
+            except Exception as exc:
+                return item, exc
+
     ferr = open(failures_path, "a") if failures_path else None
     try:
         with open(out_path, "a") as fout:
-            for start in range(0, len(todo), batch_size):
-                batch = todo[start : start + batch_size]
-                results = await asyncio.gather(
-                    *(process(it) for it in batch), return_exceptions=True
-                )
-                for it, res in zip(batch, results):
-                    if isinstance(res, Exception):
-                        stats["fail"] += 1
-                        if ferr:
-                            ferr.write(
-                                json.dumps({"key": key_of(it), "reason": f"exception:{res}"}) + "\n"
+            tasks = [asyncio.create_task(guarded(it)) for it in todo]
+            processed = 0
+            for future in asyncio.as_completed(tasks):
+                it, res = await future
+                processed += 1
+                if isinstance(res, Exception):
+                    stats["fail"] += 1
+                    if ferr:
+                        ferr.write(
+                            json.dumps({"key": key_of(it), "reason": f"exception:{res}"}) + "\n"
+                        )
+                elif res.ok and res.record is not None:
+                    fout.write(json.dumps(res.record) + "\n")
+                    stats["ok"] += 1
+                else:
+                    stats["fail"] += 1
+                    if ferr:
+                        ferr.write(
+                            json.dumps(
+                                {"key": res.key, "reason": res.reason or "unknown", **res.extra}
                             )
-                        continue
-                    if res.ok and res.record is not None:
-                        fout.write(json.dumps(res.record) + "\n")
-                        stats["ok"] += 1
-                    else:
-                        stats["fail"] += 1
-                        if ferr:
-                            ferr.write(
-                                json.dumps(
-                                    {"key": res.key, "reason": res.reason or "unknown", **res.extra}
-                                )
-                                + "\n"
-                            )
-                fout.flush()
-                if ferr:
-                    ferr.flush()
-                done = start + len(batch)
-                if on_progress and (done % progress_every == 0 or done >= len(todo)):
-                    on_progress({**stats, "processed": done})
+                            + "\n"
+                        )
+                if processed % progress_every == 0 or processed == len(todo):
+                    fout.flush()
+                    if ferr:
+                        ferr.flush()
+                    if on_progress:
+                        on_progress({**stats, "processed": processed})
     finally:
         if ferr:
             ferr.close()
