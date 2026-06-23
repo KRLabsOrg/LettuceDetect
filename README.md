@@ -29,6 +29,8 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 
 <p align="center"><img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/lettuce_code.png?raw=true" alt="LettuceCode mascot" width="220"/></p>
 
+<p align="center"><em>LettuceDetect goes agentic — span-level hallucination detection across RAG, code, and tool output.</em></p>
+
 LettuceDetect now detects hallucinations in **coding-agent** answers — grounded in repository source and developer-tool output, not only prose. The new detectors localize (and type) unsupported spans of an answer: invented APIs/identifiers, wrong values, and behavior the request never asked for.
 
 - **Models:** `lettucedect-v2-qwen-2b` (generative, emits typed spans in one pass) and `lettucedect-v2-mmbert-base` (fast encoder) — a single model across code, tool output, and prose (including 14-language [PsiloQA](https://huggingface.co/datasets/s-nlp/PsiloQA) and [RAGTruth](https://aclanthology.org/2024.acl-long.585/)).
