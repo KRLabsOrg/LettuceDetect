@@ -149,6 +149,64 @@ class TestTransformerDetector:
             # Verify the result
             assert isinstance(result, list)
 
+    @pytest.mark.parametrize("output_format", ["tokens", "spans"])
+    def test_predict_accepts_valid_output_formats(self, output_format):
+        """predict() accepts both supported output formats."""
+        with (
+            patch.object(
+                TransformerDetector,
+                "_group_passages_into_chunks",
+                return_value=[["This is a test context."]],
+            ),
+            patch.object(TransformerDetector, "_predict_single", return_value=[]) as mock_single,
+        ):
+            detector = TransformerDetector(model_path="dummy_path")
+
+            result = detector.predict(
+                ["This is a test context."],
+                "This is a test answer.",
+                "What is the test?",
+                output_format=output_format,
+            )
+
+        assert result == []
+        assert mock_single.call_args.args[2] == output_format
+
+    @pytest.mark.parametrize("output_format", ["tokens", "spans"])
+    def test_predict_prompt_accepts_valid_output_formats(self, output_format):
+        """predict_prompt() accepts both supported output formats."""
+        self.mock_tokenizer.return_value = {"input_ids": torch.zeros(1, 4, dtype=torch.long)}
+        with patch.object(TransformerDetector, "_predict_single", return_value=[]) as mock_single:
+            detector = TransformerDetector(model_path="dummy_path")
+
+            result = detector.predict_prompt(
+                "This is a test prompt.",
+                "This is a test answer.",
+                output_format=output_format,
+            )
+
+        assert result == []
+        assert mock_single.call_args.args[2] == output_format
+
+    @pytest.mark.parametrize(
+        ("method_name", "args"),
+        [
+            ("predict", (["This is a test context."], "This is a test answer.", "What is it?")),
+            ("predict_prompt", ("This is a test prompt.", "This is a test answer.")),
+        ],
+    )
+    def test_invalid_output_format_raises_value_error(self, method_name, args):
+        """Public transformer entry points reject unsupported output formats."""
+        detector = TransformerDetector(model_path="dummy_path")
+
+        with pytest.raises(ValueError) as exc_info:
+            getattr(detector, method_name)(*args, output_format="json")
+
+        message = str(exc_info.value)
+        assert "json" in message
+        assert "tokens" in message
+        assert "spans" in message
+
     def test_form_prompt_with_question(self):
         """Test _form_prompt method with a question."""
         detector = TransformerDetector(model_path="dummy_path")
