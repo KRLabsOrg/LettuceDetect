@@ -1,5 +1,9 @@
 """Pytest tests for the inference module."""
 
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -418,3 +422,62 @@ class TestAnswerStartToken:
         # The answer tokens should be at the end (before trailing [SEP])
         # Verify by checking that the text at answer_start offset is non-empty
         assert offsets[answer_start][1].item() > offsets[answer_start][0].item()
+
+
+class TestDetectorBenchmark:
+    """Tests for the detector benchmark helper script."""
+
+    @staticmethod
+    def _load_module() -> ModuleType:
+        script = Path(__file__).parents[1] / "scripts" / "benchmark_detectors.py"
+        spec = importlib.util.spec_from_file_location("benchmark_detectors", script)
+        assert spec is not None
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_run_benchmark_reports_latency_and_throughput(self):
+        """Benchmark helper measures each case after warmup."""
+        module = self._load_module()
+        detector = MagicMock()
+        detector.predict.return_value = []
+        cases = [
+            {
+                "context": ["France is in Europe."],
+                "question": "Where is France?",
+                "answer": "France is in Europe.",
+            },
+            {
+                "context": ["Paris is the capital of France."],
+                "question": "What is the capital?",
+                "answer": "Paris is the capital of France.",
+            },
+        ]
+
+        result = module.run_benchmark(
+            detector,
+            cases,
+            method="transformer",
+            model_path="dummy-model",
+            warmup=1,
+            repeats=2,
+            output_format="spans",
+        )
+
+        assert detector.predict.call_count == 6
+        assert result.method == "transformer"
+        assert result.cases == 2
+        assert result.repeats == 2
+        assert result.latency_mean_ms >= 0
+        assert result.throughput_cases_per_second > 0
+
+    def test_load_cases_requires_context_and_answer(self, tmp_path):
+        """JSONL benchmark cases must include the fields used by predict()."""
+        module = self._load_module()
+        cases_path = tmp_path / "cases.jsonl"
+        cases_path.write_text('{"context": ["only context"]}\n', encoding="utf-8")
+
+        with pytest.raises(ValueError, match="answer"):
+            module.load_cases(cases_path)
