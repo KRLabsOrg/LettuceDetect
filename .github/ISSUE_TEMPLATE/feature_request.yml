@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest an improvement for LettuceDetect
+title: "Feature: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the use case first. It helps maintainers decide whether the change fits the project.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what makes it difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior or API you would like to see.
+    validations:
+      required: true
+  - type: input
+    id: model-id
+    attributes:
+      label: Model id
+      description: Hugging Face model id or local checkpoint path, if the request is model-specific.
+      placeholder: "KRLabsOrg/lettucedect-v2-qwen-2b"
+    validations:
+      required: false
+  - type: input
+    id: transformers-version
+    attributes:
+      label: transformers version
+      description: Include this when the request depends on transformer behavior or model loading.
+      placeholder: "4.48.3"
+    validations:
+      required: false
+  - type: textarea
+    id: example
+    attributes:
+      label: Example input or minimal reproduction
+      description: Include a short code sample, context, answer, or expected output when possible.
+      render: python
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What workaround or other design did you consider?
+    validations:
+      required: false
