@@ -30,26 +30,41 @@ class HallucinationDetector:
         answer: str,
         question: str | None = None,
         output_format: str = "tokens",
+        min_confidence: float = 0.0,
     ) -> list:
         """Predict hallucination tokens or spans given passages and an answer.
 
         This is the call most RAG pipelines use.
 
+        :param min_confidence: Drop ``"spans"`` whose ``confidence`` is below this threshold
+            (in ``[0, 1]``; ``0.0`` keeps every span). Ignored for ``"tokens"`` output.
+
         See the concrete detector docs for the structure of the returned list.
         """
-        return self.detector.predict(context, answer, question, output_format)
+        return self.detector.predict(
+            context, answer, question, output_format, min_confidence=min_confidence
+        )
 
-    def predict_prompt(self, prompt: str, answer: str, output_format: str = "tokens") -> list:
+    def predict_prompt(
+        self, prompt: str, answer: str, output_format: str = "tokens", min_confidence: float = 0.0
+    ) -> list:
         """Predict hallucinations when you already have a *single* full prompt string.
 
         :param prompt: The prompt string.
         :param answer: The answer string.
         :param output_format: "tokens" to return token-level predictions, or "spans" to return grouped spans.
+        :param min_confidence: Drop ``"spans"`` below this confidence threshold (``[0, 1]``).
         """
-        return self.detector.predict_prompt(prompt, answer, output_format)
+        return self.detector.predict_prompt(
+            prompt, answer, output_format, min_confidence=min_confidence
+        )
 
     def predict_prompt_batch(
-        self, prompts: list[str], answers: list[str], output_format: str = "tokens"
+        self,
+        prompts: list[str],
+        answers: list[str],
+        output_format: str = "tokens",
+        min_confidence: float = 0.0,
     ) -> list:
         """Batch version of :py:meth:`predict_prompt`.
 
@@ -58,5 +73,8 @@ class HallucinationDetector:
         :param prompts: List of prompt strings.
         :param answers: List of answer strings.
         :param output_format: "tokens" to return token-level predictions, or "spans" to return grouped spans.
+        :param min_confidence: Drop ``"spans"`` below this confidence threshold (``[0, 1]``).
         """
-        return self.detector.predict_prompt_batch(prompts, answers, output_format)
+        return self.detector.predict_prompt_batch(
+            prompts, answers, output_format, min_confidence=min_confidence
+        )

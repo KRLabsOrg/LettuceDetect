@@ -347,6 +347,7 @@ class TransformerDetector(BaseDetector):
         answer: str,
         question: str | None = None,
         output_format: str = "tokens",
+        min_confidence: float = 0.0,
     ) -> list:
         """Predict hallucination tokens or spans from the provided context, answer, and question.
 
@@ -354,6 +355,8 @@ class TransformerDetector(BaseDetector):
         :param answer: Model-generated answer to inspect.
         :param question: Original question (``None`` for summarisation).
         :param output_format: ``"tokens"`` for token-level dicts, ``"spans"`` for character spans.
+        :param min_confidence: Drop ``"spans"`` whose ``confidence`` is below this threshold
+            (in ``[0, 1]``; ``0.0`` keeps every span). Ignored for ``"tokens"`` output.
         :returns: List of predictions in requested format.
         """
         if output_format not in ("tokens", "spans"):
@@ -361,6 +364,7 @@ class TransformerDetector(BaseDetector):
                 f"TransformerDetector doesn't support '{output_format}' format. "
                 "Use 'tokens' or 'spans'"
             )
+        self._validate_min_confidence(min_confidence)
 
         groups = self._group_passages_into_chunks(context, question, answer)
 
@@ -375,9 +379,11 @@ class TransformerDetector(BaseDetector):
 
         if output_format == "spans" and self.typer is not None:
             result = self.typer.type_spans(answer, "\n".join(context), result)
-        return result
+        return self._filter_spans_by_confidence(result, output_format, min_confidence)
 
-    def predict_prompt(self, prompt: str, answer: str, output_format: str = "tokens") -> list:
+    def predict_prompt(
+        self, prompt: str, answer: str, output_format: str = "tokens", min_confidence: float = 0.0
+    ) -> list:
         """Predict hallucination tokens or spans from the provided prompt and answer.
 
         Note: unlike :meth:`predict`, this method does **not** chunk the prompt
@@ -388,6 +394,7 @@ class TransformerDetector(BaseDetector):
         :param prompt: The prompt string.
         :param answer: The answer string.
         :param output_format: ``"tokens"`` or ``"spans"``.
+        :param min_confidence: Drop ``"spans"`` below this confidence threshold (``[0, 1]``).
         :returns: List of predictions in requested format.
         """
         if output_format not in ("tokens", "spans"):
@@ -395,6 +402,7 @@ class TransformerDetector(BaseDetector):
                 f"TransformerDetector doesn't support '{output_format}' format. "
                 "Use 'tokens' or 'spans'"
             )
+        self._validate_min_confidence(min_confidence)
         # Warn if the input will be truncated.
         total_tokens = self.tokenizer(prompt, answer, add_special_tokens=True, return_tensors="pt")[
             "input_ids"
@@ -410,16 +418,24 @@ class TransformerDetector(BaseDetector):
         spans = self._predict_single(prompt, answer, output_format)
         if output_format == "spans" and self.typer is not None:
             spans = self.typer.type_spans(answer, prompt, spans)
-        return spans
+        return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
     def predict_prompt_batch(
-        self, prompts: list[str], answers: list[str], output_format: str = "tokens"
+        self,
+        prompts: list[str],
+        answers: list[str],
+        output_format: str = "tokens",
+        min_confidence: float = 0.0,
     ) -> list:
         """Predict hallucination tokens or spans from the provided prompts and answers.
 
         :param prompts: List of prompt strings.
         :param answers: List of answer strings.
         :param output_format: ``"tokens"`` or ``"spans"``.
+        :param min_confidence: Drop ``"spans"`` below this confidence threshold (``[0, 1]``).
         :returns: List of prediction lists, one per input pair.
         """
-        return [self.predict_prompt(p, a, output_format) for p, a in zip(prompts, answers)]
+        return [
+            self.predict_prompt(p, a, output_format, min_confidence)
+            for p, a in zip(prompts, answers)
+        ]
