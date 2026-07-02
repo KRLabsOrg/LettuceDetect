@@ -1,1 +1,5 @@
-recursive-include lettucedetect *
+recursive-include lettucedetect/prompts *.txt *.json
+recursive-exclude lettucedetect/cache *
+recursive-exclude lettucedetect .env
+global-exclude *.py[cod]
+prune **/__pycache__
