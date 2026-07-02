@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationDataset
+from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.prompt_utils import PromptUtils
 from lettucedetect.detectors.transformer import TransformerDetector
 from lettucedetect.models.inference import HallucinationDetector
@@ -418,3 +419,155 @@ class TestAnswerStartToken:
         # The answer tokens should be at the end (before trailing [SEP])
         # Verify by checking that the text at answer_start offset is non-empty
         assert offsets[answer_start][1].item() > offsets[answer_start][0].item()
+
+
+class TestMinConfidenceFilter:
+    """Unit tests for the shared min_confidence helpers on BaseDetector."""
+
+    @pytest.mark.parametrize("value", [-0.1, -1.0, 1.1, 2.0])
+    def test_validate_rejects_out_of_range(self, value):
+        """Values outside [0, 1] raise a ValueError mentioning min_confidence."""
+        with pytest.raises(ValueError, match="min_confidence"):
+            BaseDetector._validate_min_confidence(value)
+
+    @pytest.mark.parametrize("value", [0.0, 0.5, 1.0])
+    def test_validate_accepts_in_range(self, value):
+        """Values within [0, 1] are accepted (no exception)."""
+        BaseDetector._validate_min_confidence(value)
+
+    def test_filter_drops_low_confidence_spans(self):
+        """Spans below the threshold are dropped from a spans result."""
+        spans = [
+            {"start": 0, "end": 3, "confidence": 0.55, "text": "foo"},
+            {"start": 4, "end": 7, "confidence": 0.85, "text": "bar"},
+        ]
+        filtered = BaseDetector._filter_spans_by_confidence(spans, "spans", 0.7)
+        assert filtered == [{"start": 4, "end": 7, "confidence": 0.85, "text": "bar"}]
+
+    def test_filter_zero_threshold_is_noop(self):
+        """A 0.0 threshold returns the spans unchanged (backward compatible)."""
+        spans = [{"start": 0, "end": 3, "confidence": 0.1, "text": "foo"}]
+        assert BaseDetector._filter_spans_by_confidence(spans, "spans", 0.0) == spans
+
+    def test_filter_ignores_token_output(self):
+        """Token-level output is never filtered, even at a high threshold."""
+        tokens = [{"token": "foo", "pred": 1, "prob": 0.2}]
+        assert BaseDetector._filter_spans_by_confidence(tokens, "tokens", 0.9) == tokens
+
+    def test_filter_keeps_spans_without_confidence(self):
+        """Spans lacking a confidence key are kept (e.g. LLM without reasoning)."""
+        spans = [{"start": 0, "end": 3, "text": "foo"}]
+        assert BaseDetector._filter_spans_by_confidence(spans, "spans", 0.9) == spans
+
+
+class TestTransformerMinConfidence:
+    """min_confidence behaviour wired through TransformerDetector."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Build a TransformerDetector with mocked model/tokenizer."""
+        with (
+            patch(
+                "lettucedetect.detectors.transformer.AutoTokenizer.from_pretrained",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "lettucedetect.detectors.transformer.AutoModelForTokenClassification.from_pretrained",
+                return_value=MagicMock(),
+            ),
+        ):
+            self.detector = TransformerDetector(model_path="dummy_path")
+            yield
+
+    def test_predict_spans_filtered_by_min_confidence(self):
+        """predict(output_format='spans') drops spans below the threshold."""
+        spans = [
+            {"start": 0, "end": 3, "confidence": 0.55, "text": "foo"},
+            {"start": 4, "end": 7, "confidence": 0.85, "text": "bar"},
+        ]
+        with (
+            patch.object(
+                TransformerDetector, "_group_passages_into_chunks", return_value=[["ctx"]]
+            ),
+            patch.object(TransformerDetector, "_predict_single", return_value=spans),
+        ):
+            result = self.detector.predict(
+                ["ctx"], "foo bar", output_format="spans", min_confidence=0.7
+            )
+        assert result == [{"start": 4, "end": 7, "confidence": 0.85, "text": "bar"}]
+
+    def test_predict_tokens_ignore_min_confidence(self):
+        """predict(output_format='tokens') keeps every token regardless of threshold."""
+        tokens = [
+            {"token": "foo", "pred": 1, "prob": 0.55},
+            {"token": "bar", "pred": 0, "prob": 0.10},
+        ]
+        with (
+            patch.object(
+                TransformerDetector, "_group_passages_into_chunks", return_value=[["ctx"]]
+            ),
+            patch.object(TransformerDetector, "_predict_single", return_value=tokens),
+        ):
+            result = self.detector.predict(
+                ["ctx"], "foo bar", output_format="tokens", min_confidence=0.9
+            )
+        assert result == tokens
+
+    @pytest.mark.parametrize("bad_value", [-0.1, 1.5])
+    @pytest.mark.parametrize("method_name", ["predict", "predict_prompt"])
+    def test_invalid_min_confidence_raises(self, method_name, bad_value):
+        """Out-of-range min_confidence raises ValueError before any inference."""
+        args = (["ctx"], "ans", "q") if method_name == "predict" else ("prompt", "ans")
+        with pytest.raises(ValueError, match="min_confidence"):
+            getattr(self.detector, method_name)(
+                *args, output_format="spans", min_confidence=bad_value
+            )
+
+    def test_predict_prompt_batch_respects_min_confidence(self):
+        """The batch path applies the threshold to each item's spans."""
+        spans = [
+            {"start": 0, "end": 3, "confidence": 0.40, "text": "foo"},
+            {"start": 4, "end": 7, "confidence": 0.90, "text": "bar"},
+        ]
+        # predict_prompt measures token length first; return a small fixed count.
+        self.detector.tokenizer.return_value = {"input_ids": torch.zeros(1, 4, dtype=torch.long)}
+        with patch.object(TransformerDetector, "_predict_single", return_value=spans):
+            results = self.detector.predict_prompt_batch(
+                ["p1"], ["foo bar"], output_format="spans", min_confidence=0.5
+            )
+        assert results == [[{"start": 4, "end": 7, "confidence": 0.90, "text": "bar"}]]
+
+
+class TestFacadeMinConfidence:
+    """The HallucinationDetector facade threads min_confidence to the detector."""
+
+    @staticmethod
+    def _facade_with_mock() -> tuple[HallucinationDetector, MagicMock]:
+        """Build a facade whose underlying detector is a MagicMock."""
+        mock_detector = MagicMock()
+        with patch(
+            "lettucedetect.detectors.transformer.TransformerDetector", return_value=mock_detector
+        ):
+            detector = HallucinationDetector(method="transformer")
+        return detector, mock_detector
+
+    def test_predict_passes_min_confidence(self):
+        """predict() forwards min_confidence to the detector as a keyword."""
+        detector, mock_detector = self._facade_with_mock()
+        mock_detector.predict.return_value = []
+        detector.predict(["ctx"], "ans", "q", output_format="spans", min_confidence=0.8)
+        assert mock_detector.predict.call_args.kwargs["min_confidence"] == 0.8
+
+    def test_predict_prompt_passes_min_confidence(self):
+        """predict_prompt() forwards min_confidence to the detector as a keyword."""
+        detector, mock_detector = self._facade_with_mock()
+        mock_detector.predict_prompt.return_value = []
+        detector.predict_prompt("prompt", "ans", output_format="spans", min_confidence=0.6)
+        assert mock_detector.predict_prompt.call_args.kwargs["min_confidence"] == 0.6
+
+    def test_predict_prompt_batch_passes_min_confidence(self):
+        """predict_prompt_batch() forwards min_confidence to the detector as a keyword."""
+        detector, mock_detector = self._facade_with_mock()
+        mock_detector.predict_prompt_batch.return_value = []
+        detector.predict_prompt_batch(["p"], ["a"], output_format="spans", min_confidence=0.3)
+        assert mock_detector.predict_prompt_batch.call_args.kwargs["min_confidence"] == 0.3
