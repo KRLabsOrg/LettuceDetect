@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible LettuceDetect problem
+title: "Bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem. Please include enough detail for maintainers to reproduce it.
+  - type: input
+    id: version
+    attributes:
+      label: LettuceDetect version
+      description: Output from `python -c "import lettucedetect; print(lettucedetect.__version__)"`, `pip show lettucedetect`, or the commit SHA.
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.12.4"
+    validations:
+      required: true
+  - type: input
+    id: transformers-version
+    attributes:
+      label: transformers version
+      description: Output from `python -c "import transformers; print(transformers.__version__)"`.
+      placeholder: "4.48.3"
+    validations:
+      required: true
+  - type: input
+    id: model-id
+    attributes:
+      label: Model id
+      description: Hugging Face model id or local checkpoint path, if relevant.
+      placeholder: "KRLabsOrg/lettucedect-base-modernbert-en-v1"
+    validations:
+      required: false
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Provide the smallest code sample, input context, answer, and command that reproduces the issue.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the full traceback or unexpected output.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment details
+      description: OS, install method, hardware notes, and any relevant dependency versions.
+    validations:
+      required: false
