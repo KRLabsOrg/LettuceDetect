@@ -129,6 +129,10 @@ mkdocs serve
 
 Then open http://127.0.0.1:8000 in your browser.
 
-## License
+## Contribution rights
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By submitting a pull request you confirm that you wrote the contribution (or
+have the right to submit it) and that it may be distributed under this
+repository's MIT license (this is the checkbox in the PR template, enforced
+by CI). Optionally you can also sign off commits with `git commit -s`
+([DCO](https://developercertificate.org/)); appreciated, not required.

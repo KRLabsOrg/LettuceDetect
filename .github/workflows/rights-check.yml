@@ -1,0 +1,46 @@
+name: rights-check
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  rights-checkbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require the contribution-rights checkbox to be ticked
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Passes when the PR body contains the checked box from the PR template:
+          #   - [x] I certify that I have the right to submit this code ...
+          if printf '%s' "$BODY" | grep -qiE '^\s*-\s*\[x\]\s+I certify'; then
+            echo "Rights attestation present."
+          else
+            echo '::error::PR body is missing the checked contribution-rights box.'
+            echo 'Tick the "I certify that I have the right to submit this code" checkbox in the PR description (it is part of the PR template).'
+            exit 1
+          fi
+
+  signoff-suggestion:
+    # Advisory only: warns when commits lack Signed-off-by, never fails.
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Suggest DCO sign-off (non-blocking)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          missing=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate \
+            --jq '.[] | select(.commit.message | test("Signed-off-by:") | not) | .sha[0:7]' | tr '\n' ' ')
+          if [ -n "$missing" ]; then
+            echo "::warning::Commits without DCO sign-off: $missing — sign-off is appreciated (git commit -s), see CONTRIBUTING."
+          else
+            echo "All commits signed off."
+          fi
+          exit 0
