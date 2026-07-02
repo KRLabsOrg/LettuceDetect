@@ -44,6 +44,7 @@ class RAGFactCheckerDetector(BaseDetector):
         answer: str,
         question: str | None = None,
         output_format: str = "tokens",
+        min_confidence: float = 0.0,
         **kwargs,
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """Predict hallucinations using RAGFactChecker.
@@ -52,6 +53,7 @@ class RAGFactCheckerDetector(BaseDetector):
         :param answer: Answer text to check for hallucinations
         :param question: Question (optional)
         :param output_format: "tokens", "spans", or "detailed"
+        :param min_confidence: Drop ``"spans"`` below this confidence threshold (``[0, 1]``).
         :param kwargs: Additional arguments
 
         :return: List of predictions in lettuceDetect format, or dict for detailed format
@@ -61,6 +63,7 @@ class RAGFactCheckerDetector(BaseDetector):
                 f"Invalid output format '{output_format}'. "
                 "RAGFactChecker supports 'tokens', 'spans', or 'detailed'"
             )
+        self._validate_min_confidence(min_confidence)
 
         # Use our simple wrapper's detection method
         result = self.rag.detect_hallucinations(context, answer, question)
@@ -77,22 +80,34 @@ class RAGFactCheckerDetector(BaseDetector):
                 "fact_check_results": result.get("fact_check_results", {}),
             }
         elif output_format == "spans":
-            return self._convert_to_spans(answer, result)
+            spans = self._convert_to_spans(answer, result)
+            return self._filter_spans_by_confidence(spans, output_format, min_confidence)
         else:  # tokens
             return self._convert_to_tokens(answer, result)
 
     def predict_prompt(
-        self, prompt: str, answer: str, output_format: str = "tokens"
+        self,
+        prompt: str,
+        answer: str,
+        output_format: str = "tokens",
+        min_confidence: float = 0.0,
     ) -> list[dict[str, Any]]:
         """Predict using a single prompt string as context."""
-        return self.predict([prompt], answer, output_format=output_format)
+        return self.predict(
+            [prompt], answer, output_format=output_format, min_confidence=min_confidence
+        )
 
     def predict_prompt_batch(
-        self, prompts: list[str], answers: list[str], output_format: str = "tokens"
+        self,
+        prompts: list[str],
+        answers: list[str],
+        output_format: str = "tokens",
+        min_confidence: float = 0.0,
     ) -> list[list[dict[str, Any]]]:
         """Batch prediction using RAGFactChecker's batch processing."""
         if len(prompts) != len(answers):
             raise ValueError("Number of prompts must match number of answers")
+        self._validate_min_confidence(min_confidence)
 
         contexts = [[prompt] for prompt in prompts]  # Convert prompts to context lists
         rag_results = self.rag.detect_hallucinations_batch(contexts, answers)
@@ -104,6 +119,9 @@ class RAGFactCheckerDetector(BaseDetector):
                 converted = self._convert_to_tokens(answer, rag_result)
             elif output_format == "spans":
                 converted = self._convert_to_spans(answer, rag_result)
+                converted = self._filter_spans_by_confidence(
+                    converted, output_format, min_confidence
+                )
             else:
                 raise ValueError(f"Unknown output format: {output_format}")
             converted_results.append(converted)

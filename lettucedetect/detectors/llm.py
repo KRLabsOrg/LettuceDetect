@@ -455,6 +455,7 @@ class LLMDetector:
         answer: str,
         question: str | None = None,
         output_format: str = "spans",
+        min_confidence: float = 0.0,
     ) -> list:
         """Predict hallucination spans from the provided context, answer, and question.
 
@@ -462,45 +463,66 @@ class LLMDetector:
         :param answer: Model-generated answer to inspect.
         :param question: Original question (``None`` for summarisation).
         :param output_format: ``"spans"`` for character spans.
+        :param min_confidence: Drop spans whose ``confidence`` is below this threshold
+            (in ``[0, 1]``). Applied on top of the constructor-level ``min_confidence``;
+            ``0.0`` keeps every span.
         :returns: List of spans.
         """
         if output_format not in ["tokens", "spans"]:
             raise ValueError(
                 f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"
             )
+        self._validate_min_confidence(min_confidence)
         # Use PromptUtils to format the context and question
         full_prompt = PromptUtils.format_context(context, question, self.lang)
-        return self._predict(full_prompt, answer)
+        spans = self._predict(full_prompt, answer)
+        return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
-    def predict_prompt(self, prompt: str, answer: str, output_format: str = "spans") -> list:
+    def predict_prompt(
+        self, prompt: str, answer: str, output_format: str = "spans", min_confidence: float = 0.0
+    ) -> list:
         """Predict hallucination spans from the provided prompt and answer.
 
         :param prompt: The prompt string.
         :param answer: The answer string.
         :param output_format: ``"spans"`` for character spans.
+        :param min_confidence: Drop spans below this confidence threshold (``[0, 1]``); applied
+            on top of the constructor-level ``min_confidence``.
         :returns: List of spans.
         """
         if output_format not in ["tokens", "spans"]:
             raise ValueError(
                 f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"
             )
-        return self._predict(prompt, answer)
+        self._validate_min_confidence(min_confidence)
+        spans = self._predict(prompt, answer)
+        return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
     def predict_prompt_batch(
-        self, prompts: list[str], answers: list[str], output_format: str = "spans"
+        self,
+        prompts: list[str],
+        answers: list[str],
+        output_format: str = "spans",
+        min_confidence: float = 0.0,
     ) -> list:
         """Predict hallucination spans from the provided prompts and answers.
 
         :param prompts: List of prompt strings.
         :param answers: List of answer strings.
         :param output_format: ``"spans"`` for character spans.
+        :param min_confidence: Drop spans below this confidence threshold (``[0, 1]``); applied
+            on top of the constructor-level ``min_confidence``.
         :returns: List of spans.
         """
         if output_format not in ["tokens", "spans"]:
             raise ValueError(
                 f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"
             )
+        self._validate_min_confidence(min_confidence)
 
         with ThreadPoolExecutor(max_workers=30) as pool:
             futs = [pool.submit(self._predict, p, a) for p, a in zip(prompts, answers)]
-            return [f.result() for f in futs]
+            return [
+                self._filter_spans_by_confidence(f.result(), output_format, min_confidence)
+                for f in futs
+            ]

@@ -109,6 +109,17 @@ Good areas for contribution:
 - **Tests** — increase coverage, especially for edge cases
 - **Bug fixes** — check [open issues](https://github.com/KRLabsOrg/LettuceDetect/issues)
 
+### Issue labels
+
+The maintainers use labels to make contribution scope clearer:
+
+- `good first issue` marks small, well-scoped tasks that are suitable for new contributors.
+- `help wanted` marks issues where outside implementation or investigation would be useful.
+- `bug` marks reproducible behavior that differs from the expected result.
+- `documentation` marks docs, examples, templates, and onboarding improvements.
+
+Before starting work, read the issue thread to confirm nobody has already claimed it. If the issue is unclear, ask a focused question before opening a PR.
+
 ## Building docs locally
 
 ```bash
@@ -118,6 +129,10 @@ mkdocs serve
 
 Then open http://127.0.0.1:8000 in your browser.
 
-## License
+## Contribution rights
 
-By contributing, you agree that your contributions will be licensed under the MIT License.
+By submitting a pull request you confirm that you wrote the contribution (or
+have the right to submit it) and that it may be distributed under this
+repository's MIT license (this is the checkbox in the PR template, enforced
+by CI). Optionally you can also sign off commits with `git commit -s`
+([DCO](https://developercertificate.org/)); appreciated, not required.

@@ -200,3 +200,4 @@ source_cache.zip
 # Local scratch / personal working files
 stuff/
 AGENTS.md
+.claude/

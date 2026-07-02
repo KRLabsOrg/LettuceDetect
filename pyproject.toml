@@ -55,7 +55,13 @@ docs = [
 ]
 
 [tool.setuptools]
-packages = ["lettucedetect", "lettucedetect_api"]
+include-package-data = false
+
+[tool.setuptools.packages.find]
+include = ["lettucedetect*", "lettucedetect_api*"]
+
+[tool.setuptools.package-data]
+lettucedetect = ["prompts/*.txt", "prompts/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

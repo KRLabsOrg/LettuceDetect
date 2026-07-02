@@ -1,0 +1,11 @@
+name: Contributor task
+description: A scoped piece of work (used by maintainers to invite contributions)
+type: Task
+body:
+  - type: textarea
+    id: body
+    attributes:
+      label: Task
+      description: "Problem, current behavior (file:line), steps, acceptance criteria, and a Start-here command."
+    validations:
+      required: true
