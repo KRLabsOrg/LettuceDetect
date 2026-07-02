@@ -2,6 +2,16 @@
 
 All notable changes to LettuceDetect are documented here.
 
+## [0.2.1] - 2026-07-02
+
+### Added
+- `min_confidence` threshold on `predict` / `predict_prompt` / `predict_prompt_batch` — drops spans below the given confidence, `0.0` (default) keeps everything (#62, thanks @Aditya20029)
+- Contributor infrastructure: issue forms with native GitHub issue types, PR template with contribution-rights attestation (CI-enforced), Contributor Covenant Code of Conduct (#61, thanks @sanmaxdev)
+
+### Fixed
+- `HallucinationSample.from_json` no longer requires `dataset` and `language` fields (#54)
+- PyPI artifacts now ship only package code and prompt data
+
 ## [0.2.0] - 2026-06-22
 
 ### Added
