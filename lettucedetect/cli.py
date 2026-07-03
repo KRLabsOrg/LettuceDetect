@@ -85,8 +85,9 @@ examples:
         required=True,
         metavar="MODEL",
         help=(
-            "HuggingFace model ID or local path to the transformer detector "
-            "(e.g. KRLabsOrg/lettucedect-base-modernbert-en-v1)."
+            "Model to use. For --method transformer: a HuggingFace model ID or local "
+            "path (e.g. KRLabsOrg/lettucedect-base-modernbert-en-v1). For --method llm: "
+            "an LLM model name (e.g. gpt-4.1-mini)."
         ),
     )
     parser.add_argument(
@@ -102,10 +103,7 @@ examples:
         "--answer",
         required=True,
         metavar="ANSWER",
-        help=(
-            "Path to a plain-text file, '-' to read from stdin, or a literal "
-            "answer string."
-        ),
+        help=("Path to a plain-text file, '-' to read from stdin, or a literal answer string."),
     )
     parser.add_argument(
         "--question",
@@ -133,9 +131,12 @@ def main() -> None:
 
     Parses CLI arguments, runs hallucination detection via
     :class:`~lettucedetect.models.inference.HallucinationDetector`, and
-    prints the result as JSON to stdout.  Exits with code 1 on any error.
+    prints the result as JSON to stdout.
 
-    :raises SystemExit: On argument errors or runtime failures.
+    :raises SystemExit: Exit code 2 on argument/validation errors (standard
+        ``argparse`` behavior, e.g. missing required flags, an invalid
+        ``--format`` choice, or empty ``--context``/``--answer``). Exit code
+        1 on runtime failures (model import, model load, or prediction).
     """
     parser = _build_parser()
     args = parser.parse_args()
@@ -149,12 +150,18 @@ def main() -> None:
         stdin_text = sys.stdin.read()
 
     # Resolve context, split on blank lines to support multiple passages
-    raw_context = _read_source(args.context, stdin_text)
+    try:
+        raw_context = _read_source(args.context, stdin_text)
+    except (OSError, UnicodeDecodeError) as exc:
+        parser.error(f"could not read --context: {exc}")
     context_passages = [p.strip() for p in raw_context.split("\n\n") if p.strip()]
     if not context_passages:
         parser.error("--context resolved to empty text.")
 
-    answer = _read_source(args.answer, stdin_text).strip()
+    try:
+        answer = _read_source(args.answer, stdin_text).strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        parser.error(f"could not read --answer: {exc}")
     if not answer:
         parser.error("--answer resolved to empty text.")
 
@@ -165,8 +172,9 @@ def main() -> None:
         sys.exit(f"Failed to import LettuceDetect — is it installed? {exc}")
 
     try:
-        detector = HallucinationDetector(method=args.method, model_path=args.model)
-    except Exception as exc:  # noqa: BLE001
+        detector_kwargs = {"transformer": "model_path", "llm": "model"}[args.method]
+        detector = HallucinationDetector(method=args.method, **{detector_kwargs: args.model})
+    except Exception as exc:
         sys.exit(f"Failed to load model '{args.model}': {exc}")
 
     try:
@@ -176,7 +184,7 @@ def main() -> None:
             question=args.question,
             output_format=args.output_format,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         sys.exit(f"Detection failed: {exc}")
 
     print(json.dumps(predictions, indent=2, ensure_ascii=False))

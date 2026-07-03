@@ -63,16 +63,12 @@ class TestBuildParser:
 
     def test_default_format_is_spans(self) -> None:
         """Output format defaults to 'spans'."""
-        args = self.parser.parse_args(
-            ["--model", "m", "--context", "c", "--answer", "a"]
-        )
+        args = self.parser.parse_args(["--model", "m", "--context", "c", "--answer", "a"])
         assert args.output_format == "spans"
 
     def test_default_method_is_transformer(self) -> None:
         """Detection method defaults to 'transformer'."""
-        args = self.parser.parse_args(
-            ["--model", "m", "--context", "c", "--answer", "a"]
-        )
+        args = self.parser.parse_args(["--model", "m", "--context", "c", "--answer", "a"])
         assert args.method == "transformer"
 
     def test_format_tokens_accepted(self) -> None:
@@ -98,9 +94,7 @@ class TestBuildParser:
 
     def test_question_defaults_to_none(self) -> None:
         """--question defaults to None when omitted."""
-        args = self.parser.parse_args(
-            ["--model", "m", "--context", "c", "--answer", "a"]
-        )
+        args = self.parser.parse_args(["--model", "m", "--context", "c", "--answer", "a"])
         assert args.question is None
 
     def test_method_llm_accepted(self) -> None:
@@ -112,20 +106,16 @@ class TestBuildParser:
 
     def test_stdin_sentinel_accepted_for_context(self) -> None:
         """'-' is accepted as the --context value."""
-        args = self.parser.parse_args(
-            ["--model", "m", "--context", "-", "--answer", "ans"]
-        )
+        args = self.parser.parse_args(["--model", "m", "--context", "-", "--answer", "ans"])
         assert args.context == "-"
 
     def test_stdin_sentinel_accepted_for_answer(self) -> None:
         """'-' is accepted as the --answer value."""
-        args = self.parser.parse_args(
-            ["--model", "m", "--context", "ctx", "--answer", "-"]
-        )
+        args = self.parser.parse_args(["--model", "m", "--context", "ctx", "--answer", "-"])
         assert args.answer == "-"
 
 
-_MOCK_DETECTOR_PATH = "lettucedetect.cli.HallucinationDetector"
+_MOCK_DETECTOR_PATH = "lettucedetect.models.inference.HallucinationDetector"
 
 
 def _make_mock_detector(predictions: list) -> MagicMock:
@@ -152,7 +142,7 @@ class TestMain:
         mock_instance = _make_mock_detector(predictions)
 
         with (
-            patch("sys.argv", ["lettucedetect"] + argv),
+            patch("sys.argv", ["lettucedetect", *argv]),
             patch("sys.stdin", StringIO(stdin_text)),
             patch(_MOCK_DETECTOR_PATH, return_value=mock_instance) as MockCls,
         ):
@@ -180,10 +170,14 @@ class TestMain:
         """The --question value is forwarded to detector.predict()."""
         self._run(
             [
-                "--model", "m",
-                "--context", "The sky is blue.",
-                "--answer", "The sky is green.",
-                "--question", "What color is the sky?",
+                "--model",
+                "m",
+                "--context",
+                "The sky is blue.",
+                "--answer",
+                "The sky is green.",
+                "--question",
+                "What color is the sky?",
             ],
             capsys=capsys,
         )
@@ -270,6 +264,30 @@ class TestMain:
             method="transformer", model_path="KRLabsOrg/my-model"
         )
 
+    def test_llm_method_uses_model_kwarg_not_model_path(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        """--method llm forwards --model as the `model` kwarg, not `model_path`.
+
+        LLMDetector's constructor takes ``model=``; TransformerDetector's takes
+        ``model_path=``. Passing the wrong kwarg name for method=llm silently
+        forwards it to the OpenAI client constructor and raises a TypeError.
+        """
+        self._run(
+            [
+                "--model",
+                "gpt-4.1-mini",
+                "--context",
+                "ctx",
+                "--answer",
+                "ans",
+                "--method",
+                "llm",
+            ],
+            capsys=capsys,
+        )
+        self._last_mock_cls.assert_called_once_with(method="llm", model="gpt-4.1-mini")
+
     def test_empty_predictions_prints_empty_array(self, capsys: pytest.CaptureFixture) -> None:
         """An empty predictions list is printed as a JSON empty array."""
         out = self._run(
@@ -293,7 +311,9 @@ class TestMain:
     def test_exits_on_empty_context(self) -> None:
         """Whitespace-only context causes SystemExit."""
         with (
-            patch("sys.argv", ["lettucedetect", "--model", "m", "--context", "   ", "--answer", "ans"]),
+            patch(
+                "sys.argv", ["lettucedetect", "--model", "m", "--context", "   ", "--answer", "ans"]
+            ),
             patch(_MOCK_DETECTOR_PATH),
             pytest.raises(SystemExit),
         ):
@@ -302,7 +322,9 @@ class TestMain:
     def test_exits_on_empty_answer(self) -> None:
         """Whitespace-only answer causes SystemExit."""
         with (
-            patch("sys.argv", ["lettucedetect", "--model", "m", "--context", "ctx", "--answer", "   "]),
+            patch(
+                "sys.argv", ["lettucedetect", "--model", "m", "--context", "ctx", "--answer", "   "]
+            ),
             patch(_MOCK_DETECTOR_PATH),
             pytest.raises(SystemExit),
         ):
@@ -311,7 +333,10 @@ class TestMain:
     def test_exits_when_model_load_fails(self) -> None:
         """A failing HallucinationDetector constructor causes SystemExit."""
         with (
-            patch("sys.argv", ["lettucedetect", "--model", "bad-model", "--context", "ctx", "--answer", "ans"]),
+            patch(
+                "sys.argv",
+                ["lettucedetect", "--model", "bad-model", "--context", "ctx", "--answer", "ans"],
+            ),
             patch(_MOCK_DETECTOR_PATH, side_effect=Exception("model not found")),
             pytest.raises(SystemExit),
         ):
@@ -322,8 +347,38 @@ class TestMain:
         mock_instance = MagicMock()
         mock_instance.predict.side_effect = RuntimeError("GPU OOM")
         with (
-            patch("sys.argv", ["lettucedetect", "--model", "m", "--context", "ctx", "--answer", "ans"]),
+            patch(
+                "sys.argv", ["lettucedetect", "--model", "m", "--context", "ctx", "--answer", "ans"]
+            ),
             patch(_MOCK_DETECTOR_PATH, return_value=mock_instance),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+    def test_exits_on_non_utf8_context_file(self, tmp_path: Path) -> None:
+        """A --context file with invalid UTF-8 bytes exits cleanly, not with a raw traceback."""
+        bad_file = tmp_path / "bad.txt"
+        bad_file.write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+        with (
+            patch(
+                "sys.argv",
+                ["lettucedetect", "--model", "m", "--context", str(bad_file), "--answer", "ans"],
+            ),
+            patch(_MOCK_DETECTOR_PATH),
+            pytest.raises(SystemExit),
+        ):
+            main()
+
+    def test_exits_on_non_utf8_answer_file(self, tmp_path: Path) -> None:
+        """A --answer file with invalid UTF-8 bytes exits cleanly, not with a raw traceback."""
+        bad_file = tmp_path / "bad.txt"
+        bad_file.write_bytes(b"\xff\xfe not valid utf-8 \x80\x81")
+        with (
+            patch(
+                "sys.argv",
+                ["lettucedetect", "--model", "m", "--context", "ctx", "--answer", str(bad_file)],
+            ),
+            patch(_MOCK_DETECTOR_PATH),
             pytest.raises(SystemExit),
         ):
             main()
