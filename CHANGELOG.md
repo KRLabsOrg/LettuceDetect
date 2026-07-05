@@ -2,6 +2,11 @@
 
 All notable changes to LettuceDetect are documented here.
 
+## [0.2.2] - 2026-07-05
+
+### Fixed
+- `method="llm"` crashed with `AttributeError: '_validate_min_confidence'` on every `predict` call — `LLMDetector` now subclasses `BaseDetector` like the other detectors, with a hierarchy regression test (#68)
+
 ## [0.2.1] - 2026-07-02
 
 ### Added
