@@ -58,6 +58,7 @@ class TestDetectorHierarchy:
     """Every concrete detector must subclass BaseDetector (``predict`` relies on its helpers)."""
 
     def test_all_detectors_inherit_base_detector(self):
+        """LLMDetector, TransformerDetector and RAGFactCheckerDetector subclass BaseDetector."""
         from lettucedetect.detectors.base import BaseDetector
         from lettucedetect.detectors.llm import LLMDetector
         from lettucedetect.detectors.rag_fact_checker import RAGFactCheckerDetector
