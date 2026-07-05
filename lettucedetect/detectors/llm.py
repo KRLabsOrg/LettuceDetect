@@ -8,6 +8,7 @@ from pathlib import Path
 from string import Template
 
 from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS, SUBCATEGORY_DEFINITIONS
+from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.llm_client import (
     LLMClient,
@@ -49,7 +50,7 @@ _VERIFY_SYSTEM = (
 )
 
 
-class LLMDetector:
+class LLMDetector(BaseDetector):
     """LLM-powered hallucination detector."""
 
     def __init__(
