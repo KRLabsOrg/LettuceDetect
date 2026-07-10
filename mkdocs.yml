@@ -25,7 +25,7 @@ theme:
         name: Switch to light mode
   font:
     text: Inter
-    code: JetBrains Mono
+    code: Space Mono
   features:
     - navigation.sections
     - navigation.expand

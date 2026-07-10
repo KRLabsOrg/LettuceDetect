@@ -17,6 +17,8 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 [![arXiv](https://img.shields.io/badge/arXiv-2502.17125-b31b1b.svg)](https://arxiv.org/abs/2502.17125)
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/RspnGxJNMa)
 
+See the [public roadmap](PUBLIC_ROADMAP.md) for what is landing in the next release and the research directions open for collaboration.
+
 ## Highlights
 
 - LettuceDetect addresses two critical limitations of existing hallucination detection models:
@@ -84,6 +86,8 @@ Check out our models published to Huggingface:
 
 **Multilingual Models**:
 We've trained 210m and 610m variants of EuroBERT, see our HuggingFace collection: [HF models](https://huggingface.co/collections/KRLabsOrg/multilingual-hallucination-detection-682a2549c18ecd32689231ce)
+
+> **Note:** the EuroBERT models load remote code that is not yet compatible with transformers 5.x. When using them, install `pip install "transformers>=4.48.3,<5"` (see [#33](https://github.com/KRLabsOrg/LettuceDetect/issues/33)). ModernBERT models are unaffected.
 
 **Code / Tool / Agentic Models (v2 — new)**:
 - Generative (emits typed spans in one pass): [KRLabsOrg/lettucedect-v2-qwen-2b](https://huggingface.co/KRLabsOrg/lettucedect-v2-qwen-2b)
