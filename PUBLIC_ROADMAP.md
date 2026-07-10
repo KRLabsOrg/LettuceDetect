@@ -28,6 +28,7 @@ A collaborator playground. These issues are experiments and design discussions, 
 - [Span-level prompt-injection and jailbreak detection](https://github.com/KRLabsOrg/LettuceDetect/issues/55)
 - [Long-context bidirectional encoders](https://github.com/KRLabsOrg/LettuceDetect/issues/42)
 - [Zero-shot token classification via label conditioning](https://github.com/KRLabsOrg/LettuceDetect/issues/70): GLiNER-style label conditioning, but token-level, so unseen span taxonomies work without retraining.
+- [A rule-based detection tier](https://github.com/KRLabsOrg/LettuceDetect/issues/15): interpretable lexical checks (numbers, dates, entities unsupported by the context) as a zero-cost, torch-free first tier, potentially synthesized from RAGTruth annotations with [RuleChef](https://github.com/KRLabsOrg/rulechef).
 
 ## How this roadmap changes
 
