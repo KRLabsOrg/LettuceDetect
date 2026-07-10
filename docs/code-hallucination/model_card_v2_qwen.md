@@ -212,8 +212,8 @@ specialized methods, so the code/tool sources extend rather than trade off again
 Second only to a fine-tuned 8B, and above the v1 detector, the fine-tuned 13B, Luna, and GPT-4.
 (Our span-level on RAGTruth: P 0.601 / R 0.548 / F1 0.574 / IoU 0.765.)
 
-**PsiloQA** (multilingual) — span IoU. Our generative 2B matches PsiloQA's best fine-tuned
-*encoder* and is far above the strongest LLM judge:
+**PsiloQA** (multilingual) — span IoU. Our generative 2B exceeds the best fine-tuned
+*encoder* reported by PsiloQA and is far above its strongest LLM judge:
 
 | Method (English) | IoU |
 |---|--:|

@@ -63,6 +63,7 @@ lettucedetect = ["prompts/*.txt", "prompts/*.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*_pytest.py"
+addopts = "-v --tb=short --strict-markers"
 
 [tool.ruff]
 line-length = 100

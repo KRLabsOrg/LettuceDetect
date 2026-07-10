@@ -112,7 +112,10 @@ All notable changes to LettuceDetect are documented here.
 - First trained hallucination detection model (ModernBERT-base, 6 epochs)
 - Token classification for hallucination span detection
 
-[Unreleased]: https://github.com/KRLabsOrg/LettuceDetect/compare/0.1.8...HEAD
+[Unreleased]: https://github.com/KRLabsOrg/LettuceDetect/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/KRLabsOrg/LettuceDetect/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/KRLabsOrg/LettuceDetect/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/KRLabsOrg/LettuceDetect/compare/0.1.8...v0.2.0
 [0.1.8]: https://github.com/KRLabsOrg/LettuceDetect/compare/0.1.7...0.1.8
 [0.1.7]: https://github.com/KRLabsOrg/LettuceDetect/compare/0.1.6...0.1.7
 [0.1.6]: https://github.com/KRLabsOrg/LettuceDetect/compare/0.1.5...0.1.6

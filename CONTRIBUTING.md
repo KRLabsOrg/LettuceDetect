@@ -9,7 +9,7 @@ Thanks for your interest in contributing! This guide will get you up and running
 git clone https://github.com/KRLabsOrg/LettuceDetect.git
 cd LettuceDetect
 
-# Create a virtual environment (Python 3.10+)
+# Create a virtual environment (Python 3.11+)
 python -m venv .venv
 source .venv/bin/activate
 
@@ -30,16 +30,16 @@ We use [Ruff](https://docs.astral.sh/ruff/) for both linting and formatting, wit
 
 ```bash
 # Check formatting
-ruff format --check lettucedetect/ tests/
+ruff format --check lettucedetect/ lettucedetect_api/ tests/
 
 # Auto-format
-ruff format lettucedetect/ tests/
+ruff format lettucedetect/ lettucedetect_api/ tests/
 
 # Lint
-ruff check lettucedetect/ tests/
+ruff check lettucedetect/ lettucedetect_api/ tests/
 
 # Lint with auto-fix
-ruff check --fix lettucedetect/ tests/
+ruff check --fix lettucedetect/ lettucedetect_api/ tests/
 ```
 
 Key conventions:
@@ -51,11 +51,8 @@ Key conventions:
 ## Running tests
 
 ```bash
-# Run the test suite
-pytest tests/test_inference_pytest.py -v
-
-# Skip tests that download models (faster)
-pytest tests/test_inference_pytest.py -v -k "not TestAnswerStartToken"
+# Run the complete network-free unit suite
+python -m pytest
 ```
 
 Test files must follow the naming pattern `test_*_pytest.py`.
@@ -92,9 +89,9 @@ scripts/             # Training, evaluation, and utility scripts
 
 3. **Run lint and tests** before committing:
    ```bash
-   ruff format lettucedetect/ tests/
-   ruff check lettucedetect/ tests/
-   pytest tests/test_inference_pytest.py -v -k "not TestAnswerStartToken"
+   ruff format lettucedetect/ lettucedetect_api/ tests/
+   ruff check lettucedetect/ lettucedetect_api/ tests/
+   python -m pytest
    ```
 
 4. **Open a pull request** against `main`. CI will run lint and tests automatically.

@@ -335,11 +335,19 @@ class TestLLMDetectorWithInjectedClient:
         assert client.calls[0]["schema"] == PLAIN_SCHEMA
         assert spans == [{"start": 9, "end": 14, "text": "sunny"}]
 
-    def test_include_taxonomy_returns_category_in_spans(self, cache_file):
-        """With include_taxonomy=True, spans carry the LLM's category."""
+    def test_include_taxonomy_returns_category_and_subcategory_in_spans(self, cache_file):
+        """With include_taxonomy=True, spans carry category and subcategory."""
         answer = "The capital of France is Paris and it is sunny."
         response = json.dumps(
-            {"hallucination_list": [{"text": "it is sunny", "category": "unsupported_addition"}]}
+            {
+                "hallucination_list": [
+                    {
+                        "text": "it is sunny",
+                        "category": "unsupported_addition",
+                        "subcategory": "entity",
+                    }
+                ]
+            }
         )
         client = FakeClient(response)
         detector = make_detector(client, cache_file, include_taxonomy=True)
@@ -357,6 +365,7 @@ class TestLLMDetectorWithInjectedClient:
                 "end": answer.index("it is sunny") + len("it is sunny"),
                 "text": "it is sunny",
                 "category": "unsupported_addition",
+                "subcategory": "entity",
             }
         ]
 
@@ -406,6 +415,7 @@ class TestLLMDetectorWithInjectedClient:
                         "confidence": 0.9,
                         "reasoning": "The source says Lisbon is in Portugal.",
                         "category": "contradiction",
+                        "subcategory": "entity",
                     }
                 ]
             }
@@ -423,6 +433,7 @@ class TestLLMDetectorWithInjectedClient:
                 "confidence": 0.9,
                 "reasoning": "The source says Lisbon is in Portugal.",
                 "category": "contradiction",
+                "subcategory": "entity",
             }
         ]
         items = client.calls[0]["schema"]["properties"]["hallucination_list"]["items"]
@@ -430,6 +441,7 @@ class TestLLMDetectorWithInjectedClient:
             "text",
             "reasoning",
             "category",
+            "subcategory",
             "confidence",
             "is_hallucination",
         ]
