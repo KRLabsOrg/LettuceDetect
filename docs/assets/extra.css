@@ -1,17 +1,101 @@
-/* KR Labs brand colors — aligned with krlabs.eu (#ff5757) */
+/* LettuceDetect docs — KR Labs brand (Signal #FF3D5A, Ink, Space Grotesk / Inter / Space Mono) */
 
 :root {
-  --md-primary-fg-color: #ff5757;
-  --md-primary-fg-color--light: #ff7a7a;
-  --md-primary-fg-color--dark: #e04040;
-  --md-accent-fg-color: #ff5757;
-  --md-accent-fg-color--transparent: rgba(255, 87, 87, 0.1);
+  --md-primary-fg-color: #FF3D5A;
+  --md-primary-fg-color--light: #FF5A72;
+  --md-primary-fg-color--dark: #D92E4C;
+  --md-accent-fg-color: #FF3D5A;
+  --md-accent-fg-color--transparent: #FF3D5A26;
 }
 
 [data-md-color-scheme="slate"] {
-  --md-primary-fg-color: #ff5757;
-  --md-primary-fg-color--light: #ff7a7a;
-  --md-primary-fg-color--dark: #e04040;
-  --md-accent-fg-color: #ff5757;
-  --md-accent-fg-color--transparent: rgba(255, 87, 87, 0.1);
+  /* Signal-dark: more luminous to hold contrast on Ink-dark */
+  --md-primary-fg-color: #FF5A72;
+  --md-primary-fg-color--light: #FF7A8D;
+  --md-primary-fg-color--dark: #D92E4C;
+  --md-accent-fg-color: #FF5A72;
+  --md-accent-fg-color--transparent: #FF5A7226;
+  --md-default-bg-color: #0F1115; /* Ink-dark */
+}
+
+/* Typography: Inter for body, Space Mono for code, Space Grotesk for display */
+:root {
+  --md-text-font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --md-code-font: "Space Mono", "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+}
+
+.md-typeset {
+  font-size: 0.78rem;
+  line-height: 1.65;
+  color: #0F0F0F; /* Ink */
+}
+
+[data-md-color-scheme="slate"] .md-typeset {
+  color: #F5F6F8; /* Paper-dark */
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: #0F0F0F;
+}
+
+[data-md-color-scheme="slate"] .md-typeset h1,
+[data-md-color-scheme="slate"] .md-typeset h2,
+[data-md-color-scheme="slate"] .md-typeset h3,
+[data-md-color-scheme="slate"] .md-typeset h4 {
+  color: #F5F6F8;
+}
+
+/* Header: site name in Space Grotesk, translucent bar */
+.md-header__topic,
+.md-header__title {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+}
+
+.md-header {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background-color: hsla(0, 0%, 100%, 0.85);
+  color: #0F0F0F;
+  box-shadow: 0 1px 0 hsl(220 14% 90%);
+}
+
+[data-md-color-scheme="slate"] .md-header {
+  background-color: hsla(225, 17%, 7%, 0.85);
+  color: #F5F6F8;
+  box-shadow: 0 1px 0 hsl(220 10% 18%);
+}
+
+/* Subtle Signal-tinted background wash */
+body {
+  background-image:
+    radial-gradient(circle at 10% 0%, hsl(220 20% 97%) 0%, transparent 40%),
+    radial-gradient(circle at 90% 0%, hsl(351 100% 97%) 0%, transparent 35%);
+  background-attachment: fixed;
+}
+
+[data-md-color-scheme="slate"] body {
+  background-image:
+    radial-gradient(circle at 10% 0%, hsl(220 20% 8%) 0%, transparent 40%),
+    radial-gradient(circle at 90% 0%, hsl(351 40% 10%) 0%, transparent 35%);
+}
+
+/* Code blocks */
+.md-typeset code {
+  border-radius: 4px;
+}
+
+.md-typeset pre > code {
+  border-radius: 6px;
+}
+
+/* Nav sidebar */
+.md-nav__link--active {
+  font-weight: 600;
 }
