@@ -29,7 +29,7 @@ pip install -e ".[docs]"
 
 ## Requirements
 
-- Python >= 3.10
+- Python >= 3.11
 - PyTorch >= 2.6.0
 - Transformers >= 4.48.3
 

@@ -49,10 +49,14 @@ typed and span numbers nearly coincide — one dominant span per sample.)
 Qwen **beats mmBERT on every source**, span- and example-level — including code,
 which the encoder previously won:
 
-| | ALL span_F1 | ALL ex_F1 | code-agent span_F1 | psiloqa IoU |
-|---|--:|--:|--:|--:|
-| mmBERT-base (binary) | 0.572 | 0.862 | 0.508 | 0.627 |
-| **Qwen3.5-2B (SFT)** | **0.689** | **0.921** | **0.602** | **0.687** |
+| | ALL span_F1 | ALL ex_F1 | RAGTruth span_F1 | code-agent span_F1 | psiloqa IoU |
+|---|--:|--:|--:|--:|--:|
+| mmBERT-base (binary) | 0.642 | 0.869 | 0.528 | 0.508 | 0.627 |
+| **Qwen3.5-2B (SFT)** | **0.689** | **0.921** | **0.574** | **0.602** | **0.687** |
+
+The unified `ALL` score and the RAGTruth slice are different measurements. In
+particular, mmBERT-base scores 0.642 across the full unified test set and 0.528
+on its RAGTruth subset.
 
 The decisive factor was the prompt fix (including the user request): the earlier
 generative model, trained on a context-only prompt, scored only 0.383 span-F1 on
