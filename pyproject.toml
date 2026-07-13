@@ -27,6 +27,9 @@ dependencies = [
     "rag-fact-checker",
 ]
 
+[project.scripts]
+lettucedetect = "lettucedetect.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/krlabsorg/lettucedetect"
 Documentation = "https://krlabsorg.github.io/LettuceDetect"
