@@ -6,7 +6,7 @@ run hallucination detection from a terminal without writing Python.
 
 Example usage::
 
-    lettucedetect --model KRLabsOrg/lettucedetect-base-modernbert-en-v1 \
+    lettucedetect --model KRLabsOrg/lettucedect-base-modernbert-en-v1 \
         --context context.txt \
         --question "Who founded Wikipedia?" \
         --answer answer.txt \
@@ -14,7 +14,7 @@ Example usage::
 
     # Read context from stdin, answer from a file
     echo "Paris is the capital of France." | \
-        lettucedetect --model KRLabsOrg/lettucedetect-base-modernbert-en-v1 \
+        lettucedetect --model KRLabsOrg/lettucedect-base-modernbert-en-v1 \
         --context - --answer answer.txt --format spans
 """
 
@@ -64,7 +64,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="""
 examples:
   # Use files
-  lettucedetect --model KRLabsOrg/lettucedetect-base-modernbert-en-v1 \\
+  lettucedetect --model KRLabsOrg/lettucedect-base-modernbert-en-v1 \\
       --context context.txt --answer answer.txt --format spans
 
   # Pass text inline
@@ -75,7 +75,7 @@ examples:
       --format spans
 
   # Read context from stdin
-  cat context.txt | lettucedetect --model KRLabsOrg/lettucedetect-base-modernbert-en-v1 \\
+  cat context.txt | lettucedetect --model KRLabsOrg/lettucedect-base-modernbert-en-v1 \\
       --context - --answer answer.txt --format spans
 """,
     )
@@ -86,7 +86,7 @@ examples:
         metavar="MODEL",
         help=(
             "Model to use. For --method transformer: a HuggingFace model ID or local "
-            "path (e.g. KRLabsOrg/lettucedetect-base-modernbert-en-v1). For --method llm: "
+            "path (e.g. KRLabsOrg/lettucedect-base-modernbert-en-v1). For --method llm: "
             "an LLM model name (e.g. gpt-4.1-mini)."
         ),
     )

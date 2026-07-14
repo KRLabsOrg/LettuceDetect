@@ -25,7 +25,7 @@ from lettucedetect.models.inference import HallucinationDetector
 
 detector = HallucinationDetector(
     method="transformer",
-    model_path="KRLabsOrg/lettucedetect-base-modernbert-en-v1"
+    model_path="KRLabsOrg/lettucedect-base-modernbert-en-v1"
 )
 
 contexts = ["The capital of France is Paris. The population is 67 million."]

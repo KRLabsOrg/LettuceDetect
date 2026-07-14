@@ -9,7 +9,7 @@ Fine-tuned encoder models that classify each token in the answer as supported or
 ```python
 detector = HallucinationDetector(
     method="transformer",
-    model_path="KRLabsOrg/lettucedetect-large-modernbert-en-v1"
+    model_path="KRLabsOrg/lettucedect-large-modernbert-en-v1"
 )
 ```
 

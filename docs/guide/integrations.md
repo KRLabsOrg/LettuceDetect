@@ -12,7 +12,7 @@ from lettucedetect.models.inference import HallucinationDetector
 # Create detector
 detector = HallucinationDetector(
     method="transformer",
-    model_path="KRLabsOrg/lettucedetect-base-modernbert-en-v1"
+    model_path="KRLabsOrg/lettucedect-base-modernbert-en-v1"
 )
 
 # Use in your LangChain pipeline
@@ -41,7 +41,7 @@ from lettucedetect.models.inference import HallucinationDetector
 
 detector = HallucinationDetector(
     method="transformer",
-    model_path="KRLabsOrg/lettucedetect-base-modernbert-en-v1"
+    model_path="KRLabsOrg/lettucedect-base-modernbert-en-v1"
 )
 
 # After your RAG pipeline generates an answer:
