@@ -501,7 +501,8 @@ class LLMDetector(BaseDetector):
         :param output_format: ``"tokens"`` for per-token dicts, ``"spans"`` for character spans.
         :param min_confidence: Drop spans whose ``confidence`` is below this threshold
             (in ``[0, 1]``). Applied on top of the constructor-level ``min_confidence``;
-            ``0.0`` keeps every span.
+            ``0.0`` keeps every span. Only affects ``output_format="spans"`` — token
+            output is returned unfiltered.
         :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
         """
         if output_format not in ["tokens", "spans"]:
@@ -525,7 +526,8 @@ class LLMDetector(BaseDetector):
         :param answer: The answer string.
         :param output_format: ``"tokens"`` for per-token dicts, ``"spans"`` for character spans.
         :param min_confidence: Drop spans below this confidence threshold (``[0, 1]``); applied
-            on top of the constructor-level ``min_confidence``.
+            on top of the constructor-level ``min_confidence``. Ignored when
+            ``output_format="tokens"``.
         :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
         """
         if output_format not in ["tokens", "spans"]:
@@ -551,7 +553,7 @@ class LLMDetector(BaseDetector):
         :param answers: List of answer strings.
         :param output_format: ``"tokens"`` for per-token dicts, ``"spans"`` for character spans.
         :param min_confidence: Drop spans below this confidence threshold (``[0, 1]``); applied
-            on top of the constructor-level ``min_confidence``.
+            on top of the constructor-level ``min_confidence``. Not applied to token output.
         :returns: One result per input pair: spans, or per-token dicts when
             ``output_format="tokens"``.
         """
