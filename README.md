@@ -6,7 +6,7 @@
   <br><em>Because even AI needs a reality check! 🥬</em>
 </p>
 
-LettuceDetect is a lightweight and efficient tool for detecting hallucinations in Retrieval-Augmented Generation (RAG) systems. It identifies unsupported parts of an answer by comparing it to the provided context. The tool is trained and evaluated on the [RAGTruth](https://aclanthology.org/2024.acl-long.585/) dataset and leverages [ModernBERT](https://github.com/AnswerDotAI/ModernBERT) for English and [EuroBERT](https://huggingface.co/blog/EuroBERT/release) for multilingual support, making it ideal for tasks requiring extensive context windows.
+LettuceDetect is an open span-level grounding verifier for AI outputs. Given source evidence, it localizes unsupported, contradictory, or fabricated parts of RAG answers, coding-agent responses, and tool-grounded outputs. The project includes fast local encoder models as well as generative detectors that can type each detected span.
 
 Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-industry.34/) paper which is an encoder-based model and uses a similar token-level approach.
 
@@ -17,13 +17,14 @@ Our models are inspired from the [Luna](https://aclanthology.org/2025.coling-ind
 [![arXiv](https://img.shields.io/badge/arXiv-2502.17125-b31b1b.svg)](https://arxiv.org/abs/2502.17125)
 [![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/RspnGxJNMa)
 
+See the [public roadmap](PUBLIC_ROADMAP.md) for what is landing in the next release and the research directions open for collaboration.
+
 ## Highlights
 
-- LettuceDetect addresses two critical limitations of existing hallucination detection models:
-  - Context window constraints of traditional encoder-based methods
-  - Computational inefficiency of LLM-based approaches
-- Our models currently **outperform** all other encoder-based and prompt-based models on the RAGTruth dataset and are significantly faster and smaller 
-- Achieves higher score than some fine-tuned LLMs e.g. LLAMA-2-13B presented in [RAGTruth](https://aclanthology.org/2024.acl-long.585/), coming up just short of the LLM fine-tuned in the [RAG-HAT paper](https://aclanthology.org/2024.emnlp-industry.113.pdf)
+- Returns exact character spans instead of only an answer-level clean/flagged verdict.
+- Supports RAG prose, multilingual QA, code-agent answers, and developer-tool output.
+- Offers purpose-built encoder models for local inference and generative models for typed spans.
+- Publishes scoped benchmark results and model limitations in the [benchmark documentation](docs/benchmarks.md) and [model cards](docs/code-hallucination/).
 
 ## 🥬👨‍💻 New (June 2026): code, tool output & agentic workflows
 
@@ -41,6 +42,9 @@ LettuceDetect now detects hallucinations in **coding-agent** answers — grounde
 
 ## 🚀 Latest Updates
 
+- **July 5, 2026** - Released **0.2.2**, fixing `method="llm"` confidence validation and adding a detector-hierarchy regression test.
+- **July 2, 2026** - Released **0.2.1** with `min_confidence`, contributor infrastructure, and packaging fixes.
+- **June 22, 2026** - Released **0.2.0** with code/tool/agentic models, typed spans, the encoder taxonomy cascade, and automatic context chunking. See the [changelog](CHANGELOG.md) for the complete release notes.
 - **August 31, 2025** - Released version **0.1.8**: Added TinyLettuce Ettin models for 17M, 32M, and 68M variants, Hallucination generation pipeline and added RAGFactChecker for triplet-based hallucination detection.
   - See [TinyLettuce Blog Post](https://huggingface.co/blog/adaamko/tinylettuce) for more details.
   - Our collection on Hugging Face: [TinyLettuce](https://huggingface.co/collections/KRLabsOrg/tinylettuce-68b42a66b8b6aaa4bf287bf4)
@@ -84,6 +88,8 @@ Check out our models published to Huggingface:
 
 **Multilingual Models**:
 We've trained 210m and 610m variants of EuroBERT, see our HuggingFace collection: [HF models](https://huggingface.co/collections/KRLabsOrg/multilingual-hallucination-detection-682a2549c18ecd32689231ce)
+
+> **Note:** the EuroBERT models load remote code that is not yet compatible with transformers 5.x. When using them, install `pip install "transformers>=4.48.3,<5"` (see [#33](https://github.com/KRLabsOrg/LettuceDetect/issues/33)). ModernBERT models are unaffected.
 
 **Code / Tool / Agentic Models (v2 — new)**:
 - Generative (emits typed spans in one pass): [KRLabsOrg/lettucedect-v2-qwen-2b](https://huggingface.co/KRLabsOrg/lettucedect-v2-qwen-2b)
@@ -164,11 +170,12 @@ The generative model `lettucedect-v2-qwen-2b` produces the same typed spans in a
 
 ## Performance
 
-We've evaluated our models against both encoder-based and LLM-based approaches. The key findings include:
+We've evaluated our models against both encoder-based and LLM-based approaches. Results are specific to the stated model, dataset, split, and metric:
 
-- In English, our model **outperform** all other encoder-based and prompt-based models on the RAGTruth dataset and are significantly faster and smaller 
-- Our multilingual models are better than baseline LLM judges like GPT-4.1-mini
-- Our models are also significantly faster and smaller than the LLM-based judges
+- On the unified 10,698-example v2 test set, Qwen-2B reaches 0.689 span-F1 and mmBERT-base reaches 0.642.
+- On the RAGTruth slice of that same evaluation, Qwen-2B reaches 0.574 span-F1 and mmBERT-base reaches 0.528. These should not be confused with the unified scores.
+- On code-agent answers, Qwen-2B reaches 0.602 span-F1; the released paper and model cards document the benchmark construction and limitations.
+- The original English and multilingual model families have their own evaluation protocols; use their documentation rather than comparing numbers across protocols as one leaderboard.
 
 For detailed performance metrics and evaluations of our models:
 - [English model documentation](docs/README.md)
@@ -340,7 +347,7 @@ For async support use the `LettuceClientAsync` class instead.
 
 ## Community
 
-Join us on [Discord](https://discord.gg/RspnGxJNMa) for questions, ideas, and to get involved. New contributors welcome — check the [`good first issue`](https://github.com/KRLabsOrg/LettuceDetect/issues?q=is%3Aopen+label%3A%22good+first+issue%22) and [`help wanted`](https://github.com/KRLabsOrg/LettuceDetect/issues?q=is%3Aopen+label%3A%22help+wanted%22) issues.
+Use [GitHub Discussions](https://github.com/KRLabsOrg/LettuceDetect/discussions) for use cases, research questions, and proposals that are not yet scoped work. Join us on [Discord](https://discord.gg/RspnGxJNMa) for informal conversation. New contributors can check the [`good first issue`](https://github.com/KRLabsOrg/LettuceDetect/issues?q=is%3Aopen+label%3A%22good+first+issue%22) and [`help wanted`](https://github.com/KRLabsOrg/LettuceDetect/issues?q=is%3Aopen+label%3A%22help+wanted%22) issues; items labeled [`status: claimed`](https://github.com/KRLabsOrg/LettuceDetect/issues?q=is%3Aopen+label%3A%22status%3A+claimed%22) already have active work.
 
 ## License
 

@@ -378,16 +378,13 @@ class TestChunking:
 class TestAnswerStartToken:
     """Tests for the answer_start_token fix in prepare_tokenized_input."""
 
-    def test_answer_start_token_basic(self):
+    def test_answer_start_token_basic(self, local_wordpiece_tokenizer):
         """answer_start_token should point to the first answer token."""
-        from transformers import AutoTokenizer
-
-        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         context = "The capital of France is Paris."
         answer = "Paris is the capital."
 
         _, _, offsets, answer_start = HallucinationDataset.prepare_tokenized_input(
-            tokenizer, context, answer, max_length=512
+            local_wordpiece_tokenizer, context, answer, max_length=512
         )
 
         # answer_start should be within bounds
@@ -396,17 +393,14 @@ class TestAnswerStartToken:
         # The offset at answer_start should be non-zero (actual token, not special)
         assert offsets[answer_start][1].item() > offsets[answer_start][0].item()
 
-    def test_answer_start_token_with_truncation(self):
+    def test_answer_start_token_with_truncation(self, local_wordpiece_tokenizer):
         """answer_start_token should be correct even when context is truncated."""
-        from transformers import AutoTokenizer
-
-        tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         # Create a very long context that will be truncated at max_length=32
         context = "word " * 200  # ~200 tokens
         answer = "short answer"
 
         encoding, _, offsets, answer_start = HallucinationDataset.prepare_tokenized_input(
-            tokenizer, context, answer, max_length=32
+            local_wordpiece_tokenizer, context, answer, max_length=32
         )
 
         total_len = encoding["input_ids"].shape[1]

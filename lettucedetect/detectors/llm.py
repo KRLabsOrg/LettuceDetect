@@ -49,6 +49,11 @@ _VERIFY_SYSTEM = (
     "You are a strict fact-checker confirming whether flagged spans are truly unsupported."
 )
 
+# Token-level probabilities reported when the LLM gave us no per-span confidence
+# (i.e. include_reasoning=False). Same fixed-constant idea as RAGFactCheckerDetector.
+_HALLUCINATED_TOKEN_PROB = 0.9
+_SUPPORTED_TOKEN_PROB = 0.1
+
 
 class LLMDetector(BaseDetector):
     """LLM-powered hallucination detector."""
@@ -310,6 +315,36 @@ class LLMDetector(BaseDetector):
         return spans
 
     @staticmethod
+    def _convert_to_tokens(answer: str, spans: list[dict]) -> list[dict]:
+        """Project predicted character spans onto the whitespace tokens of ``answer``.
+
+        Emits one ``{"token", "pred", "prob"}`` dict per whitespace-delimited token,
+        matching the token format the other detectors produce
+        (``TransformerDetector._predict_single``, ``RAGFactCheckerDetector._convert_to_tokens``).
+        A token is flagged (``pred=1``) when its character range overlaps any predicted
+        span. ``prob`` uses the overlapping span's ``confidence`` when present (only set
+        with ``include_reasoning=True``), otherwise the fixed constants above.
+
+        :param answer: The answer the spans were matched against.
+        :param spans: Character spans as returned by :meth:`_to_spans`.
+        :returns: One token dict per whitespace token in ``answer``.
+        """
+        tokens = []
+        for match in re.finditer(r"\S+", answer):
+            hit = next(
+                (s for s in spans if s["start"] < match.end() and match.start() < s["end"]),
+                None,
+            )
+            if hit is None:
+                prob = _SUPPORTED_TOKEN_PROB
+            else:
+                prob = hit.get("confidence")
+                if prob is None:
+                    prob = _HALLUCINATED_TOKEN_PROB
+            tokens.append({"token": match.group(), "pred": 0 if hit is None else 1, "prob": prob})
+        return tokens
+
+    @staticmethod
     def _parse_response(raw: str) -> list:
         """Parse and validate the raw LLM response into a hallucination list.
 
@@ -463,11 +498,11 @@ class LLMDetector(BaseDetector):
         :param context: List of passages that were supplied to the LLM / user.
         :param answer: Model-generated answer to inspect.
         :param question: Original question (``None`` for summarisation).
-        :param output_format: ``"spans"`` for character spans.
+        :param output_format: ``"tokens"`` for per-token dicts, ``"spans"`` for character spans.
         :param min_confidence: Drop spans whose ``confidence`` is below this threshold
             (in ``[0, 1]``). Applied on top of the constructor-level ``min_confidence``;
             ``0.0`` keeps every span.
-        :returns: List of spans.
+        :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
         """
         if output_format not in ["tokens", "spans"]:
             raise ValueError(
@@ -477,6 +512,8 @@ class LLMDetector(BaseDetector):
         # Use PromptUtils to format the context and question
         full_prompt = PromptUtils.format_context(context, question, self.lang)
         spans = self._predict(full_prompt, answer)
+        if output_format == "tokens":
+            return self._convert_to_tokens(answer, spans)
         return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
     def predict_prompt(
@@ -486,10 +523,10 @@ class LLMDetector(BaseDetector):
 
         :param prompt: The prompt string.
         :param answer: The answer string.
-        :param output_format: ``"spans"`` for character spans.
+        :param output_format: ``"tokens"`` for per-token dicts, ``"spans"`` for character spans.
         :param min_confidence: Drop spans below this confidence threshold (``[0, 1]``); applied
             on top of the constructor-level ``min_confidence``.
-        :returns: List of spans.
+        :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
         """
         if output_format not in ["tokens", "spans"]:
             raise ValueError(
@@ -497,6 +534,8 @@ class LLMDetector(BaseDetector):
             )
         self._validate_min_confidence(min_confidence)
         spans = self._predict(prompt, answer)
+        if output_format == "tokens":
+            return self._convert_to_tokens(answer, spans)
         return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
     def predict_prompt_batch(
@@ -510,10 +549,11 @@ class LLMDetector(BaseDetector):
 
         :param prompts: List of prompt strings.
         :param answers: List of answer strings.
-        :param output_format: ``"spans"`` for character spans.
+        :param output_format: ``"tokens"`` for per-token dicts, ``"spans"`` for character spans.
         :param min_confidence: Drop spans below this confidence threshold (``[0, 1]``); applied
             on top of the constructor-level ``min_confidence``.
-        :returns: List of spans.
+        :returns: One result per input pair: spans, or per-token dicts when
+            ``output_format="tokens"``.
         """
         if output_format not in ["tokens", "spans"]:
             raise ValueError(
@@ -523,7 +563,13 @@ class LLMDetector(BaseDetector):
 
         with ThreadPoolExecutor(max_workers=30) as pool:
             futs = [pool.submit(self._predict, p, a) for p, a in zip(prompts, answers)]
-            return [
-                self._filter_spans_by_confidence(f.result(), output_format, min_confidence)
-                for f in futs
-            ]
+            results = []
+            for answer, fut in zip(answers, futs):
+                spans = fut.result()
+                if output_format == "tokens":
+                    results.append(self._convert_to_tokens(answer, spans))
+                else:
+                    results.append(
+                        self._filter_spans_by_confidence(spans, output_format, min_confidence)
+                    )
+            return results

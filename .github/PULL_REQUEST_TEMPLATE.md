@@ -18,9 +18,9 @@
 
 <!-- List the exact commands you ran. -->
 
-- [ ] `ruff format --check lettucedetect/ tests/`
-- [ ] `ruff check lettucedetect/ tests/ --extend-exclude lettucedetect/integrations/`
-- [ ] `pytest tests/test_inference_pytest.py -v -k "not TestAnswerStartToken"`
+- [ ] `ruff format --check lettucedetect/ lettucedetect_api/ tests/`
+- [ ] `ruff check lettucedetect/ lettucedetect_api/ tests/ --extend-exclude lettucedetect/integrations/`
+- [ ] `python -m pytest`
 - [ ] Other:
 
 ## Checklist
