@@ -12,7 +12,7 @@ python scripts/start_api.py dev
 python scripts/start_api.py prod
 
 # Custom model
-python scripts/start_api.py dev --model KRLabsOrg/lettucedetect-large-modernbert-en-v1
+python scripts/start_api.py dev --model KRLabsOrg/lettucedect-large-modernbert-en-v1
 ```
 
 ## Python Client

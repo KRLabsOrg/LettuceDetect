@@ -14,14 +14,19 @@ A unified family trained on the [code + tool-output + prose benchmark](https://h
 
 | Model | Base | Max Tokens | Example F1 | Span F1 |
 |-------|------|-----------|-----------|---------|
-| [lettucedetect-base-modernbert-en-v1](https://huggingface.co/KRLabsOrg/lettucedetect-base-modernbert-en-v1) | ModernBERT-base | 4K | 76.8% | SOTA |
-| [lettucedetect-large-modernbert-en-v1](https://huggingface.co/KRLabsOrg/lettucedetect-large-modernbert-en-v1) | ModernBERT-large | 4K | 79.2% | SOTA |
+| [lettucedect-base-modernbert-en-v1](https://huggingface.co/KRLabsOrg/lettucedect-base-modernbert-en-v1) | ModernBERT-base | 4K | 76.8% | SOTA |
+| [lettucedect-large-modernbert-en-v1](https://huggingface.co/KRLabsOrg/lettucedect-large-modernbert-en-v1) | ModernBERT-large | 4K | 79.2% | SOTA |
 
 ## Multilingual Models
 
-| Model | Base | Languages | Max Tokens |
+One checkpoint per language, in two sizes:
+
+| Model family | Base | Languages | Max Tokens |
 |-------|------|-----------|-----------|
-| [lettucedetect-base-eurobert-multilingual-v1](https://huggingface.co/KRLabsOrg/lettucedetect-base-eurobert-multilingual-v1) | EuroBERT-210M | en, de, fr, es, it, pl, cn | 8K |
+| `lettucedect-210m-eurobert-<lang>-v1` | EuroBERT-210M | de, fr, es, it, pl, cn | 8K |
+| `lettucedect-610m-eurobert-<lang>-v1` | EuroBERT-610M | de, fr, es, it, pl, cn | 8K |
+
+English is covered by the ModernBERT models above. See the [multilingual collection on Hugging Face](https://huggingface.co/collections/KRLabsOrg/multilingual-hallucination-detection-682a2549c18ecd32689231ce) for every checkpoint. The EuroBERT models load remote code that requires `transformers<5`.
 
 ## TinyLettuce (Distilled)
 
@@ -34,7 +39,7 @@ from lettucedetect.models.inference import HallucinationDetector
 
 detector = HallucinationDetector(
     method="transformer",
-    model_path="KRLabsOrg/lettucedetect-large-modernbert-en-v1"
+    model_path="KRLabsOrg/lettucedect-large-modernbert-en-v1"
 )
 ```
 

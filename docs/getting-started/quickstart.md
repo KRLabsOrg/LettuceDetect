@@ -8,7 +8,7 @@ from lettucedetect.models.inference import HallucinationDetector
 # Load a pre-trained model
 detector = HallucinationDetector(
     method="transformer",
-    model_path="KRLabsOrg/lettucedetect-base-modernbert-en-v1"
+    model_path="KRLabsOrg/lettucedect-base-modernbert-en-v1"
 )
 
 # Provide context, question, and answer
@@ -85,9 +85,9 @@ print([{"text": answer[start:end], "start": start, "end": end} for start, end in
 
 | Model | Language | Context | Size |
 |-------|----------|---------|------|
-| `KRLabsOrg/lettucedetect-base-modernbert-en-v1` | English | 4K | 149M |
-| `KRLabsOrg/lettucedetect-large-modernbert-en-v1` | English | 4K | 395M |
-| `KRLabsOrg/lettucedetect-base-eurobert-multilingual-v1` | 7 languages | 8K | 210M |
+| `KRLabsOrg/lettucedect-base-modernbert-en-v1` | English | 4K | 149M |
+| `KRLabsOrg/lettucedect-large-modernbert-en-v1` | English | 4K | 395M |
+| `KRLabsOrg/lettucedect-210m-eurobert-<lang>-v1` | de, fr, es, it, pl, cn | 8K | 210M |
 | `KRLabsOrg/lettucedect-v2-qwen-2b` | code / tool / prose | — | 2B |
 | `KRLabsOrg/lettucedect-v2-mmbert-base` | code / tool / prose | 8K | 307M |
 
