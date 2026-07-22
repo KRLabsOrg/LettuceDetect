@@ -254,6 +254,22 @@ The model can output predictions in two formats:
 }]
 ```
 
+Use `min_confidence` with span output to drop predictions below a threshold:
+
+```python
+detector.predict(
+    context=contexts,
+    question=question,
+    answer=answer,
+    output_format="spans",
+    min_confidence=0.8,
+)
+```
+
+For transformer detectors, emitted hallucination spans already have
+confidence values of at least `0.5`, so thresholds below `0.5` are no-ops;
+higher thresholds raise that floor.
+
 ### Token Format
 ```python
 [{
