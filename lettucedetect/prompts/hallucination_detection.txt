@@ -23,6 +23,7 @@ A substring that:
 ## How to choose spans
 - Flag the **minimal** substring carrying the unsupported information; do not pad with surrounding supported text.
 - Copy each span **verbatim** from the answer — character for character, including punctuation, casing, and spacing. Do not paraphrase, translate, fix typos, or normalize. A span that is not an exact substring of the answer is discarded.
+- Return spans in their left-to-right order in the answer, with at most one item for each distinct occurrence.
 - If one sentence mixes supported and unsupported content, flag only the unsupported part.
 
 ## Steps
