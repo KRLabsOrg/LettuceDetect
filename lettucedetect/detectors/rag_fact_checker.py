@@ -54,6 +54,8 @@ class RAGFactCheckerDetector(BaseDetector):
         :param question: Question (optional)
         :param output_format: "tokens", "spans", or "detailed"
         :param min_confidence: Drop ``"spans"`` below this confidence threshold (``[0, 1]``).
+            Does not filter ``output_format="detailed"``; detailed output returns
+            the unfiltered spans, triplets, and fact-check results.
         :param kwargs: Additional arguments
 
         :return: List of predictions in lettuceDetect format, or dict for detailed format
