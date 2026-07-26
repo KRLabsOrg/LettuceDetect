@@ -131,6 +131,99 @@ class TestTokenOutput:
         assert is_token_list(result)
 
 
+class TestRepeatedSpanLocalization:
+    """Repeated returned strings should localize to distinct answer occurrences."""
+
+    def test_duplicate_strings_use_distinct_occurrences(self):
+        """Identical span strings reserve left-to-right non-overlapping matches."""
+        answer = "Paris is mentioned; Paris is repeated."
+
+        spans = LLMDetector._to_spans(["Paris", "Paris"], answer)
+
+        assert spans == [
+            {"start": 0, "end": 5, "text": "Paris"},
+            {"start": 20, "end": 25, "text": "Paris"},
+        ]
+
+    def test_dict_metadata_stays_with_corresponding_occurrence(self):
+        """Metadata belongs to the occurrence reserved by the matching item."""
+        answer = "Paris is mentioned; Paris is repeated."
+        items = [
+            {"text": "Paris", "confidence": 0.41, "category": "unsupported"},
+            {"text": "Paris", "confidence": 0.92, "reasoning": "second mention"},
+        ]
+
+        spans = LLMDetector._to_spans(items, answer)
+
+        assert spans[0] == {
+            "start": 0,
+            "end": 5,
+            "text": "Paris",
+            "confidence": 0.41,
+            "category": "unsupported",
+        }
+        assert spans[1] == {
+            "start": 20,
+            "end": 25,
+            "text": "Paris",
+            "confidence": 0.92,
+            "reasoning": "second mention",
+        }
+
+    def test_filtered_items_still_reserve_occurrences(self):
+        """Rejected or low-confidence earlier items do not shift later offsets."""
+        answer = "Paris is mentioned; Paris is repeated."
+        items = [
+            {"text": "Paris", "confidence": 0.2},
+            {"text": "Paris", "confidence": 0.9},
+        ]
+
+        spans = LLMDetector._to_spans(items, answer, min_confidence=0.5)
+
+        assert spans == [{"start": 20, "end": 25, "text": "Paris", "confidence": 0.9}]
+
+    def test_rejected_items_still_reserve_occurrences(self):
+        """Self-rejected items reserve their occurrence before being dropped."""
+        answer = "Paris is mentioned; Paris is repeated."
+        items = [
+            {"text": "Paris", "is_hallucination": False},
+            {"text": "Paris", "confidence": 0.9},
+        ]
+
+        spans = LLMDetector._to_spans(items, answer)
+
+        assert spans == [{"start": 20, "end": 25, "text": "Paris", "confidence": 0.9}]
+
+    def test_extra_items_do_not_duplicate_offsets(self):
+        """More repeated items than occurrences are skipped instead of duplicated."""
+        answer = "Paris is mentioned; Paris is repeated."
+
+        spans = LLMDetector._to_spans(["Paris", "Paris", "Paris"], answer)
+
+        assert spans == [
+            {"start": 0, "end": 5, "text": "Paris"},
+            {"start": 20, "end": 25, "text": "Paris"},
+        ]
+
+    def test_single_ambiguous_item_keeps_first_match(self):
+        """A single text-only repeated item keeps the documented first-match fallback."""
+        answer = "Paris is mentioned; Paris is repeated."
+
+        spans = LLMDetector._to_spans(["Paris"], answer)
+
+        assert spans == [{"start": 0, "end": 5, "text": "Paris"}]
+
+    def test_token_output_flags_repeated_occurrences(self, cache_file):
+        """Token projection flags both repeated occurrences end to end."""
+        answer = "Paris is mentioned; Paris is repeated."
+        detector = make_detector('{"hallucination_list": ["Paris", "Paris"]}', cache_file)
+
+        tokens = detector.predict_prompt("p", answer, output_format="tokens")
+
+        flagged = [token["token"] for token in tokens if token["pred"] == 1]
+        assert flagged == ["Paris", "Paris"]
+
+
 class TestSpansUnaffected:
     """The spans path must behave exactly as before."""
 

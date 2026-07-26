@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from string import Template
@@ -43,7 +44,9 @@ _RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
    `{"hallucination_list": ["substring1", "substring2", …]}`
 
    Each substring must be copied **verbatim** from the answer — an exact,
-   character-for-character match. If none are found, return `{"hallucination_list": []}`."""
+   character-for-character match. List substrings in answer order and include a
+   repeated substring at most once per distinct occurrence. If none are found,
+   return `{"hallucination_list": []}`."""
 
 _VERIFY_SYSTEM = (
     "You are a strict fact-checker confirming whether flagged spans are truly unsupported."
@@ -198,7 +201,10 @@ class LLMDetector(BaseDetector):
             return _RESPONSE_FORMAT
 
         example: dict = {"text": "substring1"}
-        notes = ['- "text" must be an exact substring of the answer.']
+        notes = [
+            '- "text" must be an exact substring of the answer and items must be listed in answer order.',
+            "- For repeated substrings, return at most one item per distinct occurrence.",
+        ]
         if self.include_reasoning:
             example["reasoning"] = "compare the span against the source before judging it"
             notes.append(
@@ -273,7 +279,9 @@ class LLMDetector(BaseDetector):
         )
 
     @staticmethod
-    def _to_spans(items: list[str | dict], answer: str, min_confidence: float = 0.0) -> list[dict]:
+    def _to_spans(
+        items: Sequence[str | dict], answer: str, min_confidence: float = 0.0
+    ) -> list[dict]:
         """Convert hallucinated items to a list of spans.
 
         Items the model self-rejected (``is_hallucination`` is False) or scored
@@ -288,6 +296,7 @@ class LLMDetector(BaseDetector):
         :returns: List of spans.
         """
         spans = []
+        reserved: list[tuple[int, int]] = []
         for item in items:
             if not isinstance(item, (str, dict)):
                 logger.warning("Skipping malformed hallucination item: %r", item)
@@ -295,17 +304,31 @@ class LLMDetector(BaseDetector):
             sub = item.get("text") if isinstance(item, dict) else item
             if not sub:
                 continue
+
+            match = next(
+                (
+                    candidate
+                    for candidate in re.finditer(re.escape(sub), answer)
+                    if all(
+                        candidate.end() <= start or end <= candidate.start()
+                        for start, end in reserved
+                    )
+                ),
+                None,
+            )
+            if not match:
+                logger.debug(
+                    "Dropping span not found as an unused verbatim answer occurrence: %r", sub
+                )
+                continue
+            reserved.append((match.start(), match.end()))
+
             if isinstance(item, dict):
                 if item.get("is_hallucination") is False:
                     continue
                 confidence = item.get("confidence")
                 if confidence is not None and confidence < min_confidence:
                     continue
-            # Use regex for more reliable matching
-            match = re.search(re.escape(sub), answer)
-            if not match:
-                logger.debug("Dropping span not found verbatim in answer: %r", sub)
-                continue
             span = {"start": match.start(), "end": match.end(), "text": sub}
             if isinstance(item, dict):
                 for key in ("confidence", "reasoning", "category", "subcategory"):
