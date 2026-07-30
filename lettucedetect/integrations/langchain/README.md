@@ -29,9 +29,7 @@ vectorstore = Chroma.from_documents(docs, embeddings)
 # Create streaming RAG chain
 llm = ChatOpenAI(model="gpt-4o-mini", streaming=True)
 chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    chain_type="stuff",
-    retriever=vectorstore.as_retriever(search_kwargs={"k": 3})
+    llm=llm, chain_type="stuff", retriever=vectorstore.as_retriever(search_kwargs={"k": 3})
 )
 
 # Get context and stream with detection
@@ -59,7 +57,7 @@ callback = LettuceStreamingCallback(
     context=context,
     question=question,
     check_every=10,
-    method="transformer"  # or "rag_fact_checker"
+    method="transformer",  # or "rag_fact_checker"
 )
 
 # Use with any LangChain chain
