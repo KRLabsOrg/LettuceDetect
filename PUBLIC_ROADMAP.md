@@ -6,22 +6,24 @@ LettuceDetect is maintained and evidence-driven. This roadmap separates near-ter
 
 The next PyPI release is about making the existing detectors more reliable, cheaper to install, and faster to run—not about adding new detection methods.
 
-- [Run the complete network-free unit suite in CI](https://github.com/KRLabsOrg/LettuceDetect/issues/73): every core unit test should be a merge gate, including factory, dataset, and LLM-client tests.
-- [Define evidence aggregation for chunked inference](https://github.com/KRLabsOrg/LettuceDetect/issues/74): benchmark whether evidence in any chunk or every chunk is required before changing the current conservative behavior.
+Open:
+
 - [Real batched inference](https://github.com/KRLabsOrg/LettuceDetect/issues/23): `predict_prompt_batch` currently loops one sample at a time; the plan is padded-batch tokenization with a single forward pass.
 - [Lighter installs](https://github.com/KRLabsOrg/LettuceDetect/issues/69): lazy top-level imports so the LLM detector never touches torch. How to slim the default install without breaking existing users is an open design question; input welcome on the issue.
-- [Fix tokens output from the LLM detector](https://github.com/KRLabsOrg/LettuceDetect/issues/65): `output_format="tokens"` should return token-level output, matching the transformer detector.
-- [A `lettucedetect` CLI](https://github.com/KRLabsOrg/LettuceDetect/issues/47) and [a latency/throughput benchmark](https://github.com/KRLabsOrg/LettuceDetect/issues/58): both have contributor PRs in review.
-- [Document `min_confidence` edge cases](https://github.com/KRLabsOrg/LettuceDetect/issues/64): contributor PR in review.
+- [Define evidence aggregation for chunked inference](https://github.com/KRLabsOrg/LettuceDetect/issues/74): benchmark whether evidence in any chunk or every chunk is required before changing the current conservative behavior.
+- [Map repeated LLM span strings to distinct answer occurrences](https://github.com/KRLabsOrg/LettuceDetect/issues/85)
+
+Shipped in this milestone so far: the network-free unit suite as a merge gate ([#73](https://github.com/KRLabsOrg/LettuceDetect/issues/73)), the `lettucedetect` CLI ([#47](https://github.com/KRLabsOrg/LettuceDetect/issues/47)), the detector latency/throughput benchmark ([#58](https://github.com/KRLabsOrg/LettuceDetect/issues/58)), token output from the LLM detector ([#65](https://github.com/KRLabsOrg/LettuceDetect/issues/65)), and the `min_confidence` documentation ([#64](https://github.com/KRLabsOrg/LettuceDetect/issues/64)).
 
 ## Next: [Validation — Typed-span workflows](https://github.com/KRLabsOrg/LettuceDetect/milestone/3)
 
 The detectors already emit typed spans (category and subcategory per detected span). This milestone tests whether that localization improves real debugging, evaluation, monitoring, and agent workflows.
 
-- [Typed spans in the Streamlit demo](https://github.com/KRLabsOrg/LettuceDetect/issues/57)
 - [Dataset-level hallucination-rate evaluation and reporting](https://github.com/KRLabsOrg/LettuceDetect/issues/56)
 - [A Claude Code hook that flags hallucinations in agent answers](https://github.com/KRLabsOrg/LettuceDetect/issues/50)
 - [A stable HTTP contract for typed spans and detector selection](https://github.com/KRLabsOrg/LettuceDetect/issues/75)
+
+Shipped: typed spans in the Streamlit demo ([#57](https://github.com/KRLabsOrg/LettuceDetect/issues/57)).
 
 ## Exploring: [transferable span detection](https://github.com/KRLabsOrg/LettuceDetect/milestone/2)
 
