@@ -43,7 +43,9 @@ _RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
    `{"hallucination_list": ["substring1", "substring2", …]}`
 
    Each substring must be copied **verbatim** from the answer — an exact,
-   character-for-character match. If none are found, return `{"hallucination_list": []}`."""
+   character-for-character match. List substrings in answer order and include a
+   repeated substring at most once per distinct occurrence. If none are found,
+   return `{"hallucination_list": []}`."""
 
 _VERIFY_SYSTEM = (
     "You are a strict fact-checker confirming whether flagged spans are truly unsupported."
@@ -198,7 +200,10 @@ class LLMDetector(BaseDetector):
             return _RESPONSE_FORMAT
 
         example: dict = {"text": "substring1"}
-        notes = ['- "text" must be an exact substring of the answer.']
+        notes = [
+            '- "text" must be an exact substring of the answer and items must be listed in answer order.',
+            "- For repeated substrings, return at most one item per distinct occurrence.",
+        ]
         if self.include_reasoning:
             example["reasoning"] = "compare the span against the source before judging it"
             notes.append(
