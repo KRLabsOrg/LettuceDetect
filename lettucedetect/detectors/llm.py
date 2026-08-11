@@ -288,6 +288,7 @@ class LLMDetector(BaseDetector):
         :returns: List of spans.
         """
         spans = []
+        used: list[tuple[int, int]] = []
         for item in items:
             if not isinstance(item, (str, dict)):
                 logger.warning("Skipping malformed hallucination item: %r", item)
@@ -295,17 +296,24 @@ class LLMDetector(BaseDetector):
             sub = item.get("text") if isinstance(item, dict) else item
             if not sub:
                 continue
+            match = next(
+                (
+                    match
+                    for match in re.finditer(re.escape(sub), answer)
+                    if not any(match.start() < end and start < match.end() for start, end in used)
+                ),
+                None,
+            )
+            if not match:
+                logger.debug("Dropping span without an unused verbatim match in answer: %r", sub)
+                continue
+            used.append((match.start(), match.end()))
             if isinstance(item, dict):
                 if item.get("is_hallucination") is False:
                     continue
                 confidence = item.get("confidence")
                 if confidence is not None and confidence < min_confidence:
                     continue
-            # Use regex for more reliable matching
-            match = re.search(re.escape(sub), answer)
-            if not match:
-                logger.debug("Dropping span not found verbatim in answer: %r", sub)
-                continue
             span = {"start": match.start(), "end": match.end(), "text": sub}
             if isinstance(item, dict):
                 for key in ("confidence", "reasoning", "category", "subcategory"):

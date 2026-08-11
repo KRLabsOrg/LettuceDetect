@@ -148,3 +148,50 @@ class TestSpansUnaffected:
                 "text": "Spain",
             }
         ]
+
+
+class TestRepeatedSpanLocalization:
+    """Repeated judge spans must map to distinct answer occurrences."""
+
+    def test_repeated_spans_keep_distinct_offsets_and_metadata(self):
+        """Each repeated item keeps its own occurrence and metadata."""
+        answer = "Paris is mentioned; Paris is repeated."
+        items: list[str | dict] = [
+            {"text": "Paris", "confidence": 0.7, "category": "first"},
+            {"text": "Paris", "confidence": 0.9, "category": "second"},
+        ]
+
+        spans = LLMDetector._to_spans(items, answer)
+
+        assert [(span["start"], span["category"]) for span in spans] == [
+            (0, "first"),
+            (20, "second"),
+        ]
+        assert [span["confidence"] for span in spans] == [0.7, 0.9]
+
+    def test_filtered_item_still_reserves_its_occurrence(self):
+        """Filtering an item must not shift a later item's location."""
+        answer = "Paris is mentioned; Paris is repeated."
+        items: list[str | dict] = [
+            {"text": "Paris", "is_hallucination": False},
+            {"text": "Paris", "is_hallucination": True},
+        ]
+
+        spans = LLMDetector._to_spans(items, answer)
+
+        assert [(span["start"], span["end"]) for span in spans] == [(20, 25)]
+
+    def test_overlapping_and_excess_items_do_not_reuse_offsets(self):
+        """Items without a free non-overlapping occurrence are dropped."""
+        spans = LLMDetector._to_spans(["abc", "bc", "abc"], "abc")
+
+        assert spans == [{"start": 0, "end": 3, "text": "abc"}]
+
+    def test_token_output_flags_both_repeated_occurrences(self, cache_file):
+        """Token projection flags every separately localized occurrence."""
+        answer = "Paris appears and Paris repeats."
+        detector = make_detector('{"hallucination_list": ["Paris", "Paris"]}', cache_file)
+
+        tokens = detector.predict_prompt("p", answer, output_format="tokens")
+
+        assert [token["pred"] for token in tokens] == [1, 0, 0, 1, 0]
