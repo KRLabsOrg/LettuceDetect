@@ -33,8 +33,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
+
+# Keep model-loading noise out of the hook feedback (stderr is fed back to the agent).
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+os.environ.setdefault("TQDM_DISABLE", "1")
 
 UNSUPPORTED_ADDITION_NOTE = "the request did not ask for this"
 
