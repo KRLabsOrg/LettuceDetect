@@ -42,9 +42,20 @@ class LfmForSpanTagging(nn.Module):
     def __init__(self, model_name: str, num_labels: int = 2, dropout: float = 0.1) -> None:
         """Load the remote bidirectional backbone and attach a tagger head."""
         super().__init__()
-        self.backbone = AutoModel.from_pretrained(
-            model_name, trust_remote_code=True, torch_dtype=torch.float32
-        )
+        # Some LFM2.5 encoder checkpoints (e.g. LFM2.5-Encoder-350M) store weights
+        # under the MaskedLM wrapper prefix (lfm2.*); loading the bare AutoModel
+        # there silently random-initializes everything. Load the wrapper and take
+        # its backbone, falling back to AutoModel for bare-backbone checkpoints.
+        try:
+            from transformers import AutoModelForMaskedLM
+            mlm = AutoModelForMaskedLM.from_pretrained(
+                model_name, trust_remote_code=True, torch_dtype=torch.float32
+            )
+            self.backbone = getattr(mlm, "lfm2")
+        except (ValueError, AttributeError, OSError):
+            self.backbone = AutoModel.from_pretrained(
+                model_name, trust_remote_code=True, torch_dtype=torch.float32
+            )
         self.config = self.backbone.config
         hidden = self.config.hidden_size
         # LayerNorm the backbone features before the head: the retriever's raw
@@ -165,7 +176,8 @@ def _selfcheck() -> None:
     loss = nn.functional.cross_entropy(
         logits.view(-1, 2).float(), labels.view(-1), ignore_index=-100
     )
-    assert loss.requires_grad and loss.item() > 0
+    if not (loss.requires_grad and loss.item() > 0):
+        raise RuntimeError("selfcheck failed: loss not differentiable or not positive")
     print("selfcheck ok")
 
 
