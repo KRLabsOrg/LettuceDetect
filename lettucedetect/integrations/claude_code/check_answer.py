@@ -18,6 +18,12 @@ Two detector modes:
       tool-output answers; the taxonomy head types each span, so additions the
       request never asked for are reported as ``unsupported_addition``.
 
+  --llm-model KRLabsOrg/lettucedect-v2-qwen-2b --llm-base-url http://localhost:8001/v1
+      Generative detector through an OpenAI-compatible endpoint (e.g. vLLM
+      serving the qwen model). Emits typed spans in one pass. Without
+      ``--llm-base-url`` the configured provider default is used, so plain LLM
+      judges (``--llm-model gpt-4.1-mini``) work too.
+
 Exit contract (Claude Code hooks): exit 2 with the report on stderr feeds the
 report back to the agent; exit 0 means nothing to report. When the event says
 ``stop_hook_active`` the hook exits 0 immediately to avoid a feedback loop.
@@ -138,6 +144,21 @@ def detect_spans_local(
     )
 
 
+def detect_spans_llm(
+    llm_model: str, base_url: str | None, contexts: list[str], question: str, answer: str
+) -> list[dict]:
+    """Detect spans with the LLM detector (generative lettucedect-v2 models or LLM judges)."""
+    from lettucedetect.models.inference import HallucinationDetector
+
+    kwargs = {"method": "llm", "model": llm_model}
+    if base_url:
+        kwargs["base_url"] = base_url
+    detector = HallucinationDetector(**kwargs)
+    return detector.predict(
+        context=contexts, question=question, answer=answer, output_format="spans"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the hook: parse stdin event, check the answer, report flagged spans."""
     parser = argparse.ArgumentParser(
@@ -146,6 +167,14 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--api-url", help="Base URL of a running LettuceDetect web API")
     mode.add_argument("--model-path", help="HF model id or local path for in-process detection")
+    mode.add_argument(
+        "--llm-model",
+        help="Generative detector (e.g. KRLabsOrg/lettucedect-v2-qwen-2b via vLLM) or LLM judge",
+    )
+    parser.add_argument(
+        "--llm-base-url",
+        help="OpenAI-compatible endpoint for --llm-model (e.g. a vLLM server)",
+    )
     parser.add_argument(
         "--taxonomy-head",
         help="Optional span-typing head for --model-path (typed spans in the report)",
@@ -184,6 +213,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.api_url:
         spans = detect_spans_api(args.api_url, contexts, question or "", answer)
+    elif args.llm_model:
+        spans = detect_spans_llm(
+            args.llm_model, args.llm_base_url, contexts, question or "", answer
+        )
     else:
         spans = detect_spans_local(
             args.model_path, args.taxonomy_head, contexts, question or "", answer

@@ -206,6 +206,48 @@ class TestMain:
         assert code == 2
         assert "0.97" in capsys.readouterr().err
 
+    def test_llm_mode_passes_base_url_and_reports_typed_spans(self, tmp_path, capsys):
+        """Test llm mode passes base url and reports typed spans."""
+        ctx = self.make_context(tmp_path)
+        seen = {}
+
+        class StubDetector:
+            """Stub LLM detector capturing constructor kwargs."""
+
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+
+            def predict(self, **kwargs):
+                return [
+                    {
+                        "text": "added retry logic",
+                        "confidence": 0.9,
+                        "category": "unsupported_addition",
+                    }
+                ]
+
+        with (
+            patch("sys.stdin", io.StringIO(json.dumps({"transcript_path": str(FIXTURE)}))),
+            patch("lettucedetect.models.inference.HallucinationDetector", StubDetector),
+        ):
+            code = main(
+                [
+                    "--llm-model",
+                    "KRLabsOrg/lettucedect-v2-qwen-2b",
+                    "--llm-base-url",
+                    "http://localhost:8001/v1",
+                    "--context-file",
+                    ctx,
+                ]
+            )
+        assert code == 2
+        assert seen == {
+            "method": "llm",
+            "model": "KRLabsOrg/lettucedect-v2-qwen-2b",
+            "base_url": "http://localhost:8001/v1",
+        }
+        assert "the request did not ask for this" in capsys.readouterr().err
+
 
 class TestArgs:
     """Argument validation."""
@@ -214,3 +256,8 @@ class TestArgs:
         """Test mode required."""
         with pytest.raises(SystemExit):
             main([])
+
+    def test_modes_mutually_exclusive(self):
+        """Test modes mutually exclusive."""
+        with pytest.raises(SystemExit):
+            main(["--api-url", "http://x", "--llm-model", "y"])

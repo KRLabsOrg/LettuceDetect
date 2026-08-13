@@ -57,6 +57,8 @@ found the agent receives them and revises.
 | `--api-url URL` | Uses the running web API (recommended: model stays loaded, one HTTP round trip per check) |
 | `--model-path ID` | In-process detection; simplest setup, but loads the model on every invocation |
 | `--taxonomy-head ID` | With `--model-path`: types each span (`unsupported_addition`, `contradiction`, ...) |
+| `--llm-model ID` | Generative detector or LLM judge; use `KRLabsOrg/lettucedect-v2-qwen-2b` for typed spans in one pass |
+| `--llm-base-url URL` | OpenAI-compatible endpoint for `--llm-model` (e.g. `vllm serve KRLabsOrg/lettucedect-v2-qwen-2b`) |
 | `--context-file F` | Grounding passage file, repeatable; default `context.md` |
 | `--min-confidence X` | Report only spans at or above this confidence |
 
