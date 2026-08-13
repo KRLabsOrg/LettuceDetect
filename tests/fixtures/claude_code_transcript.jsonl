@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "What is the population of France?"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "The capital of France is Paris."}, {"type": "text", "text": "The population of France is 69 million."}]}}
+{"type": "system", "not_a_message": true}
+invalid json line
