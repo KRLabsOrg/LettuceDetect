@@ -117,7 +117,23 @@ class LLMDetector(BaseDetector):
         # with their frozen training prompt + hallucinated_spans contract, instead of
         # the zero-shot judge prompt. Auto-detected from the model id; override explicitly.
         self.native = _looks_native(model) if native is None else native
-        if isinstance(include_taxonomy, bool):
+        if self.native and (zero_shot or fewshot_path or prompt_path):
+            raise ValueError(
+                "zero_shot, fewshot_path, and prompt_path have no effect on the native "
+                "generative detectors (they use their frozen training prompt); pass "
+                "native=False to prompt this model as a generic LLM judge instead."
+            )
+        self._custom_taxonomy = not isinstance(include_taxonomy, bool)
+        if (
+            isinstance(include_taxonomy, dict)
+            and include_taxonomy
+            and set(include_taxonomy) <= {"categories", "subcategories"}
+            and all(isinstance(v, dict) for v in include_taxonomy.values())
+        ):
+            # Nested form: full control over both label sets.
+            self.categories = dict(include_taxonomy.get("categories") or {}) or None
+            self.subcategories = dict(include_taxonomy.get("subcategories") or {}) or None
+        elif isinstance(include_taxonomy, bool):
             self.categories = dict(CATEGORY_DEFINITIONS) if include_taxonomy else None
             # The unified taxonomy is category + subcategory; enabling it types both.
             self.subcategories = dict(SUBCATEGORY_DEFINITIONS) if include_taxonomy else None
@@ -424,9 +440,25 @@ class LLMDetector(BaseDetector):
         :param answer: The answer string.
         :returns: List of typed spans.
         """
-        system = gen.SYSTEM_EXPL if self.include_reasoning else gen.SYSTEM_BASE
+        if self._custom_taxonomy and self.categories:
+            # Experimental: labels enter the trained prompt only as name/description text,
+            # so a custom taxonomy keeps the structure the model was trained on. Without
+            # custom subcategories the subcategory label collapses to "unspecified".
+            subs = self.subcategories or {
+                "unspecified": gen.SUBCATEGORY_DESCRIPTIONS["unspecified"]
+            }
+            system = gen.build_system_prompt(
+                explain=self.include_reasoning, categories=self.categories, subcategories=subs
+            )
+            schema = build_generative_schema(
+                explain=self.include_reasoning,
+                categories=list(self.categories),
+                subcategories=list(subs),
+            )
+        else:
+            system = gen.SYSTEM_EXPL if self.include_reasoning else gen.SYSTEM_BASE
+            schema = build_generative_schema(explain=self.include_reasoning)
         user = gen.build_user_message(context, answer)
-        schema = build_generative_schema(explain=self.include_reasoning)
 
         cache_key = self.cache._hash(system + user, self.model, str(self.temperature), "native")
         cached = self.cache.get(cache_key)

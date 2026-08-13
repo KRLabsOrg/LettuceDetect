@@ -41,10 +41,23 @@ SUBCATEGORY_DESCRIPTIONS = {
 }
 
 
-def build_system_prompt(explain: bool = False) -> str:
-    """Build the detection system prompt; if ``explain``, also request a per-span explanation."""
-    cats = "\n".join(f"- {k}: {v}" for k, v in CATEGORY_DESCRIPTIONS.items())
-    subs = "\n".join(f"- {k}: {v}" for k, v in SUBCATEGORY_DESCRIPTIONS.items())
+def _label_lines(labels: dict) -> str:
+    return "\n".join(f"- {k}: {v}" if v else f"- {k}" for k, v in labels.items())
+
+
+def build_system_prompt(
+    explain: bool = False,
+    categories: dict[str, str] | None = None,
+    subcategories: dict[str, str] | None = None,
+) -> str:
+    """Build the detection system prompt; if ``explain``, also request a per-span explanation.
+
+    ``categories``/``subcategories`` replace the frozen label sets (labels enter the prompt
+    only as ``name: description`` text, so custom label sets keep the trained structure);
+    ``None`` keeps the frozen defaults.
+    """
+    cats = _label_lines(categories if categories is not None else CATEGORY_DESCRIPTIONS)
+    subs = _label_lines(subcategories if subcategories is not None else SUBCATEGORY_DESCRIPTIONS)
     expl_clause = ", and give a short explanation of why it is unsupported" if explain else ""
     expl_field = ', "explanation": "..."' if explain else ""
     return (
