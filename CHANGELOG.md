@@ -2,6 +2,24 @@
 
 All notable changes to LettuceDetect are documented here.
 
+## [0.2.3] - 2026-08-14
+
+### Added
+- `lettucedetect` command-line entry point: file/stdin/literal inputs, spans or tokens JSON output, transformer and LLM methods (#47, thanks @SemTiOne)
+- Detector latency/throughput benchmark script with context-length sweep and peak-memory reporting (#58, thanks @sanmaxdev)
+- Claude Code integration: a Stop hook that checks agent answers against grounding context and feeds flagged spans back to the agent; API, in-process, and generative (vLLM) modes (#50)
+- Custom zero-shot taxonomies: `include_taxonomy` accepts `{name: description}` label sets on the taxonomy-head cascade and the native generative detector; labels enter as text, so unseen labels type from their description (#92)
+- Typed spans in the Streamlit demo: model selector, per-category colors, span table (#57, thanks @w3lld1)
+
+### Fixed
+- `LLMDetector` honors `output_format="tokens"` across all three predict entry points (#65, thanks @mobinert)
+- Corrected published model ids in the CLI help and docs; the multilingual EuroBERT models are documented as one checkpoint per language with the `transformers<5` note (#33)
+- `zero_shot`, `fewshot_path`, and `prompt_path` now raise on native generative detectors instead of being silently ignored (#92)
+
+### Documentation
+- Public roadmap (`PUBLIC_ROADMAP.md`) with milestone-linked Now/Next/Exploring sections
+- `min_confidence` edge cases documented (#64, thanks @vku2018)
+
 ## [0.2.2] - 2026-07-05
 
 ### Fixed
