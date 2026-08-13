@@ -32,6 +32,7 @@ class TransformerDetector(BaseDetector):
         device: torch.device | str | None = None,
         lang: Lang = "en",
         taxonomy_head: str | None = None,
+        include_taxonomy: bool | list | dict = True,
         **tok_kwargs: object,
     ) -> None:
         """Initialize the transformer detector.
@@ -42,6 +43,11 @@ class TransformerDetector(BaseDetector):
         :param lang: Language of the model.
         :param taxonomy_head: Optional path/HF id of a label-conditioned typing head. When set,
             ``"spans"`` predictions are typed with a ``category``/``subcategory`` (cascade mode).
+        :param include_taxonomy: Label set for the typing head. ``True`` uses the trained
+            taxonomy; a ``{name: description}`` dict REPLACES the categories (zero-shot: labels
+            enter only as text); ``{"categories": {...}, "subcategories": {...}}`` controls both
+            sets; a list of names selects a subset of the trained categories. Only meaningful
+            together with ``taxonomy_head``.
         :param tok_kwargs: Additional keyword arguments for the tokenizer.
         """
         if lang not in LANG_TO_PASSAGE:
@@ -55,9 +61,15 @@ class TransformerDetector(BaseDetector):
         self.model.to(self.device).eval()
         self.typer = None
         if taxonomy_head is not None:
-            from lettucedetect.detectors.taxonomy_head import TaxonomyTyper
+            from lettucedetect.detectors.taxonomy_head import TaxonomyTyper, resolve_taxonomy
 
-            self.typer = TaxonomyTyper(taxonomy_head, device=self.device)
+            categories, subcategories = resolve_taxonomy(include_taxonomy)
+            self.typer = TaxonomyTyper(
+                taxonomy_head,
+                device=self.device,
+                categories=categories,
+                subcategories=subcategories,
+            )
 
     # ------------------------------------------------------------------
     # Chunking helpers

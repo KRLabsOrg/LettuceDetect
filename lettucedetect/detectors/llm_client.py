@@ -103,7 +103,11 @@ def build_hallucination_schema(
     }
 
 
-def build_generative_schema(explain: bool = False) -> dict:
+def build_generative_schema(
+    explain: bool = False,
+    categories: list[str] | None = None,
+    subcategories: list[str] | None = None,
+) -> dict:
     """Build the JSON schema for the fine-tuned span detectors' ``hallucinated_spans`` output.
 
     Distinct from :func:`build_hallucination_schema` (the LLM-judge contract): this
@@ -113,6 +117,8 @@ def build_generative_schema(explain: bool = False) -> dict:
     :mod:`lettucedetect.prompts.generative` label set.
 
     :param explain: Require a per-span ``explanation`` field.
+    :param categories: Replace the frozen category enum (``None`` keeps the default).
+    :param subcategories: Replace the frozen subcategory enum (``None`` keeps the default).
     :returns: JSON schema for ``{"hallucinated_spans": [...]}``.
     """
     from lettucedetect.prompts.generative import (
@@ -122,8 +128,11 @@ def build_generative_schema(explain: bool = False) -> dict:
 
     properties: dict = {
         "text": {"type": "string", "description": "Exact hallucinated substring of the answer"},
-        "category": {"type": "string", "enum": list(CATEGORY_DESCRIPTIONS)},
-        "subcategory": {"type": "string", "enum": list(SUBCATEGORY_DESCRIPTIONS)},
+        "category": {"type": "string", "enum": categories or list(CATEGORY_DESCRIPTIONS)},
+        "subcategory": {
+            "type": "string",
+            "enum": subcategories or list(SUBCATEGORY_DESCRIPTIONS),
+        },
     }
     if explain:
         properties["explanation"] = {

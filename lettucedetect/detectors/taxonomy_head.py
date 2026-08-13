@@ -18,6 +18,31 @@ from lettucedetect.prompts.generative import CATEGORY_DESCRIPTIONS, SUBCATEGORY_
 _SEP = " [CTX] "  # answer + _SEP + context; must match the taxonomy-head training script
 
 
+def resolve_taxonomy(
+    include_taxonomy: bool | list | dict,
+) -> tuple[dict | None, dict | None]:
+    """Normalize an ``include_taxonomy`` argument into (categories, subcategories) dicts.
+
+    ``True``/``False`` -> frozen defaults (None, None); flat ``{name: description}`` dict ->
+    custom categories; ``{"categories": {...}, "subcategories": {...}}`` -> full control;
+    list of names -> subset of the frozen categories.
+    """
+    if isinstance(include_taxonomy, bool):
+        return None, None
+    if isinstance(include_taxonomy, dict):
+        if (
+            include_taxonomy
+            and set(include_taxonomy) <= {"categories", "subcategories"}
+            and all(isinstance(v, dict) for v in include_taxonomy.values())
+        ):
+            return (
+                dict(include_taxonomy.get("categories") or {}) or None,
+                dict(include_taxonomy.get("subcategories") or {}) or None,
+            )
+        return dict(include_taxonomy) or None, None
+    return {name: CATEGORY_DESCRIPTIONS.get(name) for name in include_taxonomy} or None, None
+
+
 class TaxonomyTyper:
     """Types spans (category + subcategory) via a label-conditioned encoder."""
 
@@ -26,6 +51,8 @@ class TaxonomyTyper:
         model_path: str,
         device: torch.device | str | None = None,
         max_length: int = 1024,
+        categories: dict[str, str] | None = None,
+        subcategories: dict[str, str] | None = None,
         **tok_kwargs: object,
     ) -> None:
         """Load the typing encoder and pre-compute taxonomy-label embeddings.
@@ -33,6 +60,10 @@ class TaxonomyTyper:
         :param model_path: Path or HF id of the label-conditioned encoder.
         :param device: Device for inference (defaults to CUDA when available).
         :param max_length: Max tokens for the ``answer + context`` input.
+        :param categories: Custom ``{name: description}`` category labels; REPLACES the
+            frozen set (labels enter only as text, so held-out labels type zero-shot from
+            their description). ``None`` keeps the trained taxonomy.
+        :param subcategories: Custom subcategory labels, same semantics.
         :param tok_kwargs: Extra arguments for the tokenizer / model loaders.
         """
         self.device = device or (
@@ -41,15 +72,19 @@ class TaxonomyTyper:
         self.max_length = max_length
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, **tok_kwargs)
         self.encoder = AutoModel.from_pretrained(model_path, **tok_kwargs).to(self.device).eval()
-        self.cat_names = list(CATEGORY_DESCRIPTIONS)
-        self.sub_names = list(SUBCATEGORY_DESCRIPTIONS)
-        self._cat_vecs = self._label_vecs(self.cat_names, CATEGORY_DESCRIPTIONS)
-        self._sub_vecs = self._label_vecs(self.sub_names, SUBCATEGORY_DESCRIPTIONS)
+        cats = categories if categories is not None else CATEGORY_DESCRIPTIONS
+        subs = subcategories if subcategories is not None else SUBCATEGORY_DESCRIPTIONS
+        self.cat_names = list(cats)
+        self.sub_names = list(subs)
+        self._cat_vecs = self._label_vecs(self.cat_names, cats)
+        self._sub_vecs = self._label_vecs(self.sub_names, subs)
 
     @torch.no_grad()
     def _label_vecs(self, names: list[str], descs: dict) -> torch.Tensor:
         enc = self.tokenizer(
-            [f"{n}: {descs[n]}" for n in names], padding=True, return_tensors="pt"
+            [f"{n}: {descs[n]}" if descs.get(n) else n for n in names],
+            padding=True,
+            return_tensors="pt",
         ).to(self.device)
         h = self.encoder(
             input_ids=enc.input_ids, attention_mask=enc.attention_mask
