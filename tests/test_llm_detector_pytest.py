@@ -181,6 +181,26 @@ class TestRepeatedSpanLocalization:
 
         assert [(span["start"], span["end"]) for span in spans] == [(20, 25)]
 
+    def test_low_confidence_item_still_reserves_its_occurrence(self):
+        """Confidence filtering also preserves later repeated-span offsets."""
+        answer = "Paris is mentioned; Paris is repeated."
+        items: list[str | dict] = [
+            {"text": "Paris", "confidence": 0.2},
+            {"text": "Paris", "confidence": 0.9},
+        ]
+
+        spans = LLMDetector._to_spans(items, answer, min_confidence=0.5)
+
+        assert spans == [{"start": 20, "end": 25, "text": "Paris", "confidence": 0.9}]
+
+    def test_single_ambiguous_item_keeps_first_match(self):
+        """A single repeated string still uses the documented first match."""
+        answer = "Paris is mentioned; Paris is repeated."
+
+        spans = LLMDetector._to_spans(["Paris"], answer)
+
+        assert spans == [{"start": 0, "end": 5, "text": "Paris"}]
+
     def test_overlapping_and_excess_items_do_not_reuse_offsets(self):
         """Items without a free non-overlapping occurrence are dropped."""
         spans = LLMDetector._to_spans(["abc", "bc", "abc"], "abc")
@@ -195,3 +215,24 @@ class TestRepeatedSpanLocalization:
         tokens = detector.predict_prompt("p", answer, output_format="tokens")
 
         assert [token["pred"] for token in tokens] == [1, 0, 0, 1, 0]
+
+
+class TestRepeatedSpanPromptInstructions:
+    """Prompt formats should match the repeated-span localization contract."""
+
+    def test_simple_response_format_requests_answer_order(self):
+        """The simple schema should ask the model to preserve answer order."""
+        detector = make_detector('{"hallucination_list": []}', cache_file="unused")
+
+        block = detector._response_format_block()
+
+        assert "List substrings in answer order" in block
+
+    def test_reasoning_response_format_requests_one_item_per_occurrence(self, cache_file):
+        """The object schema should describe repeated-substring occurrence handling."""
+        detector = make_detector('{"hallucination_list": []}', cache_file, include_reasoning=True)
+
+        block = detector._response_format_block()
+
+        assert "items must be listed in answer order" in block
+        assert "return at most one item per distinct occurrence" in block
