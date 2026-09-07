@@ -2,7 +2,7 @@
 
 LettuceDetect is maintained and evidence-driven. This roadmap separates near-term release work from research directions, and it intentionally has no delivery dates. Every item links to a GitHub issue where the discussion happens; milestones group them.
 
-## Now: [v0.3 — Faster, lighter, consistent inference](https://github.com/KRLabsOrg/LettuceDetect/milestone/1)
+## Now: [v0.2.4 — Faster, lighter, consistent inference](https://github.com/KRLabsOrg/LettuceDetect/milestone/1)
 
 The next PyPI release is about making the existing detectors more reliable, cheaper to install, and faster to run—not about adding new detection methods.
 
