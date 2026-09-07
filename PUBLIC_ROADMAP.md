@@ -11,6 +11,7 @@ Open:
 - [Real batched inference](https://github.com/KRLabsOrg/LettuceDetect/issues/23): `predict_prompt_batch` currently loops one sample at a time; the plan is padded-batch tokenization with a single forward pass.
 - [Lighter installs](https://github.com/KRLabsOrg/LettuceDetect/issues/69): lazy top-level imports so the LLM detector never touches torch. How to slim the default install without breaking existing users is an open design question; input welcome on the issue.
 - [Define evidence aggregation for chunked inference](https://github.com/KRLabsOrg/LettuceDetect/issues/74): benchmark whether evidence in any chunk or every chunk is required before changing the current conservative behavior.
+- [Dataset-level hallucination-rate evaluation and reporting](https://github.com/KRLabsOrg/LettuceDetect/issues/56): ships with 0.2.4.
 
 Shipped in this milestone so far: the network-free unit suite as a merge gate ([#73](https://github.com/KRLabsOrg/LettuceDetect/issues/73)), the `lettucedetect` CLI ([#47](https://github.com/KRLabsOrg/LettuceDetect/issues/47)), the detector latency/throughput benchmark ([#58](https://github.com/KRLabsOrg/LettuceDetect/issues/58)), token output from the LLM detector ([#65](https://github.com/KRLabsOrg/LettuceDetect/issues/65)), the `min_confidence` documentation ([#64](https://github.com/KRLabsOrg/LettuceDetect/issues/64)), and deterministic localization of repeated LLM spans ([#85](https://github.com/KRLabsOrg/LettuceDetect/issues/85)).
 
@@ -18,7 +19,6 @@ Shipped in this milestone so far: the network-free unit suite as a merge gate ([
 
 The detectors already emit typed spans (category and subcategory per detected span). This milestone tests whether that localization improves real debugging, evaluation, monitoring, and agent workflows.
 
-- [Dataset-level hallucination-rate evaluation and reporting](https://github.com/KRLabsOrg/LettuceDetect/issues/56)
 - [A stable HTTP contract for typed spans and detector selection](https://github.com/KRLabsOrg/LettuceDetect/issues/75)
 
 Shipped: typed spans in the Streamlit demo ([#57](https://github.com/KRLabsOrg/LettuceDetect/issues/57)) and the Claude Code Stop hook ([#50](https://github.com/KRLabsOrg/LettuceDetect/issues/50)).
