@@ -524,8 +524,8 @@ class TestTransformerMinConfidence:
             {"start": 4, "end": 7, "confidence": 0.90, "text": "bar"},
         ]
         # predict_prompt measures token length first; return a small fixed count.
-        self.detector.tokenizer.return_value = {"input_ids": torch.zeros(1, 4, dtype=torch.long)}
-        with patch.object(TransformerDetector, "_predict_single", return_value=spans):
+        # self.detector.tokenizer.return_value = {"input_ids": torch.zeros(1, 4, dtype=torch.long)}
+        with patch.object(TransformerDetector, "_predict_batch", return_value=[spans]):
             results = self.detector.predict_prompt_batch(
                 ["p1"], ["foo bar"], output_format="spans", min_confidence=0.5
             )
@@ -565,3 +565,357 @@ class TestFacadeMinConfidence:
         mock_detector.predict_prompt_batch.return_value = []
         detector.predict_prompt_batch(["p"], ["a"], output_format="spans", min_confidence=0.3)
         assert mock_detector.predict_prompt_batch.call_args.kwargs["min_confidence"] == 0.3
+
+
+class TestPredictPromptBatchLengthValidation:
+    """Fail if predict_prompt_batch gets mismatched input lengths."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Build a TransformerDetector with mocked model/tokenizer."""
+        with (
+            patch(
+                "lettucedetect.detectors.transformer.AutoTokenizer.from_pretrained",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "lettucedetect.detectors.transformer.AutoModelForTokenClassification.from_pretrained",
+                return_value=MagicMock(),
+            )
+        ):
+            self.detector = TransformerDetector(model_path="dummy_path")
+            self.detector.tokenizer.return_value = {
+                "input_ids": torch.zeros(1, 4, dtype=torch.long)
+            }
+            yield
+
+    @pytest.mark.parametrize(
+        ("prompts", "answers"),
+        [
+            (["p1", "p2"], ["a1"]),
+            (["p1"], ["a1", "a2"]),
+            (["p1"], []),
+            ([], ["a1"]),
+        ],
+    )
+    def test_mismatched_lengths_raise_value_error(self, prompts, answers):
+        """Raise ValueError on any length mismatch."""
+        with pytest.raises(ValueError, match="Number of prompts must match number of answers"):
+            self.detector.predict_prompt_batch(prompts, answers)
+
+    def test_mismatch_raises_before_inference(self):
+        """Validation stops tokenization or forward pass."""
+        with patch.object(TransformerDetector, "_predict_single") as spy:
+            with pytest.raises(ValueError):
+                self.detector.predict_prompt_batch(["p1", "p2", "p3"], ["a1"])
+        spy.assert_not_called()
+        self.detector.model.assert_not_called()
+
+
+class TestPredictPromptBatchTrueBatching:
+    """predict_prompt_batch() must do one model forward pass per batch."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, local_wordpiece_tokenizer):
+        """Real tiny tokenizer plus model that records every forward call."""
+
+        def fake_forward(input_ids=None, attention_mask=None, **kwargs):
+            batch, seq_len = input_ids.shape
+            logits = torch.zeros(batch, seq_len, 2)
+            logits[..., 0] = 1.0
+            output = MagicMock()
+            output.logits = logits
+            return output
+
+        self.spy_model = MagicMock(side_effect=fake_forward)
+
+        with (
+            patch(
+                "lettucedetect.detectors.transformer.AutoTokenizer.from_pretrained",
+                return_value=local_wordpiece_tokenizer,
+            ),
+            patch(
+                "lettucedetect.detectors.transformer.AutoModelForTokenClassification.from_pretrained",
+                return_value=self.spy_model,
+            ),
+        ):
+            self.detector = TransformerDetector(model_path="dummy_path", max_length=64)
+
+    def test_one_forward_call_for_whole_batch(self):
+        """Multiple inputs in one batch => exactly one model() call."""
+        prompts = ["the capital of france is paris .", "the capital of france is paris ."]
+        answers = ["paris", "short answer"]
+
+        self.detector.predict_prompt_batch(prompts, answers)
+
+        assert self.spy_model.call_count == 1
+        called_input_ids = self.spy_model.call_args.kwargs["input_ids"]
+        assert called_input_ids.shape[0] == len(prompts)
+
+    def test_batch_size_controls_number_of_forward_calls(self):
+        """5 inputs with batch_size=2 => 3 forward calls (2 + 2 + 1)."""
+        prompts = ["the capital of france is paris ."] * 5
+        answers = ["paris"] * 5
+
+        self.detector.predict_prompt_batch(prompts, answers, batch_size=2)
+
+        assert self.spy_model.call_count == 3
+        batch_sizes = [
+            call.kwargs["input_ids"].shape[0] for call in self.spy_model.call_args_list
+        ]
+        assert batch_sizes == [2, 2, 1]
+
+    def test_empty_input_makes_no_forward_call(self):
+        """No inputs => zero forward calls (and no ValueError)."""
+        result = self.detector.predict_prompt_batch([], [])
+
+        assert result == []
+        self.spy_model.assert_not_called()
+
+
+class TestPredictPromptBatchContentParity:
+    """Batched output must match per-sample predict_prompt output exactly."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, local_wordpiece_tokenizer):
+        """Real tiny tokenizer + a modal whose logits depend on token id.
+
+        Flags the "paris" token as a hallucination and everthing else as
+        supported, so tests can assert on real content.
+        """
+        paris_id = local_wordpiece_tokenizer.convert_tokens_to_ids("paris")
+
+        def fake_forward(input_ids=None, attention_mask=None, **kwargs):
+            is_paris = (input_ids == paris_id).float()
+            logits = torch.zeros(*input_ids.shape, 2)
+            logits[..., 1] = is_paris * 10.0 - (1 - is_paris) * 10
+            logits[..., 0] = -logits[..., 1]
+            output = MagicMock()
+            output.logits = logits
+            return output
+
+        self.spy_model = MagicMock(side_effect=fake_forward)
+        with (
+            patch(
+                "lettucedetect.detectors.transformer.AutoTokenizer.from_pretrained",
+                return_value=local_wordpiece_tokenizer,
+            ),
+            patch(
+                "lettucedetect.detectors.transformer.AutoModelForTokenClassification.from_pretrained",
+                return_value=self.spy_model,
+            ),
+        ):
+            self.detector = TransformerDetector(model_path="dummy_path", max_length=64)
+
+    @pytest.mark.parametrize("output_format", ["tokens", "spans"])
+    def test_batch_matches_single_example_path(self, output_format):
+        """Every sample's batched result must equal its predict_prompt() result."""
+        prompts = [
+            "the capital of france is paris .",
+            "the capital of france is paris .",
+            "short answer word",
+        ]
+        answers = [
+            "paris is the capital",
+            "the capital of france is paris and paris",
+            "word",
+        ]
+
+        expected = [
+            self.detector.predict_prompt(p, a, output_format=output_format)
+            for p, a in zip(prompts, answers)
+        ]
+        actual = self.detector.predict_prompt_batch(prompts, answers, output_format=output_format)
+
+        assert actual == expected
+
+    def test_batch_size_one_matches_whole_batch(self):
+        """batch_size is a pure performance knob and must not change output."""
+        prompts = ["the capital of france is paris ."] * 3
+        answers = ["paris", "the capital of france", "word"]
+
+        whole = self.detector.predict_prompt_batch(prompts, answers, output_format="spans")
+        one_at_a_time = self.detector.predict_prompt_batch(
+            prompts, answers, output_format="spans", batch_size=1
+        )
+
+        assert whole == one_at_a_time
+
+    def test_order_is_preserved_with_uneven_lengths(self):
+        """Results must align with input order even with very different sequence lengths."""
+        prompts = ["the capital of france is paris ."] * 3
+        answers = ["word", "paris", "the capital of france is paris and paris again"]
+
+        results = self.detector.predict_prompt_batch(prompts, answers, output_format="tokens")
+
+        assert not any(tok["pred"] == 1 for tok in results[0])
+        assert any(tok["pred"] == 1 for tok in results[1])
+        assert any(tok["pred"] == 1 for tok in results[2])
+        assert len(results[0]) != len(results[2])
+
+    def test_confidence_filtering_applies_per_sample_in_batch(self):
+        """min_confidence filters each sample independently within one batch."""
+        prompts = ["the capital of france is paris ."] * 2
+        answers = ["paris", "the capital of france"]
+
+        filtered = self.detector.predict_prompt_batch(
+            prompts, answers, output_format="spans", min_confidence=0.99
+        )
+        unfiltered = self.detector.predict_prompt_batch(
+            prompts, answers, output_format="spans", min_confidence=0.0
+        )
+
+        assert unfiltered[0]
+        assert filtered[0] == unfiltered[0]
+        assert filtered[1] == unfiltered[1] == []
+
+
+class TestPredictPromptBatchPaddingAndOrder:
+    """Per-sample padding/prompt-token stripping + order."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, local_wordpiece_tokenizer):
+        """Model flags [PAD] token ids as 'hallucination' so leaked padding is visible."""
+        pad_id = local_wordpiece_tokenizer.pad_token_id
+
+        def fake_forward(input_ids=None, attention_mask=None, **kwargs):
+            is_pad = (input_ids == pad_id).float()
+            logits = torch.zeros(*input_ids.shape, 2)
+            logits[..., 1] = is_pad * 10.0 - (1 - is_pad) * 10.0
+            logits[..., 0] = -logits[..., 1]
+            output = MagicMock()
+            output.logits = logits
+            return output
+
+        self.spy_model = MagicMock(side_effect=fake_forward)
+        with (
+            patch(
+                "lettucedetect.detectors.transformer.AutoTokenizer.from_pretrained",
+                return_value=local_wordpiece_tokenizer,
+            ),
+            patch(
+                "lettucedetect.detectors.transformer.AutoModelForTokenClassification.from_pretrained",
+                return_value=self.spy_model,
+            ),
+        ):
+            self.detector = TransformerDetector(model_path="dummy_path", max_length=64)
+
+    def test_padding_and_prompt_tokens_stripped_order_preserved(self):
+        """A short sample sharing a batch with a long one must not surface [PAD]
+        tokens/predictions, must return exactly its own answer-token count (no
+        prompt tokens), and results must align with input order."""
+        prompts = [
+            "word",
+            "the capital of france is paris .",
+        ]
+        answers = ["word", "the capital of france is paris and word again"]
+
+        results = self.detector.predict_prompt_batch(prompts, answers, output_format="tokens")
+
+        assert len(results) == 2
+        for tokens in results:
+            # No decoded [PAD] tokens, and our fake model only flags real pad
+            # positions as pred==1, so nothing should be flagged if trimmed correctly.
+            assert all(tok["token"] != "[PAD]" for tok in tokens)
+            assert all(tok["pred"] == 0 for tok in tokens)
+
+        # Token count == answer length + trailing [SEP], never the batch's padded max
+        # length, and never includes any prompt-side tokens.
+        for i, answer in enumerate(answers):
+            answer_ids = self.detector.tokenizer(answer, add_special_tokens=False)["input_ids"]
+            assert len(results[i]) == len(answer_ids) + 1
+
+        # results[0] (short answer) must stay first, results[1] (long) stays second.
+        assert len(results[0]) < len(results[1])
+
+
+class TestPredictPromptBatchTaxonomyTyping:
+    """predict_prompt_batch() must route 'spans' output through the taxonomy typer,
+    once per sample, without downloading a taxonomy-head model."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, local_wordpiece_tokenizer):
+        """Real tiny tokenizer + a model that flags the 'paris' token as hallucination."""
+        paris_id = local_wordpiece_tokenizer.convert_tokens_to_ids("paris")
+
+        def fake_forward(input_ids=None, attention_mask=None, **kwargs):
+            is_paris = (input_ids == paris_id).float()
+            logits = torch.zeros(*input_ids.shape, 2)
+            logits[..., 1] = is_paris * 10.0 - (1 - is_paris) * 10.0
+            logits[..., 0] = -logits[..., 1]
+            output = MagicMock()
+            output.logits = logits
+            return output
+
+        spy_model = MagicMock(side_effect=fake_forward)
+        with (
+            patch(
+                "lettucedetect.detectors.transformer.AutoTokenizer.from_pretrained",
+                return_value=local_wordpiece_tokenizer,
+            ),
+            patch(
+                "lettucedetect.detectors.transformer.AutoModelForTokenClassification.from_pretrained",
+                return_value=spy_model,
+            ),
+        ):
+            self.detector = TransformerDetector(model_path="dummy_path", max_length=64)
+
+        # Swap in a fake typer so no taxonomy-head model has to be loaded; it tags
+        # every span with a category derived from its own text.
+        self.fake_typer = MagicMock()
+
+        def fake_type_spans(answer, prompt, spans):
+            for span in spans:
+                span["category"] = f"CAT[{span['text']}]"
+            return spans
+
+        self.fake_typer.type_spans.side_effect = fake_type_spans
+        self.detector.typer = self.fake_typer
+
+    def test_typer_called_once_per_sample_with_matching_prompt_and_answer(self):
+        """type_spans() must be called once per input pair, in input order, with that
+        sample's own (answer, prompt, spans) -- never another sample's."""
+        prompts = [
+            "the capital of france is paris .",
+            "the capital of france is paris .",
+        ]
+        answers = ["paris", "the capital of france is paris and paris"]
+
+        self.detector.predict_prompt_batch(prompts, answers, output_format="spans")
+
+        assert self.fake_typer.type_spans.call_count == 2
+        for i, call in enumerate(self.fake_typer.type_spans.call_args_list):
+            called_answer, called_prompt, _ = call.args
+            assert called_answer == answers[i]
+            assert called_prompt == prompts[i]
+
+    def test_typed_fields_appear_in_batch_output(self):
+        """Fields the typer attaches must be present in the final spans result."""
+        prompts = ["the capital of france is paris ."]
+        answers = ["paris is the capital"]
+
+        results = self.detector.predict_prompt_batch(prompts, answers, output_format="spans")
+
+        assert results[0]
+        assert all("category" in span for span in results[0])
+
+    def test_typer_not_called_for_token_output(self):
+        """Typing only applies to 'spans' output, never 'tokens'."""
+        self.detector.predict_prompt_batch(
+            ["the capital of france is paris ."], ["paris"], output_format="tokens"
+        )
+        self.fake_typer.type_spans.assert_not_called()
+
+    def test_typing_runs_before_confidence_filtering(self):
+        """A span that survives min_confidence filtering must still carry the
+        category the typer attached (typing must not run after/be skipped by it)."""
+        results = self.detector.predict_prompt_batch(
+            ["the capital of france is paris ."],
+            ["paris"],
+            output_format="spans",
+            min_confidence=0.5,
+        )
+
+        assert results[0]
+        assert results[0][0]["category"] == "CAT[paris]"
+

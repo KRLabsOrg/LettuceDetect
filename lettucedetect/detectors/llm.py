@@ -601,7 +601,10 @@ class LLMDetector(BaseDetector):
             on top of the constructor-level ``min_confidence``. Not applied to token output.
         :returns: One result per input pair: spans, or per-token dicts when
             ``output_format="tokens"``.
+        :raises ValueError: If ``len(prompts) != len(answers)``.
         """
+        if len(prompts) != len(answers):
+            raise ValueError("Number of prompts must match number of answers")
         if output_format not in ["tokens", "spans"]:
             raise ValueError(
                 f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"
