@@ -182,9 +182,31 @@ class TransformerDetector(BaseDetector):
 
         token_preds = torch.where(labels == -100, labels, token_preds)
 
+        return self._format_prediction(
+            encoding["input_ids"][0],
+            labels,
+            offsets,
+            token_preds,
+            probabilities,
+            answer_start_token,
+            answer,
+            output_format,
+        )
+
+    def _format_prediction(
+        self,
+        input_ids: torch.Tensor,
+        labels: torch.Tensor,
+        offsets: torch.Tensor,
+        token_preds: torch.Tensor,
+        probabilities: torch.Tensor,
+        answer_start_token: int,
+        answer: str,
+        output_format: str,
+    ) -> list:
+        """Convert one model-output row to token or span predictions."""
         if output_format == "tokens":
             token_probs: list[dict] = []
-            input_ids = encoding["input_ids"][0]
             for i, (token, pred, prob) in enumerate(zip(input_ids, token_preds, probabilities)):
                 if labels[i].item() != -100:
                     token_probs.append(
@@ -441,13 +463,98 @@ class TransformerDetector(BaseDetector):
     ) -> list:
         """Predict hallucination tokens or spans from the provided prompts and answers.
 
+        The complete input lists are padded into one batch and evaluated in one
+        model forward pass.  Callers handling very large lists should split them
+        into appropriately sized batches for the available accelerator memory.
+
         :param prompts: List of prompt strings.
         :param answers: List of answer strings.
         :param output_format: ``"tokens"`` or ``"spans"``.
         :param min_confidence: Drop ``"spans"`` below this confidence threshold (``[0, 1]``).
         :returns: List of prediction lists, one per input pair.
         """
-        return [
-            self.predict_prompt(p, a, output_format, min_confidence)
-            for p, a in zip(prompts, answers)
-        ]
+        if len(prompts) != len(answers):
+            raise ValueError(
+                "prompts and answers must contain the same number of items "
+                f"(got {len(prompts)} and {len(answers)})"
+            )
+        if output_format not in ("tokens", "spans"):
+            raise ValueError(
+                f"TransformerDetector doesn't support '{output_format}' format. "
+                "Use 'tokens' or 'spans'"
+            )
+        self._validate_min_confidence(min_confidence)
+        if not prompts:
+            return []
+
+        untruncated = self.tokenizer(
+            prompts,
+            answers,
+            add_special_tokens=True,
+            truncation=False,
+        )
+        for index, input_ids in enumerate(untruncated["input_ids"]):
+            if len(input_ids) > self.max_length:
+                logger.warning(
+                    "predict_prompt_batch: input %d (%d tokens) exceeds max_length (%d). "
+                    "The prompt will be truncated. Use predict() with structured "
+                    "passages for automatic chunking.",
+                    index,
+                    len(input_ids),
+                    self.max_length,
+                )
+
+        encoding = self.tokenizer(
+            prompts,
+            answers,
+            truncation="only_first",
+            max_length=self.max_length,
+            padding=True,
+            return_offsets_mapping=True,
+            return_tensors="pt",
+            add_special_tokens=True,
+        )
+        offsets = encoding.pop("offset_mapping")
+        attention_mask = encoding["attention_mask"]
+        labels = torch.full_like(encoding["input_ids"], -100)
+        answer_starts: list[int] = []
+
+        for row in range(len(prompts)):
+            sequence_ids = encoding.sequence_ids(row)
+            try:
+                answer_start = sequence_ids.index(1)
+            except ValueError:
+                answer_start = int(attention_mask[row].sum().item()) - 1
+            sequence_length = int(attention_mask[row].sum().item())
+            labels[row, answer_start:sequence_length] = 0
+            answer_starts.append(answer_start)
+
+        model_encoding = {
+            key: value.to(self.device)
+            for key, value in encoding.items()
+            if key in ["input_ids", "attention_mask"]
+        }
+        model_labels = labels.to(self.device)
+
+        with torch.no_grad():
+            logits = self.model(**model_encoding).logits
+        token_preds = torch.argmax(logits, dim=-1)
+        probabilities = torch.softmax(logits, dim=-1)
+        token_preds = torch.where(model_labels == -100, model_labels, token_preds)
+
+        results: list[list] = []
+        for row, (prompt, answer, answer_start) in enumerate(zip(prompts, answers, answer_starts)):
+            result = self._format_prediction(
+                model_encoding["input_ids"][row],
+                model_labels[row],
+                offsets[row],
+                token_preds[row],
+                probabilities[row],
+                answer_start,
+                answer,
+                output_format,
+            )
+            if output_format == "spans" and self.typer is not None:
+                result = self.typer.type_spans(answer, prompt, result)
+            results.append(self._filter_spans_by_confidence(result, output_format, min_confidence))
+        return results

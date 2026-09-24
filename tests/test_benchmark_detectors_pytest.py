@@ -66,7 +66,10 @@ class TestDetectorBenchmark:
         assert result.latency_mean_ms >= 0
         assert result.throughput_cases_per_second > 0
         assert result.peak_memory_bytes > 0
-        assert result.peak_memory_source == "resource.getrusage(RUSAGE_SELF).ru_maxrss"
+        if module.import_resource() is None:
+            assert result.peak_memory_source == "tracemalloc.get_traced_memory"
+        else:
+            assert result.peak_memory_source == "resource.getrusage(RUSAGE_SELF).ru_maxrss"
         assert [case.name for case in result.case_results] == ["short", "medium"]
 
     def test_run_benchmark_resets_and_reports_cuda_peak_memory(self):

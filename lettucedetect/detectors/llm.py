@@ -602,6 +602,11 @@ class LLMDetector(BaseDetector):
         :returns: One result per input pair: spans, or per-token dicts when
             ``output_format="tokens"``.
         """
+        if len(prompts) != len(answers):
+            raise ValueError(
+                "prompts and answers must contain the same number of items "
+                f"(got {len(prompts)} and {len(answers)})"
+            )
         if output_format not in ["tokens", "spans"]:
             raise ValueError(
                 f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"

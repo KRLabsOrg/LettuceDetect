@@ -89,6 +89,13 @@ class TestTokenOutput:
         assert any(t["pred"] == 1 for t in results[0])
         assert all(t["pred"] == 0 for t in results[1])
 
+    def test_predict_prompt_batch_rejects_mismatched_lengths(self, cache_file):
+        """Batch prediction does not silently discard an unmatched input."""
+        detector = make_detector('{"hallucination_list": []}', cache_file)
+
+        with pytest.raises(ValueError, match="same number"):
+            detector.predict_prompt_batch(["p1", "p2"], ["a1"])
+
     def test_supported_tokens_use_low_constant_prob(self, cache_file):
         """Tokens outside any span get pred=0 and the supported-prob constant."""
         answer = "Everything here is fine."

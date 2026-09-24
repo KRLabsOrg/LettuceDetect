@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import platform
-import resource
 import statistics
 import time
+import tracemalloc
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import NotRequired, Protocol, TypedDict, cast
 
 DEFAULT_QUESTION = "What is the capital of France?"
@@ -174,11 +175,22 @@ def import_torch() -> TorchModule | None:
     return cast(TorchModule, torch)
 
 
+def import_resource() -> ModuleType | None:
+    """Import the Unix resource module when the platform provides it."""
+    try:
+        import resource
+    except ImportError:
+        return None
+    return resource
+
+
 def reset_peak_memory(device: str) -> None:
     """Reset GPU peak-memory counters before the measured loop when available."""
     torch = import_torch()
     if torch is not None and device.startswith("cuda") and torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats(device)
+    elif import_resource() is None:
+        tracemalloc.start()
 
 
 def peak_memory_bytes(device: str) -> tuple[int, str]:
@@ -187,10 +199,16 @@ def peak_memory_bytes(device: str) -> tuple[int, str]:
     if torch is not None and device.startswith("cuda") and torch.cuda.is_available():
         return torch.cuda.max_memory_allocated(device), "torch.cuda.max_memory_allocated"
 
-    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    if platform.system() == "Darwin":
-        return int(usage), "resource.getrusage(RUSAGE_SELF).ru_maxrss"
-    return int(usage) * 1024, "resource.getrusage(RUSAGE_SELF).ru_maxrss"
+    resource = import_resource()
+    if resource is not None:
+        usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if platform.system() == "Darwin":
+            return int(usage), "resource.getrusage(RUSAGE_SELF).ru_maxrss"
+        return int(usage) * 1024, "resource.getrusage(RUSAGE_SELF).ru_maxrss"
+
+    _, peak = tracemalloc.get_traced_memory()
+    tracemalloc.stop()
+    return peak, "tracemalloc.get_traced_memory"
 
 
 def percentile_95(values: list[float]) -> float:

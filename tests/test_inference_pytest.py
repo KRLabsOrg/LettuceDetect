@@ -233,6 +233,112 @@ class TestTransformerDetector:
         assert "Summarize" in prompt
 
 
+class TestTransformerPromptBatch:
+    """Tests for padded transformer batch inference."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self, local_wordpiece_tokenizer):
+        """Build a detector around a deterministic model stub."""
+        self.detector = TransformerDetector.__new__(TransformerDetector)
+        self.detector.tokenizer = local_wordpiece_tokenizer
+        self.detector.max_length = 32
+        self.detector.device = torch.device("cpu")
+        self.detector.typer = None
+
+        hallucinated_ids = {
+            local_wordpiece_tokenizer.convert_tokens_to_ids("paris"),
+            local_wordpiece_tokenizer.convert_tokens_to_ids("answer"),
+        }
+
+        def forward(input_ids, attention_mask, labels=None):
+            del attention_mask, labels
+            logits = torch.empty((*input_ids.shape, 2), dtype=torch.float)
+            logits[..., 0] = 4.0
+            logits[..., 1] = 0.0
+            for token_id in hallucinated_ids:
+                mask = input_ids == token_id
+                logits[mask, 0] = 0.0
+                logits[mask, 1] = 4.0
+            output = MagicMock()
+            output.logits = logits
+            return output
+
+        self.detector.model = MagicMock(side_effect=forward)
+
+    def test_batch_matches_single_predictions_and_calls_model_once(self):
+        """Uneven inputs retain order and use one model forward pass."""
+        prompts = ["The capital of France is", "short"]
+        answers = ["paris.", "short answer"]
+
+        expected = [
+            self.detector.predict_prompt(prompt, answer, output_format="tokens")
+            for prompt, answer in zip(prompts, answers)
+        ]
+        self.detector.model.reset_mock()
+
+        actual = self.detector.predict_prompt_batch(prompts, answers, output_format="tokens")
+
+        assert actual == expected
+        self.detector.model.assert_called_once()
+        assert [item[0]["token"].strip() for item in actual] == ["paris", "short"]
+        assert all(
+            item["token"] != "[PAD]"  # noqa: S105 - tokenizer special token
+            for result in actual
+            for item in result
+        )
+
+    def test_single_item_batch_uses_one_forward_call(self):
+        """A batch of size one still uses the padded batch path."""
+        result = self.detector.predict_prompt_batch(["short"], ["paris."], "tokens")
+
+        assert result[0][0]["pred"] == 1
+        self.detector.model.assert_called_once()
+
+    def test_spans_confidence_filtering_and_taxonomy_typing(self):
+        """Span output is filtered after optional taxonomy typing."""
+        typer = MagicMock()
+        typer.type_spans.side_effect = lambda answer, prompt, spans: [
+            {**span, "category": f"{prompt}:{answer}"} for span in spans
+        ]
+        self.detector.typer = typer
+
+        results = self.detector.predict_prompt_batch(
+            ["capital", "short"],
+            ["paris.", "short answer"],
+            output_format="spans",
+            min_confidence=0.9,
+        )
+
+        assert [[span["text"] for span in result] for result in results] == [
+            ["paris"],
+            ["answer"],
+        ]
+        assert results[0][0]["category"] == "capital:paris."
+        assert results[1][0]["category"] == "short:short answer"
+        assert typer.type_spans.call_count == 2
+
+        filtered = self.detector.predict_prompt_batch(
+            ["capital"], ["paris."], output_format="spans", min_confidence=0.99
+        )
+        assert filtered == [[]]
+
+    def test_empty_batch_skips_tokenizer_and_model(self):
+        """An empty input produces an empty output without inference."""
+        tokenizer = MagicMock(wraps=self.detector.tokenizer)
+        self.detector.tokenizer = tokenizer
+
+        assert self.detector.predict_prompt_batch([], []) == []
+        tokenizer.assert_not_called()
+        self.detector.model.assert_not_called()
+
+    def test_mismatched_lengths_raise_before_inference(self):
+        """Trailing prompts or answers are rejected instead of truncated by zip."""
+        with pytest.raises(ValueError, match="same number"):
+            self.detector.predict_prompt_batch(["one", "two"], ["answer"])
+
+        self.detector.model.assert_not_called()
+
+
 class TestChunking:
     """Tests for automatic context chunking when input exceeds max_length."""
 
@@ -517,15 +623,21 @@ class TestTransformerMinConfidence:
                 *args, output_format="spans", min_confidence=bad_value
             )
 
-    def test_predict_prompt_batch_respects_min_confidence(self):
+    def test_predict_prompt_batch_respects_min_confidence(self, local_wordpiece_tokenizer):
         """The batch path applies the threshold to each item's spans."""
         spans = [
             {"start": 0, "end": 3, "confidence": 0.40, "text": "foo"},
             {"start": 4, "end": 7, "confidence": 0.90, "text": "bar"},
         ]
-        # predict_prompt measures token length first; return a small fixed count.
-        self.detector.tokenizer.return_value = {"input_ids": torch.zeros(1, 4, dtype=torch.long)}
-        with patch.object(TransformerDetector, "_predict_single", return_value=spans):
+        self.detector.tokenizer = local_wordpiece_tokenizer
+
+        def forward(**kwargs):
+            output = MagicMock()
+            output.logits = torch.zeros((*kwargs["input_ids"].shape, 2))
+            return output
+
+        self.detector.model.side_effect = forward
+        with patch.object(TransformerDetector, "_format_prediction", return_value=spans):
             results = self.detector.predict_prompt_batch(
                 ["p1"], ["foo bar"], output_format="spans", min_confidence=0.5
             )
