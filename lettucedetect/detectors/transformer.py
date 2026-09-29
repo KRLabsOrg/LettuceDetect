@@ -33,7 +33,7 @@ class TransformerDetector(BaseDetector):
         lang: Lang = "en",
         taxonomy_head: str | None = None,
         include_taxonomy: bool | list | dict = True,
-        batch_size: int | None = None,
+        batch_size: int = 16,
         **tok_kwargs: object,
     ) -> None:
         """Initialize the transformer detector.
@@ -50,12 +50,13 @@ class TransformerDetector(BaseDetector):
             sets; a list of names selects a subset of the trained categories. Only meaningful
             together with ``taxonomy_head``.
         :param batch_size: Default number of (prompt, answer) pairs scored together in one pass
-            by :meth:`predict_prompt_batch`. ``None`` (default) scores the whole input list as a
-            single batch.
+            by :meth:`predict_prompt_batch`. Must be >= 1.
         :param tok_kwargs: Additional keyword arguments for the tokenizer.
         """
         if lang not in LANG_TO_PASSAGE:
             raise ValueError(f"Invalid language. Choose from {', '.join(LANG_TO_PASSAGE)}")
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
         self.lang, self.max_length = lang, max_length
         self.batch_size = batch_size
         self.tokenizer = AutoTokenizer.from_pretrained(model_path, **tok_kwargs)
@@ -279,7 +280,9 @@ class TransformerDetector(BaseDetector):
         :returns: One prediction list per (prompt, answer) pair, in input order.
         """
         if self.tokenizer.padding_side != "right":
-            raise ValueError("TransformerDetector batched inference requires a right-padding")
+            raise ValueError(
+                "TransformerDetector batched inference requires a right-padding tokenizer."
+            )
 
         batch = self.tokenizer(
             prompts,
@@ -552,9 +555,11 @@ class TransformerDetector(BaseDetector):
                 f"TransformerDetector doesn't support '{output_format}' format."
                 " Use 'tokens' or 'spans'"
             )
+        if batch_size is not None and batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
         self._validate_min_confidence(min_confidence)
 
-        effective_batch_size = batch_size or self.batch_size or len(prompts)
+        effective_batch_size = self.batch_size if batch_size is None else batch_size
 
         results: list[list] = []
         for start in range(0, len(prompts), effective_batch_size):
@@ -564,10 +569,8 @@ class TransformerDetector(BaseDetector):
             )
 
         if output_format == "spans" and self.typer is not None:
-            results = [
-                self.typer.type_spans(answer, prompt, spans)
-                for prompt, answer, spans in zip(prompts, answers, results)
-            ]
+            for i in range(len(results)):
+                results[i] = self.typer.type_spans(answers[i], prompts[i], results[i])
 
         return [
             self._filter_spans_by_confidence(result, output_format, min_confidence)

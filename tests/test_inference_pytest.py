@@ -670,6 +670,12 @@ class TestPredictPromptBatchTrueBatching:
         assert result == []
         self.spy_model.assert_not_called()
 
+    @pytest.mark.parametrize("bad_batch_size", [0, -1])
+    def test_invalid_batch_size_raises(self, bad_batch_size):
+        """predict_prompt_batch() rejects invalid batch_size values (< 1)."""
+        with pytest.raises(ValueError, match="batch_size"):
+            self.detector.predict_prompt_batch(["p"], ["a"], batch_size=bad_batch_size)
+
 
 class TestPredictPromptBatchContentParity:
     """Batched output must match per-sample predict_prompt output exactly."""
@@ -812,7 +818,7 @@ class TestPredictPromptBatchPaddingAndOrder:
         for tokens in results:
             # No decoded [PAD] tokens, and our fake model only flags real pad
             # positions as pred==1, so nothing should be flagged if trimmed correctly.
-            assert all(tok["token"] != "[PAD]" for tok in tokens) # noqa: S105
+            assert all(tok["token"] != "[PAD]" for tok in tokens)  # noqa: S105
             assert all(tok["pred"] == 0 for tok in tokens)
 
         # Token count == answer length + trailing [SEP], never the batch's padded max
