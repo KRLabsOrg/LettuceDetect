@@ -33,10 +33,12 @@ class CountingClient(FakeClient):
     """FakeClient that records how many completions are requested."""
 
     def __init__(self, response: str) -> None:
+        """Initialize the client and reset the call counter."""
         super().__init__(response)
         self.calls = 0
 
     def complete(self, system, user, model, temperature, schema) -> str:
+        """Increment the call counter and return the canned response."""
         self.calls += 1
         return super().complete(system, user, model, temperature, schema)
 

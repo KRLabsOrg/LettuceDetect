@@ -270,8 +270,7 @@ class TransformerDetector(BaseDetector):
     def _predict_batch(
         self, prompts: list[str], answers: list[str], output_format: str
     ) -> list[list]:
-        """Tokenize ``prompts``/``answers`` as one padded batch and score them in a
-        single forward pass.
+        """Tokenize ``prompts``/``answers`` as one padded batch and score them in one pass.
 
         :param prompts: Prompt strings for this batch (already length-validated
             against ``answers`` by the caller).
@@ -280,9 +279,7 @@ class TransformerDetector(BaseDetector):
         :returns: One prediction list per (prompt, answer) pair, in input order.
         """
         if self.tokenizer.padding_side != "right":
-            raise ValueError(
-                "TransformerDetector batched inference requires a right-padding"
-            )
+            raise ValueError("TransformerDetector batched inference requires a right-padding")
 
         batch = self.tokenizer(
             prompts,
@@ -313,7 +310,7 @@ class TransformerDetector(BaseDetector):
             sequence_ids = batch.sequence_ids(i)
             answer_start_token = next(
                 (idx for idx, seq_id in enumerate(sequence_ids) if seq_id == 1),
-                seq_len -1,
+                seq_len - 1,
             )
 
             if seq_len >= self.max_length:
@@ -333,7 +330,7 @@ class TransformerDetector(BaseDetector):
                 )
             )
         return results
-    
+
     # ------------------------------------------------------------------
     # Multi-chunk prediction with max() aggregation
     # ------------------------------------------------------------------
@@ -571,7 +568,7 @@ class TransformerDetector(BaseDetector):
                 self.typer.type_spans(answer, prompt, spans)
                 for prompt, answer, spans in zip(prompts, answers, results)
             ]
-        
+
         return [
             self._filter_spans_by_confidence(result, output_format, min_confidence)
             for result in results

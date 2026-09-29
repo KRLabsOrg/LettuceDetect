@@ -581,7 +581,7 @@ class TestPredictPromptBatchLengthValidation:
             patch(
                 "lettucedetect.detectors.transformer.AutoModelForTokenClassification.from_pretrained",
                 return_value=MagicMock(),
-            )
+            ),
         ):
             self.detector = TransformerDetector(model_path="dummy_path")
             self.detector.tokenizer.return_value = {
@@ -660,9 +660,7 @@ class TestPredictPromptBatchTrueBatching:
         self.detector.predict_prompt_batch(prompts, answers, batch_size=2)
 
         assert self.spy_model.call_count == 3
-        batch_sizes = [
-            call.kwargs["input_ids"].shape[0] for call in self.spy_model.call_args_list
-        ]
+        batch_sizes = [call.kwargs["input_ids"].shape[0] for call in self.spy_model.call_args_list]
         assert batch_sizes == [2, 2, 1]
 
     def test_empty_input_makes_no_forward_call(self):
@@ -801,9 +799,7 @@ class TestPredictPromptBatchPaddingAndOrder:
             self.detector = TransformerDetector(model_path="dummy_path", max_length=64)
 
     def test_padding_and_prompt_tokens_stripped_order_preserved(self):
-        """A short sample sharing a batch with a long one must not surface [PAD]
-        tokens/predictions, must return exactly its own answer-token count (no
-        prompt tokens), and results must align with input order."""
+        """Padding/prompt tokens are stripped per sample and order is preserved."""
         prompts = [
             "word",
             "the capital of france is paris .",
@@ -816,7 +812,7 @@ class TestPredictPromptBatchPaddingAndOrder:
         for tokens in results:
             # No decoded [PAD] tokens, and our fake model only flags real pad
             # positions as pred==1, so nothing should be flagged if trimmed correctly.
-            assert all(tok["token"] != "[PAD]" for tok in tokens)
+            assert all(tok["token"] != "[PAD]" for tok in tokens) # noqa: S105
             assert all(tok["pred"] == 0 for tok in tokens)
 
         # Token count == answer length + trailing [SEP], never the batch's padded max
@@ -830,8 +826,7 @@ class TestPredictPromptBatchPaddingAndOrder:
 
 
 class TestPredictPromptBatchTaxonomyTyping:
-    """predict_prompt_batch() must route 'spans' output through the taxonomy typer,
-    once per sample, without downloading a taxonomy-head model."""
+    """predict_prompt_batch() routes spans output through the taxonomy typer."""
 
     @pytest.fixture(autouse=True)
     def setup(self, local_wordpiece_tokenizer):
@@ -873,8 +868,7 @@ class TestPredictPromptBatchTaxonomyTyping:
         self.detector.typer = self.fake_typer
 
     def test_typer_called_once_per_sample_with_matching_prompt_and_answer(self):
-        """type_spans() must be called once per input pair, in input order, with that
-        sample's own (answer, prompt, spans) -- never another sample's."""
+        """type_spans() is called once per sample, with that sample's prompt/answer."""
         prompts = [
             "the capital of france is paris .",
             "the capital of france is paris .",
@@ -907,8 +901,7 @@ class TestPredictPromptBatchTaxonomyTyping:
         self.fake_typer.type_spans.assert_not_called()
 
     def test_typing_runs_before_confidence_filtering(self):
-        """A span that survives min_confidence filtering must still carry the
-        category the typer attached (typing must not run after/be skipped by it)."""
+        """Typing runs before min_confidence filtering, surviving spans keep attached fields."""
         results = self.detector.predict_prompt_batch(
             ["the capital of france is paris ."],
             ["paris"],
@@ -918,4 +911,3 @@ class TestPredictPromptBatchTaxonomyTyping:
 
         assert results[0]
         assert results[0][0]["category"] == "CAT[paris]"
-
