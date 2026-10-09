@@ -29,6 +29,7 @@ A collaborator playground. These issues are experiments and design discussions, 
 
 - [Span-based safety classification](https://github.com/KRLabsOrg/LettuceDetect/issues/43) and [span-level supervision from Aegis 2.0](https://github.com/KRLabsOrg/LettuceDetect/issues/44): extending span detection from hallucination to safety dimensions.
 - [Span-level prompt-injection and jailbreak detection](https://github.com/KRLabsOrg/LettuceDetect/issues/55)
+- [Safety spans with Vela 2.0](https://github.com/KRLabsOrg/LettuceDetect/issues/119) as the zero-shot baseline for the safety work, on top of [a decision-model detector backend](https://github.com/KRLabsOrg/LettuceDetect/issues/118) that returns hallucination and safety results in one call.
 - [Zero-shot token classification via label conditioning](https://github.com/KRLabsOrg/LettuceDetect/issues/70): GLiNER-style label conditioning, but token-level, so unseen span taxonomies work without retraining.
 
 ## Exploring: [efficient span detection](https://github.com/KRLabsOrg/LettuceDetect/milestone/4)
