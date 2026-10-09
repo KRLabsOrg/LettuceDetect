@@ -40,6 +40,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.25",
     "ruff>=0.0.270",
+    "httpx>=0.28",
 ]
 api = [
     "fastapi[standard]>=0.115",
