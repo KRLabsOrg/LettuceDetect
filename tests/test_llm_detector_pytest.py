@@ -29,6 +29,20 @@ class FakeClient(LLMClient):
         return self.response
 
 
+class CountingClient(FakeClient):
+    """FakeClient that records how many completions are requested."""
+
+    def __init__(self, response: str) -> None:
+        """Initialize the client and reset the call counter."""
+        super().__init__(response)
+        self.calls = 0
+
+    def complete(self, system, user, model, temperature, schema) -> str:
+        """Increment the call counter and return the canned response."""
+        self.calls += 1
+        return super().complete(system, user, model, temperature, schema)
+
+
 @pytest.fixture
 def cache_file(tmp_path):
     """Temp cache path so the default on-disk cache is never touched."""
@@ -236,3 +250,30 @@ class TestRepeatedSpanPromptInstructions:
 
         assert "items must be listed in answer order" in block
         assert "return at most one item per distinct occurrence" in block
+
+
+class TestPredictPromptBatchLengthValidationLLM:
+    """Fail if predict_prompt_batch gets mismatched input lengths."""
+
+    @pytest.mark.parametrize(
+        ("prompts", "answers"),
+        [
+            (["p1", "p2"], ["a1"]),
+            (["p1"], ["a1", "a2"]),
+            (["p1"], []),
+            ([], ["a1"]),
+        ],
+    )
+    def test_mismatched_lengths_raise_value_error(self, prompts, answers, cache_file):
+        """Raise ValueError on any length mismatch."""
+        detector = make_detector('{"hallucination_list": []}', cache_file)
+        with pytest.raises(ValueError, match="Number of prompts must match number of answers"):
+            detector.predict_prompt_batch(prompts, answers)
+
+    def test_mismatch_raises_before_inference(self, cache_file):
+        """Validation stops any request from reaching the client."""
+        client = CountingClient('{"hallucination_list": []}')
+        detector = LLMDetector(client=client, cache_file=cache_file)
+        with pytest.raises(ValueError):
+            detector.predict_prompt_batch(["p1", "p2", "p3"], ["a1"])
+        assert client.calls == 0
