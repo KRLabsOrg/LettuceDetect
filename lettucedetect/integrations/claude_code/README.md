@@ -60,7 +60,7 @@ found the agent receives them and revises.
 | `--llm-model ID` | Generative detector or LLM judge; use `KRLabsOrg/lettucedect-v2-qwen-2b` for typed spans in one pass |
 | `--llm-base-url URL` | OpenAI-compatible endpoint for `--llm-model` (e.g. `vllm serve KRLabsOrg/lettucedect-v2-qwen-2b`) |
 | `--context-file F` | Grounding passage file, repeatable; default `context.md` |
-| `--min-confidence X` | Report only spans at or above this confidence |
+| `--min-confidence X` | Report only spans at or above this confidence; spans the detector did not score (every span in `--llm-model` mode) are always reported |
 
 Models: `KRLabsOrg/lettucedect-base-modernbert-en-v1` for prose RAG answers;
 `KRLabsOrg/lettucedect-v2-mmbert-base` plus
