@@ -2,6 +2,9 @@
 
 Thanks for your interest in contributing! This guide will get you up and running.
 
+For a one-screen summary of the commands, repository layout, and project
+constraints (also read by coding agents), see [AGENTS.md](AGENTS.md).
+
 ## Setup
 
 ```bash
