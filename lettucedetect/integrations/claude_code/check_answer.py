@@ -195,7 +195,11 @@ def main(argv: list[str] | None = None) -> int:
         "--min-confidence",
         type=float,
         default=0.0,
-        help="Report only spans at or above this confidence (default 0.0)",
+        help=(
+            "Report only spans at or above this confidence (default 0.0). "
+            "Applies to scored spans only; spans the detector did not score "
+            "(every span in --llm-model mode) are always reported."
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -231,7 +235,9 @@ def main(argv: list[str] | None = None) -> int:
     flagged = [
         s
         for s in spans
-        if (s.get("confidence", s.get("hallucination_score")) or 0.0) >= args.min_confidence
+        if args.min_confidence <= 0.0
+        or s.get("confidence", s.get("hallucination_score")) is None
+        or s.get("confidence", s.get("hallucination_score")) >= args.min_confidence
     ]
     if not flagged:
         return 0
