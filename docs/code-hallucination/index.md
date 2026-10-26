@@ -8,6 +8,8 @@ character-level annotations marking the hallucinated spans.
 Published as the `lettucedetect-code-agent` source of
 [`KRLabsOrg/lettucedetect-code-hallucination`](https://huggingface.co/datasets/KRLabsOrg/lettucedetect-code-hallucination).
 
+**Paper:** [Beyond Document Grounding: Span-Level Hallucination Detection over Code, Tool Output, and Documents](https://aclanthology.org/2026.groundlm-1.44/) (GroundLM 2026 workshop at EMNLP 2026) · [arXiv:2607.00895](https://arxiv.org/abs/2607.00895)
+
 ## Why this dataset
 
 Existing hallucination-detection datasets (RAGTruth, RAGBench) focus on **text** —
