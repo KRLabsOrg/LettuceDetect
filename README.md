@@ -36,6 +36,7 @@ LettuceDetect now detects hallucinations in **coding-agent** answers — grounde
 
 - **Models:** `lettucedect-v2-qwen-2b` (generative, emits typed spans in one pass) and `lettucedect-v2-mmbert-base` (fast encoder) — a single model across code, tool output, and prose (including 14-language [PsiloQA](https://huggingface.co/datasets/s-nlp/PsiloQA) and [RAGTruth](https://aclanthology.org/2024.acl-long.585/)).
 - **Benchmark:** a span-annotated code + tool-output + structured-document hallucination dataset — [KRLabsOrg/lettucedetect-code-hallucination](https://huggingface.co/datasets/KRLabsOrg/lettucedetect-code-hallucination).
+- **Paper:** [Beyond Document Grounding: Span-Level Hallucination Detection over Code, Tool Output, and Documents](https://aclanthology.org/2026.groundlm-1.44/) (GroundLM 2026 workshop at EMNLP 2026) · [arXiv:2607.00895](https://arxiv.org/abs/2607.00895)
 - On code-agent answers, the fine-tuned 2B detector substantially outperforms the off-the-shelf detectors and large LLM judges we evaluated, which over-flag generated code:
 
 <p align="center"><img src="https://github.com/KRLabsOrg/LettuceDetect/blob/main/assets/code_agent_comparison.png?raw=true" alt="Code-agent hallucination detection comparison" width="560"/></p>
@@ -181,6 +182,7 @@ For detailed performance metrics and evaluations of our models:
 - [English model documentation](docs/README.md)
 - [Multilingual model documentation](docs/EUROBERT.md)
 - [Paper](https://arxiv.org/abs/2502.17125)
+- [v2 paper: code, tool output and documents](https://aclanthology.org/2026.groundlm-1.44/) (GroundLM 2026 workshop at EMNLP 2026)
 - [Model cards](https://huggingface.co/KRLabsOrg)
 
 ## How does it work?
@@ -384,3 +386,33 @@ Please cite the following paper if you use LettuceDetect in your work:
       url={https://arxiv.org/abs/2502.17125}, 
 }
 ```
+
+For the v2 models (code, tool output and documents) and the unified benchmark, please cite:
+
+```bibtex
+@inproceedings{kovacs-etal-2026-beyond,
+    title = "Beyond Document Grounding: Span-Level Hallucination Detection over Code, Tool Output, and Documents",
+    author = "Kov{\'a}cs, {\'A}d{\'a}m  and
+      He, Bowei  and
+      Liu, Xue  and
+      Boros, Istv{\'a}n  and
+      T{\'o}th, Szilveszter  and
+      Recski, Gabor",
+    editor = "Wang, Yimu  and
+      Choi, Yee Man  and
+      Wu, Di  and
+      Ouyang, Siqi  and
+      Azadani, Mozhgan Nasr  and
+      Fung, Yi R. (May)",
+    booktitle = "Proceedings of the 1st Workshop on Grounding Language Models: Learning Faithfully and Efficiently ({G}round{LM} 2026)",
+    month = oct,
+    year = "2026",
+    address = "Budapest, Hungary",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2026.groundlm-1.44/",
+    pages = "566--577",
+    ISBN = "979-8-89176-478-1"
+}
+```
+
+Also on arXiv: [2607.00895](https://arxiv.org/abs/2607.00895).

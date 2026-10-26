@@ -160,6 +160,34 @@ spans, then type each span with the label-conditioned taxonomy head (see
 ## Citing
 
 ```bibtex
+@inproceedings{kovacs-etal-2026-beyond,
+    title = "Beyond Document Grounding: Span-Level Hallucination Detection over Code, Tool Output, and Documents",
+    author = "Kov{\'a}cs, {\'A}d{\'a}m  and
+      He, Bowei  and
+      Liu, Xue  and
+      Boros, Istv{\'a}n  and
+      T{\'o}th, Szilveszter  and
+      Recski, Gabor",
+    editor = "Wang, Yimu  and
+      Choi, Yee Man  and
+      Wu, Di  and
+      Ouyang, Siqi  and
+      Azadani, Mozhgan Nasr  and
+      Fung, Yi R. (May)",
+    booktitle = "Proceedings of the 1st Workshop on Grounding Language Models: Learning Faithfully and Efficiently ({G}round{LM} 2026)",
+    month = oct,
+    year = "2026",
+    address = "Budapest, Hungary",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2026.groundlm-1.44/",
+    pages = "566--577",
+    ISBN = "979-8-89176-478-1"
+}
+```
+
+Also on arXiv: [2607.00895](https://arxiv.org/abs/2607.00895). LettuceDetect itself:
+
+```bibtex
 @article{Kovacs2025LettuceDetect,
   title={LettuceDetect: A Hallucination Detection Framework for RAG Applications},
   author={Kovács, Ádám and Recski, Gábor},
@@ -167,6 +195,3 @@ spans, then type each span with the label-conditioned taxonomy head (see
   year={2025}
 }
 ```
-
-*A dedicated paper for the unified code+prose benchmark and the v2 models is in
-preparation; this card will be updated with its citation on release.*
