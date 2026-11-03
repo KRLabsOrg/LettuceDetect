@@ -182,7 +182,7 @@ For detailed performance metrics and evaluations of our models:
 - [English model documentation](docs/README.md)
 - [Multilingual model documentation](docs/EUROBERT.md)
 - [Paper](https://arxiv.org/abs/2502.17125)
-- [v2 paper: code, tool output and documents](https://aclanthology.org/2026.groundlm-1.44/) (GroundLM 2026 workshop at EMNLP 2026)
+- [Paper: span-level detection over code, tool output and documents](https://aclanthology.org/2026.groundlm-1.44/) (GroundLM 2026 workshop at EMNLP 2026)
 - [Model cards](https://huggingface.co/KRLabsOrg)
 
 ## How does it work?
@@ -387,7 +387,7 @@ Please cite the following paper if you use LettuceDetect in your work:
 }
 ```
 
-For the v2 models (code, tool output and documents) and the unified benchmark, please cite:
+For the models that cover code, tool output and documents, and the unified benchmark, please cite:
 
 ```bibtex
 @inproceedings{kovacs-etal-2026-beyond,
@@ -410,6 +410,7 @@ For the v2 models (code, tool output and documents) and the unified benchmark, p
     address = "Budapest, Hungary",
     publisher = "Association for Computational Linguistics",
     url = "https://aclanthology.org/2026.groundlm-1.44/",
+    doi = "10.18653/2026.groundlm-1.44",
     pages = "566--577",
     ISBN = "979-8-89176-478-1"
 }

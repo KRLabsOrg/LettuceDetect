@@ -293,6 +293,7 @@ near chance) because a generated code patch is not literally present in the cont
     address = "Budapest, Hungary",
     publisher = "Association for Computational Linguistics",
     url = "https://aclanthology.org/2026.groundlm-1.44/",
+    doi = "10.18653/2026.groundlm-1.44",
     pages = "566--577",
     ISBN = "979-8-89176-478-1"
 }
