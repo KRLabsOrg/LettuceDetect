@@ -1,0 +1,74 @@
+{
+  "predict": [
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "France"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "is"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "69"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "million."
+      }
+    ]
+  ],
+  "predict_prompt": [
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "France"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "is"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "69"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "million."
+      }
+    ]
+  ],
+  "predict_prompt_batch": [
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "France"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "is"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "69"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "million."
+      }
+    ]
+  ]
+}

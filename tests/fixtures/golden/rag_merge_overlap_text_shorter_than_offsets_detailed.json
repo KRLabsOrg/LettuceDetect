@@ -1,0 +1,110 @@
+{
+  "predict": [
+    {
+      "fact_check_results": {
+        "0": "contradiction",
+        "1": "entailment"
+      },
+      "spans": [
+        {
+          "confidence": 0.9,
+          "end": 20,
+          "start": 0,
+          "text": "France",
+          "triplet": [
+            "France",
+            "is",
+            "unknown"
+          ]
+        }
+      ],
+      "triplets": {
+        "answer": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ],
+          [
+            "Paris",
+            "is",
+            "capital"
+          ]
+        ],
+        "context": [
+          [
+            "France",
+            "population",
+            "67 million"
+          ]
+        ],
+        "hallucinated": [
+          [
+            "France",
+            "is",
+            "unknown"
+          ],
+          [
+            "France",
+            "is",
+            "69 million"
+          ]
+        ]
+      }
+    }
+  ],
+  "predict_prompt": [
+    {
+      "fact_check_results": {
+        "0": "contradiction",
+        "1": "entailment"
+      },
+      "spans": [
+        {
+          "confidence": 0.9,
+          "end": 20,
+          "start": 0,
+          "text": "France",
+          "triplet": [
+            "France",
+            "is",
+            "unknown"
+          ]
+        }
+      ],
+      "triplets": {
+        "answer": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ],
+          [
+            "Paris",
+            "is",
+            "capital"
+          ]
+        ],
+        "context": [
+          [
+            "France",
+            "population",
+            "67 million"
+          ]
+        ],
+        "hallucinated": [
+          [
+            "France",
+            "is",
+            "unknown"
+          ],
+          [
+            "France",
+            "is",
+            "69 million"
+          ]
+        ]
+      }
+    }
+  ]
+}

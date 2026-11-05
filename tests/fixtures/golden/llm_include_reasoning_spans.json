@@ -1,0 +1,62 @@
+{
+  "predict": [
+    [
+      {
+        "confidence": 0.93,
+        "end": 38,
+        "reasoning": "source says 67 million",
+        "start": 28,
+        "text": "69 million"
+      }
+    ],
+    [
+      {
+        "confidence": 0.88,
+        "end": 30,
+        "reasoning": "source says Portugal",
+        "start": 25,
+        "text": "Spain"
+      }
+    ]
+  ],
+  "predict_prompt": [
+    [
+      {
+        "confidence": 0.93,
+        "end": 38,
+        "reasoning": "source says 67 million",
+        "start": 28,
+        "text": "69 million"
+      }
+    ],
+    [
+      {
+        "confidence": 0.88,
+        "end": 30,
+        "reasoning": "source says Portugal",
+        "start": 25,
+        "text": "Spain"
+      }
+    ]
+  ],
+  "predict_prompt_batch": [
+    [
+      {
+        "confidence": 0.93,
+        "end": 38,
+        "reasoning": "source says 67 million",
+        "start": 28,
+        "text": "69 million"
+      }
+    ],
+    [
+      {
+        "confidence": 0.88,
+        "end": 30,
+        "reasoning": "source says Portugal",
+        "start": 25,
+        "text": "Spain"
+      }
+    ]
+  ]
+}
