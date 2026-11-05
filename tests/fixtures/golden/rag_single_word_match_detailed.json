@@ -1,0 +1,104 @@
+{
+  "predict": [
+    {
+      "fact_check_results": {
+        "0": "contradiction",
+        "1": "entailment"
+      },
+      "spans": [
+        {
+          "confidence": 0.7,
+          "end": 6,
+          "start": 0,
+          "text": "Madrid",
+          "triplet": [
+            "Barcelona",
+            "north",
+            "coast",
+            "Madrid"
+          ]
+        }
+      ],
+      "triplets": {
+        "answer": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ],
+          [
+            "Paris",
+            "is",
+            "capital"
+          ]
+        ],
+        "context": [
+          [
+            "France",
+            "population",
+            "67 million"
+          ]
+        ],
+        "hallucinated": [
+          [
+            "Barcelona",
+            "north",
+            "coast",
+            "Madrid"
+          ]
+        ]
+      }
+    }
+  ],
+  "predict_prompt": [
+    {
+      "fact_check_results": {
+        "0": "contradiction",
+        "1": "entailment"
+      },
+      "spans": [
+        {
+          "confidence": 0.7,
+          "end": 6,
+          "start": 0,
+          "text": "Madrid",
+          "triplet": [
+            "Barcelona",
+            "north",
+            "coast",
+            "Madrid"
+          ]
+        }
+      ],
+      "triplets": {
+        "answer": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ],
+          [
+            "Paris",
+            "is",
+            "capital"
+          ]
+        ],
+        "context": [
+          [
+            "France",
+            "population",
+            "67 million"
+          ]
+        ],
+        "hallucinated": [
+          [
+            "Barcelona",
+            "north",
+            "coast",
+            "Madrid"
+          ]
+        ]
+      }
+    }
+  ]
+}

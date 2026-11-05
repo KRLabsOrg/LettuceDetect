@@ -1,0 +1,194 @@
+{
+  "predict": [
+    {
+      "fact_check_results": {
+        "0": "contradiction",
+        "1": "entailment"
+      },
+      "spans": [
+        {
+          "confidence": 0.9,
+          "end": 38,
+          "start": 28,
+          "text": "69 million",
+          "triplet": [
+            "France",
+            "population",
+            "69 million"
+          ]
+        }
+      ],
+      "triplets": {
+        "answer": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ],
+          [
+            "Paris",
+            "is",
+            "capital"
+          ]
+        ],
+        "context": [
+          [
+            "France",
+            "population",
+            "67 million"
+          ]
+        ],
+        "hallucinated": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ]
+        ]
+      }
+    },
+    {
+      "fact_check_results": {
+        "0": "contradiction",
+        "1": "entailment"
+      },
+      "spans": [
+        {
+          "confidence": 0.9,
+          "end": 30,
+          "start": 25,
+          "text": "Spain",
+          "triplet": [
+            "Lisbon",
+            "capital",
+            "Spain"
+          ]
+        }
+      ],
+      "triplets": {
+        "answer": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ],
+          [
+            "Paris",
+            "is",
+            "capital"
+          ]
+        ],
+        "context": [
+          [
+            "France",
+            "population",
+            "67 million"
+          ]
+        ],
+        "hallucinated": [
+          [
+            "Lisbon",
+            "capital",
+            "Spain"
+          ]
+        ]
+      }
+    }
+  ],
+  "predict_prompt": [
+    {
+      "fact_check_results": {
+        "0": "contradiction",
+        "1": "entailment"
+      },
+      "spans": [
+        {
+          "confidence": 0.9,
+          "end": 38,
+          "start": 28,
+          "text": "69 million",
+          "triplet": [
+            "France",
+            "population",
+            "69 million"
+          ]
+        }
+      ],
+      "triplets": {
+        "answer": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ],
+          [
+            "Paris",
+            "is",
+            "capital"
+          ]
+        ],
+        "context": [
+          [
+            "France",
+            "population",
+            "67 million"
+          ]
+        ],
+        "hallucinated": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ]
+        ]
+      }
+    },
+    {
+      "fact_check_results": {
+        "0": "contradiction",
+        "1": "entailment"
+      },
+      "spans": [
+        {
+          "confidence": 0.9,
+          "end": 30,
+          "start": 25,
+          "text": "Spain",
+          "triplet": [
+            "Lisbon",
+            "capital",
+            "Spain"
+          ]
+        }
+      ],
+      "triplets": {
+        "answer": [
+          [
+            "France",
+            "population",
+            "69 million"
+          ],
+          [
+            "Paris",
+            "is",
+            "capital"
+          ]
+        ],
+        "context": [
+          [
+            "France",
+            "population",
+            "67 million"
+          ]
+        ],
+        "hallucinated": [
+          [
+            "Lisbon",
+            "capital",
+            "Spain"
+          ]
+        ]
+      }
+    }
+  ]
+}
