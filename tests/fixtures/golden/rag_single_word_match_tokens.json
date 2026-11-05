@@ -1,0 +1,74 @@
+{
+  "predict": [
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "Madrid"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "mentioned"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "here."
+      }
+    ]
+  ],
+  "predict_prompt": [
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "Madrid"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "mentioned"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "here."
+      }
+    ]
+  ],
+  "predict_prompt_batch": [
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "Madrid"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "mentioned"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "here."
+      }
+    ]
+  ]
+}
