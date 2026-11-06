@@ -24,6 +24,7 @@ dependencies = [
     "scikit-learn>=1.6.1",
     "numpy>=2.2.2",
     "openai>=1.66.3",
+    "pydantic>=2.0",
     "rag-fact-checker",
     "typing_extensions>=4.5.0",
 ]
