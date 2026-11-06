@@ -25,6 +25,7 @@ dependencies = [
     "numpy>=2.2.2",
     "openai>=1.66.3",
     "rag-fact-checker",
+    "typing_extensions>=4.5.0",
 ]
 
 [project.scripts]
@@ -68,6 +69,7 @@ lettucedetect = ["prompts/*.txt", "prompts/*.json"]
 testpaths = ["tests"]
 python_files = "test_*_pytest.py"
 addopts = "-v --tb=short --strict-markers"
+filterwarnings = ["error::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"]
 
 [tool.ruff]
 line-length = 100

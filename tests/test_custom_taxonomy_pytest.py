@@ -10,6 +10,10 @@ from lettucedetect.detectors.llm_client import LLMClient, build_generative_schem
 from lettucedetect.detectors.taxonomy_head import resolve_taxonomy
 from lettucedetect.prompts.generative import build_system_prompt
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
 CUSTOM_CATS = {"pricing_claim": "any statement about price not supported by the context"}
 CUSTOM_SUBS = {"currency": "a currency amount not present in the context"}
 
