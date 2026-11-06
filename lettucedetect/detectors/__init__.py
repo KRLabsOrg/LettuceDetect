@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning
 from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.errors import (
     ConfigurationError,
@@ -37,6 +38,7 @@ __all__ = [
     "LLMDetector",
     "LettuceDetectError",
     "PromptInput",
+    "LettuceDetectDeprecationWarning",
     "RAGFactCheckerDetector",
     "ResultWarning",
     "SourcesInput",

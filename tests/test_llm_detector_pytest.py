@@ -14,6 +14,10 @@ import pytest
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import LLMClient
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
 TOKEN_KEYS = {"token", "pred", "prob"}
 
 

@@ -26,6 +26,10 @@ from lettucedetect.detectors.llm_client import (
     make_llm_client,
 )
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
 PLAIN_SCHEMA = build_hallucination_schema()
 
 
