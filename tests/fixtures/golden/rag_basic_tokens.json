@@ -1,0 +1,290 @@
+{
+  "predict": [
+    [
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "The"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "population"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "of"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "France"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "69"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "million"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "and"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "Paris"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "its"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "capital."
+      }
+    ],
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "Lisbon"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "the"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "capital"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "of"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "Spain."
+      }
+    ]
+  ],
+  "predict_prompt": [
+    [
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "The"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "population"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "of"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "France"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "69"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "million"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "and"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "Paris"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "its"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "capital."
+      }
+    ],
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "Lisbon"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "the"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "capital"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "of"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "Spain."
+      }
+    ]
+  ],
+  "predict_prompt_batch": [
+    [
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "The"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "population"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "of"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "France"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "69"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "million"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "and"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "Paris"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "its"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "capital."
+      }
+    ],
+    [
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "Lisbon"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "is"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "the"
+      },
+      {
+        "pred": 1,
+        "prob": 0.9,
+        "token": "capital"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "of"
+      },
+      {
+        "pred": 0,
+        "prob": 0.1,
+        "token": "Spain."
+      }
+    ]
+  ]
+}
