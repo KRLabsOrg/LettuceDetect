@@ -25,6 +25,7 @@ dependencies = [
     "numpy>=2.2.2",
     "openai>=1.66.3",
     "rag-fact-checker",
+    "typing_extensions>=4.5.0",
 ]
 
 [project.scripts]
