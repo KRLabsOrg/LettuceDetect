@@ -6,6 +6,10 @@ import pytest
 
 from lettucedetect.detectors.factory import make_detector
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
 
 class TestMakeDetector:
     """Tests for the ``make_detector`` factory function."""

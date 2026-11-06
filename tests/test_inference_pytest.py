@@ -11,6 +11,10 @@ from lettucedetect.detectors.prompt_utils import PromptUtils
 from lettucedetect.detectors.transformer import TransformerDetector
 from lettucedetect.models.inference import HallucinationDetector
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
 
 @pytest.fixture
 def mock_tokenizer():
