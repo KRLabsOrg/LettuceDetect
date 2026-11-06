@@ -197,10 +197,6 @@ def test_adetect_docstring_states_the_caveats():
 
 
 def test_default_hook_raises_not_implemented():
-    """A detector that does not override _detect raises NotImplementedError when detect is called."""
-
-    class Bare(PlainDetector):
-        _detect = BaseDetector._detect
-
+    """The base class itself, which has no hook and no legacy predict, raises NotImplementedError."""
     with pytest.raises(NotImplementedError):
-        Bare().detect(REQUEST)
+        BaseDetector().detect(REQUEST)
