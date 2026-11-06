@@ -28,7 +28,9 @@ SOURCES = SourcesInput(
     answer=ANSWER,
     question="What is the capital of France?",
 )
-PROMPT = PromptInput(prompt="Answer from the context: Paris is the capital of France.", answer=ANSWER)
+PROMPT = PromptInput(
+    prompt="Answer from the context: Paris is the capital of France.", answer=ANSWER
+)
 
 # (word, score): three flagged words with three different scores.
 FLAGGED = [("France", 0.3), ("3 million", 0.6), ("Berlin", 0.9)]
@@ -39,7 +41,12 @@ def _raw_spans(answer: str, shift: int = 0) -> list[dict]:
     for word, score in FLAGGED:
         start = answer.index(word)
         spans.append(
-            {"start": start + shift, "end": start + shift + len(word), "text": word, "confidence": score}
+            {
+                "start": start + shift,
+                "end": start + shift + len(word),
+                "text": word,
+                "confidence": score,
+            }
         )
     return sorted(spans, key=lambda s: s["start"])
 
@@ -101,7 +108,9 @@ class TestDetectOnlyContract(DetectorContract):
         return DetectOnly(on_call)
 
 
-@pytest.mark.filterwarnings("ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning")
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 class TestPredictOnlyContract(DetectorContract):
     """The contract holds for an old-style detector that implements ``predict`` only."""
 
@@ -127,7 +136,9 @@ class Prints(DetectOnly):
 
     def _detect(self, request, *, include_tokens, include_detail):
         print("checking", request.answer)
-        return super()._detect(request, include_tokens=include_tokens, include_detail=include_detail)
+        return super()._detect(
+            request, include_tokens=include_tokens, include_detail=include_detail
+        )
 
 
 class LogsAnswer(DetectOnly):
@@ -135,7 +146,9 @@ class LogsAnswer(DetectOnly):
 
     def _detect(self, request, *, include_tokens, include_detail):
         logging.getLogger("lettucedetect.detectors.broken").info("answer: %s", request.answer)
-        return super()._detect(request, include_tokens=include_tokens, include_detail=include_detail)
+        return super()._detect(
+            request, include_tokens=include_tokens, include_detail=include_detail
+        )
 
 
 class LogsAnswerOnContentLogger(DetectOnly):
@@ -143,7 +156,9 @@ class LogsAnswerOnContentLogger(DetectOnly):
 
     def _detect(self, request, *, include_tokens, include_detail):
         logging.getLogger(CONTENT_LOGGER).debug("answer: %s", request.answer)
-        return super()._detect(request, include_tokens=include_tokens, include_detail=include_detail)
+        return super()._detect(
+            request, include_tokens=include_tokens, include_detail=include_detail
+        )
 
 
 class WritesFileToCwd(DetectOnly):
@@ -151,7 +166,9 @@ class WritesFileToCwd(DetectOnly):
 
     def _detect(self, request, *, include_tokens, include_detail):
         Path("scratch.txt").write_text("x")
-        return super()._detect(request, include_tokens=include_tokens, include_detail=include_detail)
+        return super()._detect(
+            request, include_tokens=include_tokens, include_detail=include_detail
+        )
 
 
 class WritesFileToHome(DetectOnly):
@@ -159,7 +176,9 @@ class WritesFileToHome(DetectOnly):
 
     def _detect(self, request, *, include_tokens, include_detail):
         (Path.home() / ".cache-of-broken-detector").write_text("x")
-        return super()._detect(request, include_tokens=include_tokens, include_detail=include_detail)
+        return super()._detect(
+            request, include_tokens=include_tokens, include_detail=include_detail
+        )
 
 
 class BlocksTheLoop(DetectOnly):
@@ -167,7 +186,10 @@ class BlocksTheLoop(DetectOnly):
 
     async def adetect(self, request, *, min_score=0.0, include_tokens=False, include_detail=False):  # noqa: D102
         return self.detect(
-            request, min_score=min_score, include_tokens=include_tokens, include_detail=include_detail
+            request,
+            min_score=min_score,
+            include_tokens=include_tokens,
+            include_detail=include_detail,
         )
 
 
@@ -187,7 +209,9 @@ class Unrepeatable(DetectOnly):
 
     def _detect(self, request, *, include_tokens, include_detail):
         type(self).calls += 1
-        result = super()._detect(request, include_tokens=include_tokens, include_detail=include_detail)
+        result = super()._detect(
+            request, include_tokens=include_tokens, include_detail=include_detail
+        )
         bump = 0.001 * type(self).calls
         spans = [s.model_copy(update={"score": min(1.0, s.score / 2 + bump)}) for s in result.spans]
         return result.model_copy(update={"spans": spans})
@@ -197,7 +221,9 @@ class WrongModelId(DetectOnly):
     """Reports usage for a model other than its own."""
 
     def _detect(self, request, *, include_tokens, include_detail):
-        result = super()._detect(request, include_tokens=include_tokens, include_detail=include_detail)
+        result = super()._detect(
+            request, include_tokens=include_tokens, include_detail=include_detail
+        )
         return result.model_copy(
             update={"usage": [Usage(model_id="someone-else", model_version=None, units={})]}
         )
@@ -233,7 +259,9 @@ BROKEN = [
 ]
 
 
-@pytest.mark.parametrize(("detector_class", "check"), BROKEN, ids=lambda v: getattr(v, "__name__", v))
+@pytest.mark.parametrize(
+    ("detector_class", "check"), BROKEN, ids=lambda v: getattr(v, "__name__", v)
+)
 def test_broken_stand_in_fails_the_matching_check(detector_class, check):
     """A deliberately broken stand-in fails the check that is about its defect."""
     with pytest.raises(AssertionError):

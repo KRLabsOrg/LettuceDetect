@@ -305,7 +305,9 @@ class DetectorContract:
         expected = [
             self.make_detector().detect(self.sources_request, min_score=t) for t in thresholds
         ]
-        assert len({len(e.spans) for e in expected}) > 1, "the thresholds must give different results"
+        assert len({len(e.spans) for e in expected}) > 1, (
+            "the thresholds must give different results"
+        )
         results = await asyncio.gather(
             *(
                 d.adetect(self.sources_request, min_score=t)
@@ -338,7 +340,9 @@ class DetectorContract:
 
     # -- cancelling adetect ----------------------------------------------------------------
 
-    async def _cancel_and_check(self, cancel: Callable[[asyncio.Task[Detection]], Awaitable[None]]) -> None:
+    async def _cancel_and_check(
+        self, cancel: Callable[[asyncio.Task[Detection]], Awaitable[None]]
+    ) -> None:
         """Cancel a blocked ``adetect`` with ``cancel`` and check the detector stays usable."""
         entered, gate, returned = threading.Event(), threading.Event(), threading.Event()
         loop_errors: list[dict] = []
