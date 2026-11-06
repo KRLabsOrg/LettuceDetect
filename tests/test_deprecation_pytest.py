@@ -147,3 +147,11 @@ def test_importing_detectors_emits_no_warning():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_unmarked_use_of_deprecated_name_is_an_error():
+    """The pytest config turns the warning into an error; ``pytest.warns`` still records it."""
+    with pytest.raises(LettuceDetectDeprecationWarning):
+        old_func()  # ty: ignore[deprecated]
+    with pytest.warns(LettuceDetectDeprecationWarning):
+        old_func()  # ty: ignore[deprecated]

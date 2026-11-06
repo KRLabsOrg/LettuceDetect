@@ -69,6 +69,7 @@ lettucedetect = ["prompts/*.txt", "prompts/*.json"]
 testpaths = ["tests"]
 python_files = "test_*_pytest.py"
 addopts = "-v --tb=short --strict-markers"
+filterwarnings = ["error::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"]
 
 [tool.ruff]
 line-length = 100
