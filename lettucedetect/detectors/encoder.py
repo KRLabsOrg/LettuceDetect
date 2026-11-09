@@ -224,7 +224,9 @@ class EncoderDetector(BaseDetector):
 
     :param model: a token classification model.
     :param tokenizer: the model's fast tokenizer.
-    :param typer: optional span typer; accepted but not applied yet.
+    :param typer: optional span typer, for example a :class:`TaxonomyTyper`. With it every span
+        of ``detect`` carries ``category`` and ``subcategory``, and ``usage`` has a second
+        entry for the typer (unit ``spans``).
     :param config: options, ``EncoderConfig()`` when ``None``.
     :param model_id: id reported in ``usage``.
     :param model_version: version reported in ``usage``.
@@ -286,7 +288,7 @@ class EncoderDetector(BaseDetector):
         :param model_id: Hugging Face id or local directory.
         :param device: device for the model; CUDA when available, else CPU, when ``None``.
         :param taxonomy_head: optional id or path of a label-conditioned typing head. It is
-            loaded, but spans are not typed until typed spans arrive.
+            loaded through ``TaxonomyTyper.from_pretrained`` and types the spans of ``detect``.
         :param include_taxonomy: label set for the typing head.
         :param model_version: version reported in ``usage`` for a local path. For a hub id the
             resolved commit is used and this is only the fallback.
@@ -406,21 +408,36 @@ class EncoderDetector(BaseDetector):
             if len(scored) == 1
             else self._max_aggregate([group_tokens for group_tokens, _, _ in scored])
         )
+        span_items = self._spans_from_scored_tokens(tokens, answer)
+        typing_ms = 0.0
+        if self.typer is not None and span_items:
+            # Typing runs outside the scoring lock: the typer serializes itself, and this keeps
+            # the encoder free for the next call.
+            typer_started = time.perf_counter()
+            span_items = self.typer.type_spans(answer, self._typer_context(request), span_items)
+            typing_ms = (time.perf_counter() - typer_started) * 1000
         spans = [
             DetectedSpan(
-                start=item["start"], end=item["end"], text=item["text"], score=item["confidence"]
+                start=item["start"],
+                end=item["end"],
+                text=item["text"],
+                score=item["confidence"],
+                category=item.get("category"),
+                subcategory=item.get("subcategory"),
             )
-            for item in self._spans_from_scored_tokens(tokens, answer)
+            for item in span_items
         ]
         logger.debug(
             "detect finished: spans=%d answer_tokens=%d input_tokens=%d groups=%d "
-            "truncated=%s scoring_ms=%.1f",
+            "truncated=%s scoring_ms=%.1f typed=%s typing_ms=%.1f",
             len(spans),
             len(tokens),
             units["input_tokens"],
             len(scored),
             truncated,
             scoring_ms,
+            self.typer is not None,
+            typing_ms,
         )
         token_scores = (
             [
@@ -450,7 +467,23 @@ class EncoderDetector(BaseDetector):
             else []
         )
         usage = [Usage(model_id=self.model_id, model_version=self.model_version, units=units)]
+        if self.typer is not None:
+            # The typer meters the spans it was given, before ``min_score`` filters them.
+            usage.append(
+                Usage(
+                    model_id=getattr(self.typer, "model_id", None),
+                    model_version=getattr(self.typer, "model_version", None),
+                    units={"spans": len(span_items)},
+                )
+            )
         return Detection(spans=spans, tokens=token_scores, usage=usage, warnings=warnings)
+
+    @staticmethod
+    def _typer_context(request: DetectRequest) -> str:
+        """Return the text the typer reads with the answer: joined sources, or the prompt."""
+        if isinstance(request, SourcesInput):
+            return "\n".join(chunk.text for chunk in request.sources)
+        return request.prompt
 
     def _score_tokens(self, prompt: str, answer: str) -> tuple[list[dict], int, int | None]:
         """Score the answer tokens of one (prompt, answer) pair.

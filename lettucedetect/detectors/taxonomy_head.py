@@ -66,6 +66,30 @@ class TaxonomyTyper:
     Typing runs under one private lock, so concurrent calls on one typer (for example from
     ``adetect`` worker threads, or from several detectors sharing it) run one at a time.
 
+    Example, loading the typing head once at startup and giving it to an encoder::
+
+        from transformers import AutoModel, AutoTokenizer
+
+        head_id = "KRLabsOrg/lettucedect-v2-taxonomy-head"
+        tokenizer = AutoTokenizer.from_pretrained(head_id)
+        encoder = AutoModel.from_pretrained(head_id).eval()
+
+        typer = TaxonomyTyper(
+            encoder,
+            tokenizer,
+            max_length=1024,
+            model_id=head_id,
+        )
+        detector = EncoderDetector(model, model_tokenizer, typer, model_id=model_id)
+        result = detector.detect(request)  # every span has category and subcategory
+
+    The typer reads its device from ``encoder.device``, so move the encoder before building it.
+    To let the typer load itself, and record the resolved commit as ``model_version`` and log
+    ``model_loaded``, use ``TaxonomyTyper.from_pretrained(head_id, device="cuda")``. Custom
+    labels work with both::
+
+        TaxonomyTyper(encoder, tokenizer, categories={"pricing_claim": "a price not in the context"})
+
     :param encoder: the label-conditioned encoder, ready for inference (it is not moved or
         switched to eval mode).
     :param tokenizer: the encoder's fast tokenizer.
