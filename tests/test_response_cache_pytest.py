@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import math
+import time
 
 import pytest
 
@@ -126,3 +128,38 @@ class TestExports:
 
         assert isinstance(Direct(), ResponseCache)
         assert not issubclass(Direct, SyncCacheBase)
+
+
+class TestInMemoryCacheLogging:
+    """Module logger only: DEBUG steps, no customer text, no printing."""
+
+    def test_steps_are_logged_at_debug_without_keys_or_values(self, caplog, capsys):
+        """Every operation leaves a DEBUG record; none carries a key or a value."""
+        cache = InMemoryCache()
+        secret_key, secret_value = "key-with-CUSTOMER-TEXT-7f3a", "reply-with-CUSTOMER-TEXT-9c1e"
+        with caplog.at_level(logging.DEBUG, logger="lettucedetect"):
+            cache.set(secret_key, secret_value)
+            cache.set("short", secret_value, ttl_seconds=0.05)
+            assert cache.get(secret_key) == secret_value
+            assert cache.get("missing") is None
+            time.sleep(0.1)
+            assert cache.get("short") is None
+            cache.delete(secret_key)
+            cache.delete(secret_key)
+        records = [r for r in caplog.records if r.name == "lettucedetect.detectors.response_cache"]
+        text = "\n".join(r.getMessage() for r in records)
+        assert records
+        assert {r.levelno for r in records} == {logging.DEBUG}
+        for secret in (secret_key, secret_value, "CUSTOMER"):
+            assert secret not in text
+        for expected in ("hit", "miss", "expired", "removed", "key not found", "stored"):
+            assert expected in text, expected
+        captured = capsys.readouterr()
+        assert captured.out == captured.err == ""
+
+    def test_an_invalid_ttl_is_raised_not_logged(self, caplog):
+        """The error is the report: no WARNING or ERROR record is added."""
+        with caplog.at_level(logging.DEBUG, logger="lettucedetect"):
+            with pytest.raises(InvalidInputError):
+                InMemoryCache().set("k", "v", ttl_seconds=0)
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []

@@ -185,11 +185,14 @@ class InMemoryCache(SyncCacheBase):
         with self._lock:
             entry = self._data.get(key)
             if entry is None:
+                logger.debug("InMemoryCache get: miss")
                 return None
             value, deadline = entry
             if deadline is not None and time.monotonic() >= deadline:
                 del self._data[key]
+                logger.debug("InMemoryCache get: miss, the entry had expired and was removed")
                 return None
+            logger.debug("InMemoryCache get: hit")
             return value
 
     def set(self, key: str, value: str, *, ttl_seconds: float | None = None) -> None:
@@ -202,8 +205,13 @@ class InMemoryCache(SyncCacheBase):
         deadline = None if ttl_seconds is None else time.monotonic() + ttl_seconds
         with self._lock:
             self._data[key] = (value, deadline)
+            count = len(self._data)
+        logger.debug(
+            "InMemoryCache set: stored an entry, ttl_seconds=%s, %d entries", ttl_seconds, count
+        )
 
     def delete(self, key: str) -> None:
         """Remove ``key``. Does nothing if the key is missing."""
         with self._lock:
-            self._data.pop(key, None)
+            existed = self._data.pop(key, None) is not None
+        logger.debug("InMemoryCache delete: %s", "removed" if existed else "key not found")

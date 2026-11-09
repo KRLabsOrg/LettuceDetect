@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import itertools
 import json
+import logging
 import math
 import os
 import threading
@@ -380,3 +381,61 @@ class TestPublicApi:
         """The async pairs are written once, in ``SyncCacheBase``."""
         for name in ("aget", "aset", "adelete"):
             assert name not in vars(FileCache)
+
+
+CUSTOMER_KEY = "key-with-CUSTOMER-TEXT-7f3a"
+CUSTOMER_VALUE = "reply-with-CUSTOMER-TEXT-9c1e"
+
+
+class TestLogging:
+    """Module logger only: DEBUG steps, no customer text, no printing, never log and raise."""
+
+    def test_steps_are_logged_at_debug_without_keys_or_values(self, tmp_path, caplog, capsys):
+        """Every operation leaves DEBUG records on the module logger; none carries a key or value."""
+        cache = FileCache(tmp_path / "cache.json")
+        with caplog.at_level(logging.DEBUG, logger="lettucedetect"):
+            cache.set(CUSTOMER_KEY, CUSTOMER_VALUE)
+            cache.set("short", CUSTOMER_VALUE, ttl_seconds=0.05)
+            assert cache.get(CUSTOMER_KEY) == CUSTOMER_VALUE
+            assert cache.get("missing") is None
+            time.sleep(0.1)
+            assert cache.get("short") is None
+            cache.set("other", "v")  # drops the expired entry
+            cache.delete(CUSTOMER_KEY)
+            cache.delete(CUSTOMER_KEY)
+        records = [r for r in caplog.records if r.name == "lettucedetect.detectors.file_cache"]
+        text = "\n".join(r.getMessage() for r in records)
+        assert records
+        assert {r.levelno for r in records} == {logging.DEBUG}
+        for secret in (CUSTOMER_KEY, CUSTOMER_VALUE, "CUSTOMER"):
+            assert secret not in text
+        for expected in ("get on", "miss", "hit", "expired", "removed", "key not found", "wrote"):
+            assert expected in text, expected
+        captured = capsys.readouterr()
+        assert captured.out == captured.err == ""
+
+    def test_a_non_string_entry_is_logged_as_a_miss(self, tmp_path, caplog):
+        """A legacy dict value reads as a miss and says so at DEBUG, without its content."""
+        path = tmp_path / "cache.json"
+        path.write_text(
+            json.dumps({"k": {"hallucination_list": [CUSTOMER_VALUE]}}), encoding="utf-8"
+        )
+        with caplog.at_level(logging.DEBUG, logger="lettucedetect"):
+            assert FileCache(path).get("k") is None
+        text = "\n".join(r.getMessage() for r in caplog.records)
+        assert "not a string" in text
+        assert CUSTOMER_VALUE not in text
+
+    def test_errors_are_raised_not_logged(self, tmp_path, caplog):
+        """A failed write and an invalid file raise; the cache adds no WARNING or ERROR record."""
+        path = tmp_path / "cache.json"
+        cache = FileCache(path)
+        cache.set("k", "v")
+        with caplog.at_level(logging.DEBUG, logger="lettucedetect"):
+            with patch(REPLACE, side_effect=OSError("disk full")):
+                with pytest.raises(OSError):
+                    cache.set("k", "new")
+            path.write_text("{not json", encoding="utf-8")
+            with pytest.raises(ConfigurationError):
+                cache.get("k")
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []

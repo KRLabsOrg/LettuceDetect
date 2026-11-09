@@ -83,7 +83,9 @@ class FileCache(SyncCacheBase):
     def get(self, key: str) -> str | None:
         """Return the value stored under ``key``, or ``None`` if it is missing or expired."""
         with self._lock:
-            return self._decode(self._load().get(key), time.time())
+            value = self._decode(self._load().get(key), time.time())
+        logger.debug("FileCache get on %s: %s", self.path, "hit" if value is not None else "miss")
+        return value
 
     def _decode(self, entry: object, now: float) -> Any:  # noqa: ANN401
         """Return the string an entry holds, or ``None`` for a miss.
@@ -93,8 +95,12 @@ class FileCache(SyncCacheBase):
         """
         if isinstance(entry, str):
             return entry
-        if _is_ttl_entry(entry) and not _is_expired(entry, now):
-            return entry["value"]  # type: ignore[index]  # ty: ignore[not-subscriptable]
+        if _is_ttl_entry(entry):
+            if not _is_expired(entry, now):
+                return entry["value"]  # type: ignore[index]  # ty: ignore[not-subscriptable]
+            logger.debug("FileCache entry on %s has expired", self.path)
+        elif entry is not None:
+            logger.debug("FileCache entry on %s is not a string, read as a miss", self.path)
         return None
 
     def set(self, key: str, value: str, *, ttl_seconds: float | None = None) -> None:
@@ -107,21 +113,33 @@ class FileCache(SyncCacheBase):
         _validate_ttl(ttl_seconds)
         with self._lock:
             now = time.time()
-            data = self._purge(self._load(), now)
+            loaded = self._load()
+            data = self._purge(loaded, now)
+            if len(data) != len(loaded):
+                logger.debug(
+                    "FileCache set on %s: dropped %d expired entries",
+                    self.path,
+                    len(loaded) - len(data),
+                )
             if ttl_seconds is None:
                 data[key] = value
             else:
                 data[key] = {"value": value, "expires_at": now + ttl_seconds}
             self._write(data)
+        logger.debug("FileCache set on %s: stored an entry, ttl_seconds=%s", self.path, ttl_seconds)
 
     def delete(self, key: str) -> None:
         """Remove ``key``. Does nothing, and writes nothing, if the key is missing."""
         with self._lock:
             data = self._load()
             kept = self._purge(data, time.time())
+            existed = key in kept
             kept.pop(key, None)
             if kept != data:
                 self._write(kept)
+        logger.debug(
+            "FileCache delete on %s: %s", self.path, "removed" if existed else "key not found"
+        )
 
     @staticmethod
     def _purge(data: dict[str, Any], now: float) -> dict[str, Any]:
@@ -156,6 +174,7 @@ class FileCache(SyncCacheBase):
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(json.dumps(data, ensure_ascii=False))
             os.replace(tmp, self.path)  # noqa: PTH105 - the tests patch os.replace
+            logger.debug("FileCache wrote %d entries to %s", len(data), self.path)
         except BaseException:
             # Clean up after any failure, even a KeyboardInterrupt, then let it propagate unchanged.
             Path(tmp).unlink(missing_ok=True)
