@@ -5,14 +5,17 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import torch
+from huggingface_hub import try_to_load_from_cache
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from transformers import AutoModelForTokenClassification, AutoTokenizer
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationDataset
 from lettucedetect.detectors.base import BaseDetector
-from lettucedetect.detectors.errors import ConfigurationError
+from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, PromptUtils
 from lettucedetect.detectors.types import (
     DetectedSpan,
@@ -27,6 +30,22 @@ from lettucedetect.detectors.types import (
 logger = logging.getLogger(__name__)
 
 __all__ = ["EncoderConfig", "EncoderDetector"]
+
+
+def _resolved_commit(model_id: str, loader_kwargs: dict[str, Any]) -> str | None:
+    """Return the Hugging Face commit that is cached for ``model_id``, or ``None``.
+
+    Reads the snapshot directory name from the local cache, so it needs no network and
+    names the revision that was just loaded (``revision`` and ``cache_dir`` are honoured).
+    """
+    cached = try_to_load_from_cache(
+        model_id,
+        "config.json",
+        cache_dir=loader_kwargs.get("cache_dir"),
+        revision=loader_kwargs.get("revision"),
+    )
+    return Path(cached).parent.name if isinstance(cached, str) else None
+
 
 # Makes two racing first calls on one detector get the same scoring lock.
 _LOCK_GUARD = threading.Lock()
@@ -151,6 +170,94 @@ class EncoderDetector(BaseDetector):
             self.lang,
             self.device,
         )
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_id: str,
+        *,
+        device: torch.device | str | None = None,
+        taxonomy_head: str | None = None,
+        include_taxonomy: bool | list | dict = True,
+        model_version: str | None = None,
+        config: EncoderConfig | None = None,
+        **loader_kwargs: Any,  # noqa: ANN401
+    ) -> EncoderDetector:
+        """Load the tokenizer and model for ``model_id`` and build the detector.
+
+        This is the one place where a model name becomes a model. It may download, unless
+        the caller set ``HF_HUB_OFFLINE`` (this method neither reads nor sets it).
+
+        :param model_id: Hugging Face id or local directory.
+        :param device: device for the model; CUDA when available, else CPU, when ``None``.
+        :param taxonomy_head: optional id or path of a label-conditioned typing head. It is
+            loaded, but spans are not typed until typed spans arrive.
+        :param include_taxonomy: label set for the typing head.
+        :param model_version: version reported in ``usage`` for a local path. For a hub id the
+            resolved commit is used and this is only the fallback.
+        :param config: options, ``EncoderConfig()`` when ``None``.
+        :param loader_kwargs: passed to both ``from_pretrained`` loaders.
+        :raises UpstreamError: (``model_load_failed``) a hub model could not be loaded.
+        :raises ConfigurationError: (``model_load_failed``) a local model could not be loaded.
+        """
+        categories = subcategories = None
+        if taxonomy_head is not None:
+            from lettucedetect.detectors.taxonomy_head import resolve_taxonomy
+
+            categories, subcategories = resolve_taxonomy(include_taxonomy)
+        is_local = Path(model_id).is_dir()
+        started = time.perf_counter()
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_id, **loader_kwargs)
+            model = AutoModelForTokenClassification.from_pretrained(model_id, **loader_kwargs)
+        except OSError as exc:
+            if is_local:
+                raise ConfigurationError(
+                    "The model could not be loaded from the local path. Check that model_id "
+                    "is a directory with a saved model and tokenizer.",
+                    code="model_load_failed",
+                    param="model_id",
+                ) from exc
+            raise UpstreamError(
+                f"The model {model_id!r} could not be loaded. Check the id, the network or "
+                "HF_HUB_OFFLINE setting and your access to the repository.",
+                code="model_load_failed",
+                service="huggingface",
+            ) from exc
+        device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        model.to(device)
+        model.eval()
+        typer = None
+        if taxonomy_head is not None:
+            from lettucedetect.detectors.taxonomy_head import TaxonomyTyper
+
+            typer = TaxonomyTyper(
+                taxonomy_head,
+                device=device,
+                categories=categories,
+                subcategories=subcategories,
+            )
+        version = model_version
+        if not is_local:
+            version = _resolved_commit(model_id, loader_kwargs) or model_version
+        detector = cls(
+            model,
+            tokenizer,
+            typer,
+            config=config,
+            model_id=model_id,
+            model_version=version,
+        )
+        detector.device = device
+        logger.info(
+            "model loaded: model_id=%s model_version=%s device=%s load_seconds=%.1f",
+            model_id,
+            version,
+            device,
+            time.perf_counter() - started,
+            extra={"event": "model_loaded"},
+        )
+        return detector
 
     # ------------------------------------------------------------------
     # Lock
