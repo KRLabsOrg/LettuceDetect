@@ -1,47 +1,40 @@
-"""Thread-safe JSON cache with SHA-256 keys."""
+"""The old file cache, kept for compatibility. Use :class:`~lettucedetect.detectors.FileCache`."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import threading
 from pathlib import Path
 from typing import Any
 
+from lettucedetect.detectors._deprecation import deprecated
+from lettucedetect.detectors.file_cache import FileCache, _is_ttl_entry
+from lettucedetect.detectors.response_cache import _hash_parts
 
-class CacheManager:
-    """Disk-backed cache for expensive LLM calls."""
+
+@deprecated("FileCache")
+class CacheManager(FileCache):
+    """Disk-backed cache for expensive LLM calls.
+
+    .. deprecated:: 0.3.0
+        Use :class:`~lettucedetect.detectors.FileCache`. ``CacheManager`` will be removed in 0.5.0.
+
+    It is a ``FileCache`` that keeps its old behaviour: ``get`` returns any JSON value that was
+    stored, not only strings. ``aget``, ``aset`` and ``adelete`` are the ones of ``FileCache``. The
+    directory of the file is created by the first write, not by the constructor.
+    """
 
     def __init__(self, file_path: str | Path) -> None:
-        """Initialize cache from disk.
+        """Remember the path of the cache file.
 
         :param file_path: Path to the JSON cache file.
         """
-        self.path = Path(file_path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
-        self._data: dict[str, Any] = (
-            json.loads(self.path.read_text("utf-8")) if self.path.exists() else {}
-        )
+        super().__init__(file_path)
 
     @staticmethod
     def _hash(*parts: str) -> str:
-        return hashlib.sha256("||".join(parts).encode()).hexdigest()
+        return _hash_parts(*parts)
 
-    def get(self, key: str) -> Any | None:  # noqa: ANN401
-        """Retrieve a cached value by key."""
-        with self._lock:
-            return self._data.get(key)
-
-    def set(self, key: str, value: Any) -> None:  # noqa: ANN401
-        """Store a value in the cache and persist to disk."""
-        with self._lock:
-            self._data[key] = value
-            self.path.write_text(json.dumps(self._data, ensure_ascii=False), encoding="utf-8")
-
-    def delete(self, key: str) -> None:
-        """Remove a key from the cache and persist to disk."""
-        with self._lock:
-            if key in self._data:
-                del self._data[key]
-                self.path.write_text(json.dumps(self._data, ensure_ascii=False), encoding="utf-8")
+    def _decode(self, entry: object, now: float) -> Any:  # noqa: ANN401
+        """Return any stored JSON value as it is; only TTL entries are unwrapped."""
+        if _is_ttl_entry(entry):
+            return super()._decode(entry, now)
+        return entry
