@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning
 from lettucedetect.detectors.base import BaseDetector
+from lettucedetect.detectors.encoder import EncoderConfig, EncoderDetector
 from lettucedetect.detectors.errors import (
     ConfigurationError,
     InvalidInputError,
@@ -41,6 +42,8 @@ __all__ = [
     "DetectRequest",
     "DetectedSpan",
     "Detection",
+    "EncoderConfig",
+    "EncoderDetector",
     "FileCache",
     "InMemoryCache",
     "InvalidInputError",

@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import logging
+import time
+from pathlib import Path
 
 import torch
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
-from lettucedetect.datasets.hallucination_dataset import HallucinationDataset
-from lettucedetect.detectors.base import BaseDetector
+from lettucedetect.detectors._deprecation import deprecated
+from lettucedetect.detectors.encoder import (
+    EncoderConfig,
+    EncoderDetector,
+    _finish_load,
+    _log_model_loaded,
+    _resolve_taxonomy,
+    _resolved_commit,
+)
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
 
 logger = logging.getLogger(__name__)
@@ -16,8 +25,13 @@ logger = logging.getLogger(__name__)
 __all__ = ["TransformerDetector"]
 
 
-class TransformerDetector(BaseDetector):
+@deprecated("EncoderDetector.from_pretrained")
+class TransformerDetector(EncoderDetector):
     """Detect hallucinations with a fine-tuned token classifier.
+
+    .. deprecated:: 0.3.0
+        Use :meth:`EncoderDetector.from_pretrained`. ``TransformerDetector`` will be removed
+        in 0.5.0. It is an :class:`EncoderDetector`, so ``detect`` and ``adetect`` work too.
 
     When the combined context + answer exceeds ``max_length`` tokens, the
     context is automatically split into chunks.  Each chunk is scored
@@ -57,390 +71,22 @@ class TransformerDetector(BaseDetector):
             raise ValueError(f"Invalid language. Choose from {', '.join(LANG_TO_PASSAGE)}")
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
-        self.lang, self.max_length = lang, max_length
-        self.batch_size = batch_size
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, **tok_kwargs)
-        self.model = AutoModelForTokenClassification.from_pretrained(model_path, **tok_kwargs)
-        self.device = device or (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        started = time.perf_counter()
+        categories, subcategories = _resolve_taxonomy(taxonomy_head, include_taxonomy)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, **tok_kwargs)
+        model = AutoModelForTokenClassification.from_pretrained(model_path, **tok_kwargs)
+        device, typer = _finish_load(model, device, taxonomy_head, categories, subcategories)
+        version = None if Path(model_path).is_dir() else _resolved_commit(model_path, tok_kwargs)
+        super().__init__(
+            model,
+            tokenizer,
+            typer,
+            config=EncoderConfig(max_length=max_length, batch_size=batch_size, lang=lang),
+            model_id=model_path,
+            model_version=version,
         )
-        self.model.to(self.device).eval()
-        self.typer = None
-        if taxonomy_head is not None:
-            from lettucedetect.detectors.taxonomy_head import TaxonomyTyper, resolve_taxonomy
-
-            categories, subcategories = resolve_taxonomy(include_taxonomy)
-            self.typer = TaxonomyTyper(
-                taxonomy_head,
-                device=self.device,
-                categories=categories,
-                subcategories=subcategories,
-            )
-
-    # ------------------------------------------------------------------
-    # Chunking helpers
-    # ------------------------------------------------------------------
-
-    def _group_passages_into_chunks(
-        self,
-        context: list[str],
-        question: str | None,
-        answer: str,
-    ) -> list[list[str]]:
-        """Group passages into chunks so each chunk, wrapped in the full instruction template, fits in ``max_length``.
-
-        Preserves the instruction template (question, "Bear in mind...", etc.)
-        in every chunk by working at the passage level instead of slicing raw
-        tokens.
-
-        :param context: List of passage strings.
-        :param question: Original question (``None`` for summarisation).
-        :param answer: The answer string (token budget is reserved).
-        :returns: List of passage groups.  Each group will be formatted into a
-            complete prompt via ``PromptUtils.format_context``.
-        """
-        answer_tokens = self.tokenizer(answer, add_special_tokens=False, return_tensors="pt")[
-            "input_ids"
-        ].shape[1]
-        # Total prompt-token budget: max_length minus answer tokens minus 3 special tokens
-        total_budget = self.max_length - answer_tokens - 3
-
-        # Fast path: check whether all passages fit in one prompt.
-        full_prompt = PromptUtils.format_context(context, question, self.lang)
-        full_prompt_tokens = self.tokenizer(
-            full_prompt, add_special_tokens=False, return_tensors="pt"
-        )["input_ids"].shape[1]
-
-        if full_prompt_tokens <= total_budget:
-            return [context]
-
-        # Measure instruction overhead (everything except the passage content).
-        minimal_prompt = PromptUtils.format_context([""], question, self.lang)
-        instruction_overhead = self.tokenizer(
-            minimal_prompt, add_special_tokens=False, return_tensors="pt"
-        )["input_ids"].shape[1]
-
-        passage_budget = total_budget - instruction_overhead
-        if passage_budget <= 0:
-            # Instructions + answer alone exceed max_length; single group, will truncate.
-            return [context]
-
-        # Tokenize each formatted passage line to get its token count.
-        p_word = LANG_TO_PASSAGE[self.lang]
-        passage_token_counts: list[int] = []
-        for i, passage in enumerate(context):
-            line = f"{p_word} {i + 1}: {passage}"
-            tok_count = self.tokenizer(line, add_special_tokens=False, return_tensors="pt")[
-                "input_ids"
-            ].shape[1]
-            passage_token_counts.append(tok_count)
-
-        # Greedily group passages into buckets that fit within the budget.
-        groups: list[list[str]] = []
-        current_group: list[str] = []
-        current_tokens = 0
-
-        for passage, tok_count in zip(context, passage_token_counts):
-            # +1 for the newline separator between passages
-            effective = tok_count + (1 if current_group else 0)
-            if current_tokens + effective > passage_budget and current_group:
-                groups.append(current_group)
-                current_group = []
-                current_tokens = 0
-                effective = tok_count
-            current_group.append(passage)
-            current_tokens += effective
-
-        if current_group:
-            groups.append(current_group)
-
-        return groups if groups else [context]
-
-    # ------------------------------------------------------------------
-    # Shared decoding helper for single-example and batched prediction
-    # ------------------------------------------------------------------
-
-    def _decode_sample(
-        self,
-        input_ids: torch.Tensor,
-        probabilities: torch.Tensor,
-        offsets: torch.Tensor,
-        answer_start_token: int,
-        answer: str,
-        output_format: str,
-    ) -> list:
-        """Decode one sample's model outputs into tokens or spans.
-
-        Shared by the single-example and batched prediction paths so both produce
-        identical output for the same inputs. All tensors must already be trimmed
-        to this sample's true (unpadded) sequence length.
-
-        :param input_ids: Token ids for the sample, shape ``(seq_len,)``.
-        :param probabilities: Softmax probabilities, shape ``(seq_len, num_labels)``.
-        :param offsets: Character offset mapping, shape ``(seq_len, 2)``.
-        :param answer_start_token: Index of the first answer-side token.
-        :param answer: The original answer string.
-        :param output_format: ``"tokens"`` or ``"spans"``.
-        """
-        token_preds = torch.argmax(probabilities, dim=-1)
-
-        if output_format == "tokens":
-            token_probs: list[dict] = []
-            for i in range(answer_start_token, input_ids.size(0)):
-                token_probs.append(
-                    {
-                        "token": self.tokenizer.decode([input_ids[i]]),
-                        "pred": token_preds[i].item(),
-                        "prob": probabilities[i, 1].item(),
-                    }
-                )
-            return token_probs
-
-        # output_format == "spans"
-        if answer_start_token < offsets.size(0):
-            answer_char_offset = offsets[answer_start_token][0].item()
-        else:
-            answer_char_offset = 0
-
-        spans: list[dict] = []
-        current_span: dict | None = None
-
-        for i in range(answer_start_token, token_preds.size(0)):
-            token_start, token_end = offsets[i].tolist()
-            if token_start == token_end:
-                continue
-
-            rel_start = token_start - answer_char_offset
-            rel_end = token_end - answer_char_offset
-
-            is_hallucination = token_preds[i].item() == 1
-            confidence = probabilities[i, 1].item() if is_hallucination else 0.0
-
-            if is_hallucination:
-                if current_span is None:
-                    current_span = {"start": rel_start, "end": rel_end, "confidence": confidence}
-                else:
-                    current_span["end"] = rel_end
-                    current_span["confidence"] = max(current_span["confidence"], confidence)
-            else:
-                if current_span is not None:
-                    current_span["text"] = answer[current_span["start"] : current_span["end"]]
-                    spans.append(current_span)
-                    current_span = None
-
-        if current_span is not None:
-            current_span["text"] = answer[current_span["start"] : current_span["end"]]
-            spans.append(current_span)
-
-        return spans
-
-    # ------------------------------------------------------------------
-    # Single-chunk prediction (the original _predict logic)
-    # ------------------------------------------------------------------
-
-    def _predict_single(self, prompt: str, answer: str, output_format: str) -> list:
-        """Run prediction on a single (prompt, answer) pair that fits in ``max_length``.
-
-        :param prompt: The prompt string.
-        :param answer: The answer string.
-        :param output_format: ``"tokens"`` or ``"spans"``.
-        """
-        encoding, _, offsets, answer_start_token = HallucinationDataset.prepare_tokenized_input(
-            self.tokenizer, prompt, answer, self.max_length
-        )
-
-        encoding = {
-            key: value.to(self.device)
-            for key, value in encoding.items()
-            if key in ["input_ids", "attention_mask", "labels"]
-        }
-
-        with torch.no_grad():
-            outputs = self.model(**encoding)
-        probabilities = torch.softmax(outputs.logits, dim=-1)[0]
-        input_ids = encoding["input_ids"][0]
-
-        return self._decode_sample(
-            input_ids, probabilities, offsets, answer_start_token, answer, output_format
-        )
-
-    # ------------------------------------------------------------------
-    # Batched prediction with one forward pass for many pairs
-    # ------------------------------------------------------------------
-
-    def _predict_batch(
-        self, prompts: list[str], answers: list[str], output_format: str
-    ) -> list[list]:
-        """Tokenize ``prompts``/``answers`` as one padded batch and score them in one pass.
-
-        :param prompts: Prompt strings for this batch (already length-validated
-            against ``answers`` by the caller).
-        :param answers: Answer strings for this batch.
-        :param output_format: ``"tokens"`` or ``"spans"``.
-        :returns: One prediction list per (prompt, answer) pair, in input order.
-        """
-        if self.tokenizer.padding_side != "right":
-            raise ValueError(
-                "TransformerDetector batched inference requires a right-padding tokenizer."
-            )
-
-        batch = self.tokenizer(
-            prompts,
-            answers,
-            truncation="only_first",
-            max_length=self.max_length,
-            padding=True,
-            return_offsets_mapping=True,
-            return_tensors="pt",
-            add_special_tokens=True,
-        )
-        offsets = batch.pop("offset_mapping")
-        seq_lens = batch["attention_mask"].sum(dim=1)
-
-        model_inputs = {
-            key: value.to(self.device)
-            for key, value in batch.items()
-            if key in ["input_ids", "attention_mask"]
-        }
-
-        with torch.no_grad():
-            outputs = self.model(**model_inputs)
-        probabilities = torch.softmax(outputs.logits, dim=-1)
-
-        results: list[list] = []
-        for i, answer in enumerate(answers):
-            seq_len = int(seq_lens[i].item())
-            sequence_ids = batch.sequence_ids(i)
-            answer_start_token = next(
-                (idx for idx, seq_id in enumerate(sequence_ids) if seq_id == 1),
-                seq_len - 1,
-            )
-
-            if seq_len >= self.max_length:
-                logger.warning(
-                    f"predict_prompt_batch: item {i} ({seq_len} tokens) reached "
-                    f"max length ({self.max_length}) and may have been truncated."
-                )
-
-            results.append(
-                self._decode_sample(
-                    batch["input_ids"][i, :seq_len],
-                    probabilities[i, :seq_len],
-                    offsets[i, :seq_len],
-                    answer_start_token,
-                    answer,
-                    output_format,
-                )
-            )
-        return results
-
-    # ------------------------------------------------------------------
-    # Multi-chunk prediction with max() aggregation
-    # ------------------------------------------------------------------
-
-    def _predict_chunked(self, chunk_prompts: list[str], answer: str, output_format: str) -> list:
-        """Run prediction over multiple context chunks and aggregate with ``max()``.
-
-        For each answer token, the hallucination probability is the maximum
-        across all chunks.  This is conservative: a token is only considered
-        supported if *every* chunk considers it supported.
-
-        :param chunk_prompts: Context chunk strings.
-        :param answer: The answer string (same for all chunks).
-        :param output_format: ``"tokens"`` or ``"spans"``.
-        """
-        all_token_results: list[list[dict]] = []
-        for chunk in chunk_prompts:
-            tokens = self._predict_single(chunk, answer, output_format="tokens")
-            all_token_results.append(tokens)
-
-        n_tokens = len(all_token_results[0])
-
-        # Aggregate: max hallucination probability across chunks.
-        aggregated: list[dict] = []
-        for tok_idx in range(n_tokens):
-            max_prob = max(
-                chunk_result[tok_idx]["prob"]
-                for chunk_result in all_token_results
-                if tok_idx < len(chunk_result)
-            )
-            aggregated.append(
-                {
-                    "token": all_token_results[0][tok_idx]["token"],
-                    "pred": 1 if max_prob >= 0.5 else 0,
-                    "prob": max_prob,
-                }
-            )
-
-        if output_format == "tokens":
-            return aggregated
-
-        # For "spans", build character spans from the aggregated token predictions.
-        # Use offset mapping from the first chunk (answer offsets are identical
-        # across chunks because BERT tokenizers process segments independently).
-        return self._build_spans_from_tokens(aggregated, chunk_prompts[0], answer)
-
-    def _build_spans_from_tokens(
-        self, token_results: list[dict], prompt: str, answer: str
-    ) -> list[dict]:
-        """Convert aggregated token predictions into character-level spans.
-
-        Uses the tokenizer offset mapping from encoding *(prompt, answer)* to
-        get precise character positions within the answer.
-
-        :param token_results: Per-answer-token dicts with ``token``, ``pred``, ``prob``.
-        :param prompt: A context prompt string (used to get answer offset mapping).
-        :param answer: The original answer string.
-        :returns: List of span dicts with ``start``, ``end``, ``confidence``, ``text``.
-        """
-        _, _, offsets, answer_start_token = HallucinationDataset.prepare_tokenized_input(
-            self.tokenizer, prompt, answer, self.max_length
-        )
-
-        if answer_start_token < offsets.size(0):
-            answer_char_offset = offsets[answer_start_token][0].item()
-        else:
-            answer_char_offset = 0
-
-        # Collect answer-region offsets (skip special tokens with zero length).
-        answer_offsets: list[tuple[int, int]] = []
-        for i in range(answer_start_token, offsets.size(0)):
-            s, e = offsets[i].tolist()
-            if s == e:
-                continue
-            answer_offsets.append((s - answer_char_offset, e - answer_char_offset))
-
-        spans: list[dict] = []
-        current_span: dict | None = None
-
-        for tok_idx, tok in enumerate(token_results):
-            if tok_idx >= len(answer_offsets):
-                break
-            rel_start, rel_end = answer_offsets[tok_idx]
-            is_hall = tok["pred"] == 1
-            confidence = tok["prob"] if is_hall else 0.0
-
-            if is_hall:
-                if current_span is None:
-                    current_span = {
-                        "start": rel_start,
-                        "end": rel_end,
-                        "confidence": confidence,
-                    }
-                else:
-                    current_span["end"] = rel_end
-                    current_span["confidence"] = max(current_span["confidence"], confidence)
-            else:
-                if current_span is not None:
-                    current_span["text"] = answer[current_span["start"] : current_span["end"]]
-                    spans.append(current_span)
-                    current_span = None
-
-        if current_span is not None:
-            current_span["text"] = answer[current_span["start"] : current_span["end"]]
-            spans.append(current_span)
-
-        return spans
+        self.device = device
+        _log_model_loaded(model_path, version, device, started)
 
     # ------------------------------------------------------------------
     # Public API
@@ -471,16 +117,18 @@ class TransformerDetector(BaseDetector):
             )
         self._validate_min_confidence(min_confidence)
 
-        groups = self._group_passages_into_chunks(context, question, answer)
+        # The tokenizer and model are shared state, so scoring takes the same lock as detect().
+        with self._get_scoring_lock():
+            groups = self._group_passages_into_chunks(context, question, answer)
 
-        if len(groups) == 1:
-            prompt = PromptUtils.format_context(groups[0], question, self.lang)
-            result = self._predict_single(prompt, answer, output_format)
-        else:
-            chunk_prompts = [
-                PromptUtils.format_context(group, question, self.lang) for group in groups
-            ]
-            result = self._predict_chunked(chunk_prompts, answer, output_format)
+            if len(groups) == 1:
+                prompt = PromptUtils.format_context(groups[0], question, self.lang)
+                result = self._predict_single(prompt, answer, output_format)
+            else:
+                chunk_prompts = [
+                    PromptUtils.format_context(group, question, self.lang) for group in groups
+                ]
+                result = self._predict_chunked(chunk_prompts, answer, output_format)
 
         if output_format == "spans" and self.typer is not None:
             result = self.typer.type_spans(answer, "\n".join(context), result)
@@ -508,19 +156,20 @@ class TransformerDetector(BaseDetector):
                 "Use 'tokens' or 'spans'"
             )
         self._validate_min_confidence(min_confidence)
-        # Warn if the input will be truncated.
-        total_tokens = self.tokenizer(prompt, answer, add_special_tokens=True, return_tensors="pt")[
-            "input_ids"
-        ].shape[1]
-        if total_tokens > self.max_length:
-            logger.warning(
-                "predict_prompt: input (%d tokens) exceeds max_length (%d). "
-                "The prompt will be truncated. Use predict() with structured "
-                "passages for automatic chunking.",
-                total_tokens,
-                self.max_length,
-            )
-        spans = self._predict_single(prompt, answer, output_format)
+        with self._get_scoring_lock():
+            # Warn if the input will be truncated.
+            total_tokens = self.tokenizer(
+                prompt, answer, add_special_tokens=True, return_tensors="pt"
+            )["input_ids"].shape[1]
+            if total_tokens > self.max_length:
+                logger.warning(
+                    "predict_prompt: input (%d tokens) exceeds max_length (%d). "
+                    "The prompt will be truncated. Use predict() with structured "
+                    "passages for automatic chunking.",
+                    total_tokens,
+                    self.max_length,
+                )
+            spans = self._predict_single(prompt, answer, output_format)
         if output_format == "spans" and self.typer is not None:
             spans = self.typer.type_spans(answer, prompt, spans)
         return self._filter_spans_by_confidence(spans, output_format, min_confidence)
