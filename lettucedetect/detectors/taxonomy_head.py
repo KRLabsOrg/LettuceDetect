@@ -10,10 +10,24 @@ without a generative model. Labels enter only as text, matching the training set
 
 from __future__ import annotations
 
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
 import torch
 from transformers import AutoModel, AutoTokenizer
 
+from lettucedetect.detectors.encoder import (
+    _LOCK_GUARD,
+    _log_model_loaded,
+    _model_load_error,
+    _resolved_commit,
+)
 from lettucedetect.prompts.generative import CATEGORY_DESCRIPTIONS, SUBCATEGORY_DESCRIPTIONS
+
+logger = logging.getLogger(__name__)
 
 _SEP = " [CTX] "  # answer + _SEP + context; must match the taxonomy-head training script
 
@@ -44,40 +58,113 @@ def resolve_taxonomy(
 
 
 class TaxonomyTyper:
-    """Types spans (category + subcategory) via a label-conditioned encoder."""
+    """Types spans (category + subcategory) via a label-conditioned encoder.
+
+    Built from an encoder and tokenizer the caller already holds, so construction downloads
+    nothing. :meth:`from_pretrained` is where a model name becomes a model.
+
+    Typing runs under one private lock, so concurrent calls on one typer (for example from
+    ``adetect`` worker threads, or from several detectors sharing it) run one at a time.
+
+    :param encoder: the label-conditioned encoder, ready for inference (it is not moved or
+        switched to eval mode).
+    :param tokenizer: the encoder's fast tokenizer.
+    :param categories: custom ``{name: description}`` category labels; REPLACES the frozen
+        set (labels enter only as text, so held-out labels type zero-shot from their
+        description). ``None`` keeps the trained taxonomy.
+    :param subcategories: custom subcategory labels, same semantics.
+    :param max_length: max tokens for the ``answer + context`` input.
+    :param model_id: id reported in ``usage``.
+    :param model_version: version reported in ``usage``.
+    """
+
+    model_id: str | None = None
+    model_version: str | None = None
 
     def __init__(
         self,
-        model_path: str,
-        device: torch.device | str | None = None,
-        max_length: int = 1024,
+        encoder: Any,  # noqa: ANN401
+        tokenizer: Any,  # noqa: ANN401
+        *,
         categories: dict[str, str] | None = None,
         subcategories: dict[str, str] | None = None,
-        **tok_kwargs: object,
+        max_length: int = 1024,
+        model_id: str | None = None,
+        model_version: str | None = None,
     ) -> None:
-        """Load the typing encoder and pre-compute taxonomy-label embeddings.
-
-        :param model_path: Path or HF id of the label-conditioned encoder.
-        :param device: Device for inference (defaults to CUDA when available).
-        :param max_length: Max tokens for the ``answer + context`` input.
-        :param categories: Custom ``{name: description}`` category labels; REPLACES the
-            frozen set (labels enter only as text, so held-out labels type zero-shot from
-            their description). ``None`` keeps the trained taxonomy.
-        :param subcategories: Custom subcategory labels, same semantics.
-        :param tok_kwargs: Extra arguments for the tokenizer / model loaders.
-        """
-        self.device = device or (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        )
+        """Build the typer from loaded objects and pre-compute taxonomy-label embeddings."""
+        device = getattr(encoder, "device", None)
+        self.device = device if isinstance(device, torch.device) else torch.device("cpu")
         self.max_length = max_length
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, **tok_kwargs)
-        self.encoder = AutoModel.from_pretrained(model_path, **tok_kwargs).to(self.device).eval()
+        self.tokenizer = tokenizer
+        self.encoder = encoder
+        self.model_id = model_id
+        self.model_version = model_version
         cats = categories if categories is not None else CATEGORY_DESCRIPTIONS
         subs = subcategories if subcategories is not None else SUBCATEGORY_DESCRIPTIONS
         self.cat_names = list(cats)
         self.sub_names = list(subs)
         self._cat_vecs = self._label_vecs(self.cat_names, cats)
         self._sub_vecs = self._label_vecs(self.sub_names, subs)
+        logger.debug(
+            "taxonomy typer built: model_id=%s categories=%d subcategories=%d max_length=%d "
+            "device=%s",
+            model_id,
+            len(self.cat_names),
+            len(self.sub_names),
+            max_length,
+            self.device,
+        )
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        model_id: str,
+        *,
+        device: torch.device | str | None = None,
+        categories: dict[str, str] | None = None,
+        subcategories: dict[str, str] | None = None,
+        model_version: str | None = None,
+        **loader_kwargs: Any,  # noqa: ANN401
+    ) -> TaxonomyTyper:
+        """Load the encoder and tokenizer for ``model_id`` and build the typer.
+
+        Like :meth:`EncoderDetector.from_pretrained`, this may download, unless the caller set
+        ``HF_HUB_OFFLINE`` (this method neither reads nor sets it).
+
+        :param model_id: Hugging Face id or local directory of the label-conditioned encoder.
+        :param device: device for the encoder; CUDA when available, else CPU, when ``None``.
+        :param categories: custom category labels, see the class docstring.
+        :param subcategories: custom subcategory labels.
+        :param model_version: version reported in ``usage`` for a local path. For a hub id the
+            resolved commit is used and this is only the fallback.
+        :param loader_kwargs: passed to both ``from_pretrained`` loaders.
+        :raises UpstreamError: (``model_load_failed``) a hub model could not be loaded.
+        :raises ConfigurationError: (``model_load_failed``) a local model could not be loaded.
+        """
+        is_local = Path(model_id).is_dir()
+        started = time.perf_counter()
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_id, **loader_kwargs)
+            encoder = AutoModel.from_pretrained(model_id, **loader_kwargs)
+        except OSError as exc:
+            raise _model_load_error(model_id, is_local) from exc
+        device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        encoder = encoder.to(device).eval()
+        version = model_version
+        if not is_local:
+            version = _resolved_commit(model_id, loader_kwargs) or model_version
+        typer = cls(
+            encoder,
+            tokenizer,
+            categories=categories,
+            subcategories=subcategories,
+            model_id=model_id,
+            model_version=version,
+        )
+        typer.device = device
+        _log_model_loaded(model_id, version, device, started, logger)
+        return typer
 
     @torch.no_grad()
     def _label_vecs(self, names: list[str], descs: dict) -> torch.Tensor:
@@ -92,6 +179,17 @@ class TaxonomyTyper:
         m = enc.attention_mask.unsqueeze(-1).float()
         return torch.nn.functional.normalize((h * m).sum(1) / m.sum(1).clamp(min=1), dim=-1)
 
+    def _get_scoring_lock(self) -> threading.RLock:
+        """Return the typing lock, creating it on first use (not in ``__init__``)."""
+        lock = vars(self).get("_scoring_lock")
+        if lock is None:
+            with _LOCK_GUARD:
+                lock = vars(self).get("_scoring_lock")
+                if lock is None:
+                    lock = threading.RLock()
+                    self._scoring_lock = lock
+        return lock
+
     @torch.no_grad()
     def type_spans(self, answer: str, context: str, spans: list[dict]) -> list[dict]:
         """Attach ``category`` and ``subcategory`` to each span (offsets relative to ``answer``).
@@ -103,18 +201,20 @@ class TaxonomyTyper:
         """
         if not spans:
             return spans
-        enc = self.tokenizer(
-            answer + _SEP + (context or ""),
-            truncation=True,
-            max_length=self.max_length,
-            return_offsets_mapping=True,
-            return_tensors="pt",
-        )
-        offs = enc.pop("offset_mapping")[0].tolist()
-        h = self.encoder(
-            input_ids=enc.input_ids.to(self.device),
-            attention_mask=enc.attention_mask.to(self.device),
-        ).last_hidden_state.float()[0]
+        # The tokenizer and encoder are shared state; everything after this block is local.
+        with self._get_scoring_lock():
+            enc = self.tokenizer(
+                answer + _SEP + (context or ""),
+                truncation=True,
+                max_length=self.max_length,
+                return_offsets_mapping=True,
+                return_tensors="pt",
+            )
+            offs = enc.pop("offset_mapping")[0].tolist()
+            h = self.encoder(
+                input_ids=enc.input_ids.to(self.device),
+                attention_mask=enc.attention_mask.to(self.device),
+            ).last_hidden_state.float()[0]
         for sp in spans:
             s, e = sp["start"], sp["end"]
             mask = torch.tensor(

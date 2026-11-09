@@ -62,16 +62,51 @@ def _resolve_taxonomy(
     return resolve_taxonomy(include_taxonomy)
 
 
+def _model_load_error(model_id: str, is_local: bool) -> ConfigurationError | UpstreamError:
+    """Build the error for a model that could not be loaded; the caller chains the cause.
+
+    A local path is the caller's configuration, a hub id is an upstream failure. The message
+    never carries the loader's own text, which may hold paths or tokens.
+    """
+    if is_local:
+        return ConfigurationError(
+            "The model could not be loaded from the local path. Check that model_id "
+            "is a directory with a saved model and tokenizer.",
+            code="model_load_failed",
+            param="model_id",
+        )
+    return UpstreamError(
+        f"The model {model_id!r} could not be loaded. Check the id, the network or "
+        "HF_HUB_OFFLINE setting and your access to the repository.",
+        code="model_load_failed",
+        service="huggingface",
+    )
+
+
+# Loader options that say where and how to reach the Hugging Face cache. They describe the
+# environment, not one repository, so the typing head is loaded with the same ones. ``revision``
+# is left out on purpose: it names a revision of the encoder's repository, not of the head's.
+_HEAD_LOADER_KWARGS = ("cache_dir", "local_files_only", "token")
+
+
+def _head_loader_kwargs(loader_kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Pick the loader options the typing head shares with the encoder."""
+    return {key: loader_kwargs[key] for key in _HEAD_LOADER_KWARGS if key in loader_kwargs}
+
+
 def _finish_load(
     model: Any,  # noqa: ANN401
     device: torch.device | str | None,
     taxonomy_head: str | None,
     categories: dict | None,
     subcategories: dict | None,
+    loader_kwargs: dict[str, Any] | None = None,
 ) -> tuple[torch.device, Any]:
     """Move the model to the device, set eval mode and load the typer, if any.
 
     Shared by ``EncoderDetector.from_pretrained`` and the deprecated ``TransformerDetector``.
+    ``loader_kwargs`` are the caller's loader options; only the cache location and access
+    options reach the typing head.
     """
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     model.to(device)
@@ -80,17 +115,28 @@ def _finish_load(
     if taxonomy_head is not None:
         from lettucedetect.detectors.taxonomy_head import TaxonomyTyper
 
-        typer = TaxonomyTyper(
-            taxonomy_head, device=device, categories=categories, subcategories=subcategories
+        typer = TaxonomyTyper.from_pretrained(
+            taxonomy_head,
+            device=device,
+            categories=categories,
+            subcategories=subcategories,
+            **_head_loader_kwargs(loader_kwargs or {}),
         )
     return device, typer
 
 
 def _log_model_loaded(
-    model_id: str, version: str | None, device: torch.device, started: float
+    model_id: str,
+    version: str | None,
+    device: torch.device,
+    started: float,
+    module_logger: logging.Logger | None = None,
 ) -> None:
-    """Log the ``model_loaded`` event: ids and timing only, never customer text."""
-    logger.info(
+    """Log the ``model_loaded`` event: ids and timing only, never customer text.
+
+    :param module_logger: the calling module's logger, this module's logger when ``None``.
+    """
+    (module_logger or logger).info(
         "model loaded: model_id=%s model_version=%s device=%s load_seconds=%.1f",
         model_id,
         version,
@@ -256,20 +302,10 @@ class EncoderDetector(BaseDetector):
             tokenizer = AutoTokenizer.from_pretrained(model_id, **loader_kwargs)
             model = AutoModelForTokenClassification.from_pretrained(model_id, **loader_kwargs)
         except OSError as exc:
-            if is_local:
-                raise ConfigurationError(
-                    "The model could not be loaded from the local path. Check that model_id "
-                    "is a directory with a saved model and tokenizer.",
-                    code="model_load_failed",
-                    param="model_id",
-                ) from exc
-            raise UpstreamError(
-                f"The model {model_id!r} could not be loaded. Check the id, the network or "
-                "HF_HUB_OFFLINE setting and your access to the repository.",
-                code="model_load_failed",
-                service="huggingface",
-            ) from exc
-        device, typer = _finish_load(model, device, taxonomy_head, categories, subcategories)
+            raise _model_load_error(model_id, is_local) from exc
+        device, typer = _finish_load(
+            model, device, taxonomy_head, categories, subcategories, loader_kwargs
+        )
         version = model_version
         if not is_local:
             version = _resolved_commit(model_id, loader_kwargs) or model_version
