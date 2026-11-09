@@ -123,6 +123,9 @@ def _facade_outputs(detector) -> dict:
     return out
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 class TestFacade:
     """``HallucinationDetector`` returns exactly what the detector alone returns."""
 

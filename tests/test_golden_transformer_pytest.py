@@ -18,6 +18,10 @@ import torch
 from lettucedetect.detectors.transformer import TransformerDetector
 from tests.golden import assert_golden
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
 FORMATS = ["tokens", "spans"]
 MULTI_MAX_LENGTH = 90
 

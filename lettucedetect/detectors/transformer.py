@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import logging
+import time
+from pathlib import Path
 
 import torch
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
-from lettucedetect.detectors.encoder import EncoderDetector
+from lettucedetect.detectors._deprecation import deprecated
+from lettucedetect.detectors.encoder import (
+    EncoderConfig,
+    EncoderDetector,
+    _finish_load,
+    _log_model_loaded,
+    _resolve_taxonomy,
+    _resolved_commit,
+)
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
 
 logger = logging.getLogger(__name__)
@@ -15,8 +25,13 @@ logger = logging.getLogger(__name__)
 __all__ = ["TransformerDetector"]
 
 
+@deprecated("EncoderDetector.from_pretrained")
 class TransformerDetector(EncoderDetector):
     """Detect hallucinations with a fine-tuned token classifier.
+
+    .. deprecated:: 0.3.0
+        Use :meth:`EncoderDetector.from_pretrained`. ``TransformerDetector`` will be removed
+        in 0.5.0. It is an :class:`EncoderDetector`, so ``detect`` and ``adetect`` work too.
 
     When the combined context + answer exceeds ``max_length`` tokens, the
     context is automatically split into chunks.  Each chunk is scored
@@ -56,25 +71,22 @@ class TransformerDetector(EncoderDetector):
             raise ValueError(f"Invalid language. Choose from {', '.join(LANG_TO_PASSAGE)}")
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
-        self.lang, self.max_length = lang, max_length
-        self.batch_size = batch_size
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, **tok_kwargs)
-        self.model = AutoModelForTokenClassification.from_pretrained(model_path, **tok_kwargs)
-        self.device = device or (
-            torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        started = time.perf_counter()
+        categories, subcategories = _resolve_taxonomy(taxonomy_head, include_taxonomy)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, **tok_kwargs)
+        model = AutoModelForTokenClassification.from_pretrained(model_path, **tok_kwargs)
+        device, typer = _finish_load(model, device, taxonomy_head, categories, subcategories)
+        version = None if Path(model_path).is_dir() else _resolved_commit(model_path, tok_kwargs)
+        super().__init__(
+            model,
+            tokenizer,
+            typer,
+            config=EncoderConfig(max_length=max_length, batch_size=batch_size, lang=lang),
+            model_id=model_path,
+            model_version=version,
         )
-        self.model.to(self.device).eval()
-        self.typer = None
-        if taxonomy_head is not None:
-            from lettucedetect.detectors.taxonomy_head import TaxonomyTyper, resolve_taxonomy
-
-            categories, subcategories = resolve_taxonomy(include_taxonomy)
-            self.typer = TaxonomyTyper(
-                taxonomy_head,
-                device=self.device,
-                categories=categories,
-                subcategories=subcategories,
-            )
+        self.device = device
+        _log_model_loaded(model_path, version, device, started)
 
     # ------------------------------------------------------------------
     # Public API
@@ -105,16 +117,18 @@ class TransformerDetector(EncoderDetector):
             )
         self._validate_min_confidence(min_confidence)
 
-        groups = self._group_passages_into_chunks(context, question, answer)
+        # The tokenizer and model are shared state, so scoring takes the same lock as detect().
+        with self._get_scoring_lock():
+            groups = self._group_passages_into_chunks(context, question, answer)
 
-        if len(groups) == 1:
-            prompt = PromptUtils.format_context(groups[0], question, self.lang)
-            result = self._predict_single(prompt, answer, output_format)
-        else:
-            chunk_prompts = [
-                PromptUtils.format_context(group, question, self.lang) for group in groups
-            ]
-            result = self._predict_chunked(chunk_prompts, answer, output_format)
+            if len(groups) == 1:
+                prompt = PromptUtils.format_context(groups[0], question, self.lang)
+                result = self._predict_single(prompt, answer, output_format)
+            else:
+                chunk_prompts = [
+                    PromptUtils.format_context(group, question, self.lang) for group in groups
+                ]
+                result = self._predict_chunked(chunk_prompts, answer, output_format)
 
         if output_format == "spans" and self.typer is not None:
             result = self.typer.type_spans(answer, "\n".join(context), result)
@@ -142,19 +156,20 @@ class TransformerDetector(EncoderDetector):
                 "Use 'tokens' or 'spans'"
             )
         self._validate_min_confidence(min_confidence)
-        # Warn if the input will be truncated.
-        total_tokens = self.tokenizer(prompt, answer, add_special_tokens=True, return_tensors="pt")[
-            "input_ids"
-        ].shape[1]
-        if total_tokens > self.max_length:
-            logger.warning(
-                "predict_prompt: input (%d tokens) exceeds max_length (%d). "
-                "The prompt will be truncated. Use predict() with structured "
-                "passages for automatic chunking.",
-                total_tokens,
-                self.max_length,
-            )
-        spans = self._predict_single(prompt, answer, output_format)
+        with self._get_scoring_lock():
+            # Warn if the input will be truncated.
+            total_tokens = self.tokenizer(
+                prompt, answer, add_special_tokens=True, return_tensors="pt"
+            )["input_ids"].shape[1]
+            if total_tokens > self.max_length:
+                logger.warning(
+                    "predict_prompt: input (%d tokens) exceeds max_length (%d). "
+                    "The prompt will be truncated. Use predict() with structured "
+                    "passages for automatic chunking.",
+                    total_tokens,
+                    self.max_length,
+                )
+            spans = self._predict_single(prompt, answer, output_format)
         if output_format == "spans" and self.typer is not None:
             spans = self.typer.type_spans(answer, prompt, spans)
         return self._filter_spans_by_confidence(spans, output_format, min_confidence)

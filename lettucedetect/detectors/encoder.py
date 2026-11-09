@@ -51,6 +51,55 @@ def _resolved_commit(model_id: str, loader_kwargs: dict[str, Any]) -> str | None
 _LOCK_GUARD = threading.Lock()
 
 
+def _resolve_taxonomy(
+    taxonomy_head: str | None, include_taxonomy: bool | list | dict
+) -> tuple[dict | None, dict | None]:
+    """Resolve the label set of the typing head; ``(None, None)`` without a head."""
+    if taxonomy_head is None:
+        return None, None
+    from lettucedetect.detectors.taxonomy_head import resolve_taxonomy
+
+    return resolve_taxonomy(include_taxonomy)
+
+
+def _finish_load(
+    model: Any,  # noqa: ANN401
+    device: torch.device | str | None,
+    taxonomy_head: str | None,
+    categories: dict | None,
+    subcategories: dict | None,
+) -> tuple[torch.device, Any]:
+    """Move the model to the device, set eval mode and load the typer, if any.
+
+    Shared by ``EncoderDetector.from_pretrained`` and the deprecated ``TransformerDetector``.
+    """
+    device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    model.to(device)
+    model.eval()
+    typer = None
+    if taxonomy_head is not None:
+        from lettucedetect.detectors.taxonomy_head import TaxonomyTyper
+
+        typer = TaxonomyTyper(
+            taxonomy_head, device=device, categories=categories, subcategories=subcategories
+        )
+    return device, typer
+
+
+def _log_model_loaded(
+    model_id: str, version: str | None, device: torch.device, started: float
+) -> None:
+    """Log the ``model_loaded`` event: ids and timing only, never customer text."""
+    logger.info(
+        "model loaded: model_id=%s model_version=%s device=%s load_seconds=%.1f",
+        model_id,
+        version,
+        device,
+        time.perf_counter() - started,
+        extra={"event": "model_loaded"},
+    )
+
+
 class EncoderConfig(BaseModel):
     """Options of an :class:`EncoderDetector`.
 
@@ -200,11 +249,7 @@ class EncoderDetector(BaseDetector):
         :raises UpstreamError: (``model_load_failed``) a hub model could not be loaded.
         :raises ConfigurationError: (``model_load_failed``) a local model could not be loaded.
         """
-        categories = subcategories = None
-        if taxonomy_head is not None:
-            from lettucedetect.detectors.taxonomy_head import resolve_taxonomy
-
-            categories, subcategories = resolve_taxonomy(include_taxonomy)
+        categories, subcategories = _resolve_taxonomy(taxonomy_head, include_taxonomy)
         is_local = Path(model_id).is_dir()
         started = time.perf_counter()
         try:
@@ -224,23 +269,14 @@ class EncoderDetector(BaseDetector):
                 code="model_load_failed",
                 service="huggingface",
             ) from exc
-        device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        model.to(device)
-        model.eval()
-        typer = None
-        if taxonomy_head is not None:
-            from lettucedetect.detectors.taxonomy_head import TaxonomyTyper
-
-            typer = TaxonomyTyper(
-                taxonomy_head,
-                device=device,
-                categories=categories,
-                subcategories=subcategories,
-            )
+        device, typer = _finish_load(model, device, taxonomy_head, categories, subcategories)
         version = model_version
         if not is_local:
             version = _resolved_commit(model_id, loader_kwargs) or model_version
-        detector = cls(
+        # ``__new__`` plus the base ``__init__``: a subclass with its own ``__init__`` still works.
+        detector = cls.__new__(cls)
+        EncoderDetector.__init__(
+            detector,
             model,
             tokenizer,
             typer,
@@ -249,14 +285,7 @@ class EncoderDetector(BaseDetector):
             model_version=version,
         )
         detector.device = device
-        logger.info(
-            "model loaded: model_id=%s model_version=%s device=%s load_seconds=%.1f",
-            model_id,
-            version,
-            device,
-            time.perf_counter() - started,
-            extra={"event": "model_loaded"},
-        )
+        _log_model_loaded(model_id, version, device, started)
         return detector
 
     # ------------------------------------------------------------------
