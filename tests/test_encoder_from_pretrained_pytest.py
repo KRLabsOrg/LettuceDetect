@@ -146,13 +146,13 @@ def test_taxonomy_head_loads_the_typer_with_the_device(loaders):
             taxonomy_head="org/head",
             include_taxonomy={"Fabricated": "Made up facts"},
         )
-    typer_class.assert_called_once_with(
+    typer_class.from_pretrained.assert_called_once_with(
         "org/head",
         device=torch.device("cpu"),
         categories={"Fabricated": "Made up facts"},
         subcategories=None,
     )
-    assert detector.typer is typer_class.return_value
+    assert detector.typer is typer_class.from_pretrained.return_value
 
 
 def test_no_taxonomy_head_means_no_typer(loaders):

@@ -500,3 +500,177 @@ class TestEncoderDetectorContract(DetectorContract):
     def make_detector(self, on_call=None):
         """Build a detector whose stub model calls ``on_call`` in its forward pass."""
         return _detector(self.tokenizer, on_call=on_call)
+
+
+# -- typed spans and typer usage ------------------------------------------------------------
+
+TYPER_ID, TYPER_VERSION = "stub-typer", "c0ffee"
+ZERO_SPAN_REQUEST = PromptInput(prompt="the capital of france is paris .", answer="the")
+
+
+class _Typer:
+    """A stub typer: tags each span from its text and context, and records its calls."""
+
+    model_id = TYPER_ID
+    model_version = TYPER_VERSION
+
+    def __init__(self, delay: float = 0.0, error: Exception | None = None) -> None:
+        self.delay, self.error = delay, error
+        self.calls: list[tuple[str, str, int]] = []
+        self.threads: list[int] = []
+
+    def type_spans(self, answer, context, spans):
+        self.threads.append(threading.get_ident())
+        self.calls.append((answer, context, len(spans)))
+        if self.error is not None:
+            raise self.error
+        if self.delay:
+            time.sleep(self.delay)
+        for span in spans:
+            span["category"] = f"CAT[{span['text']}]"
+            span["subcategory"] = f"SUB[{len(context)}]"
+        return spans
+
+
+def _typed(tokenizer, typer=None, **kwargs) -> EncoderDetector:
+    return EncoderDetector(
+        _stub_model(),
+        tokenizer,
+        typer if typer is not None else _Typer(),
+        config=EncoderConfig(max_length=512),
+        model_id="stub-encoder",
+        **kwargs,
+    )
+
+
+def test_every_span_is_typed_with_a_typer_and_untyped_without(local_wordpiece_tokenizer):
+    request = _sources(*PREDICT_INPUTS[0])
+    typed = _typed(local_wordpiece_tokenizer).detect(request).spans
+    untyped = _detector(local_wordpiece_tokenizer).detect(request).spans
+    assert typed and len(typed) == len(untyped)
+    assert all(s.category == f"CAT[{s.text}]" and s.subcategory for s in typed)
+    assert all(s.category is None and s.subcategory is None for s in untyped)
+    # Typing adds the two labels and changes nothing else.
+    assert [s.model_dump(exclude={"category", "subcategory"}) for s in typed] == [
+        s.model_dump(exclude={"category", "subcategory"}) for s in untyped
+    ]
+
+
+def test_typer_reads_the_joined_sources_or_the_prompt(local_wordpiece_tokenizer):
+    typer = _Typer()
+    det = _typed(local_wordpiece_tokenizer, typer)
+    det.detect(_sources(["the capital", "of france"], "paris is the capital ."))
+    det.detect(PromptInput(prompt=PROMPTS[0], answer=ANSWERS[0]))
+    assert [(answer, context) for answer, context, _ in typer.calls] == [
+        ("paris is the capital .", "the capital\nof france"),
+        (ANSWERS[0], PROMPTS[0]),
+    ]
+
+
+def test_usage_has_the_encoder_and_the_typer_with_its_span_count(local_wordpiece_tokenizer):
+    result = _typed(local_wordpiece_tokenizer).detect(_sources(*PREDICT_INPUTS[0]))
+    encoder, typer = result.usage
+    assert (encoder.model_id, encoder.model_version) == ("stub-encoder", None)
+    assert (typer.model_id, typer.model_version) == (TYPER_ID, TYPER_VERSION)
+    assert typer.units == {"spans": len(result.spans)} and result.spans
+
+
+def test_usage_has_one_entry_without_a_typer(local_wordpiece_tokenizer):
+    assert len(_detector(local_wordpiece_tokenizer).detect(_sources(*PREDICT_INPUTS[0])).usage) == 1
+
+
+def test_typer_usage_reports_zero_spans_when_nothing_is_flagged(local_wordpiece_tokenizer):
+    typer = _Typer()
+    result = _typed(local_wordpiece_tokenizer, typer).detect(ZERO_SPAN_REQUEST)
+    assert result.spans == []
+    assert [u.model_id for u in result.usage] == ["stub-encoder", TYPER_ID]
+    assert result.usage[1].units == {"spans": 0}
+    assert typer.calls == []  # nothing to type, so the typer is not called
+
+
+def test_a_typer_without_ids_is_metered_with_none(local_wordpiece_tokenizer):
+    class Bare:
+        def type_spans(self, answer, context, spans):
+            for span in spans:
+                span["category"], span["subcategory"] = "c", "s"
+            return spans
+
+    typer_usage = _typed(local_wordpiece_tokenizer, Bare()).detect(_sources(*PREDICT_INPUTS[0]))
+    assert (typer_usage.usage[1].model_id, typer_usage.usage[1].model_version) == (None, None)
+
+
+def test_the_typer_meters_spans_before_min_score_filters_them(local_wordpiece_tokenizer):
+    det = _typed(local_wordpiece_tokenizer)
+    request = TestEncoderDetectorContract.sources_request
+    everything = det.detect(request)
+    top = max(s.score for s in everything.spans)
+    kept = det.detect(request, min_score=top)
+    assert 0 < len(kept.spans) < len(everything.spans)
+    assert kept.usage[1].units == everything.usage[1].units == {"spans": len(everything.spans)}
+    assert all(s.category for s in kept.spans)
+
+
+async def test_adetect_on_a_typed_detector_equals_detect(local_wordpiece_tokenizer):
+    typer = _Typer()
+    det = _typed(local_wordpiece_tokenizer, typer)
+    for request in (
+        _sources(*PREDICT_INPUTS[0]),
+        PromptInput(prompt=PROMPTS[0], answer=ANSWERS[0]),
+        ZERO_SPAN_REQUEST,
+    ):
+        asynchronous = await det.adetect(request)
+        assert asynchronous == det.detect(request)
+        assert len(asynchronous.usage) == 2
+    assert threading.get_ident() not in typer.threads[:1]  # the first (async) call ran off-loop
+
+
+async def test_a_slow_typer_does_not_block_the_event_loop(local_wordpiece_tokenizer):
+    det = _typed(local_wordpiece_tokenizer, _Typer(delay=0.3))
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while True:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    task = asyncio.create_task(ticker())
+    result = await det.adetect(_sources(*PREDICT_INPUTS[0]))
+    task.cancel()
+    assert result.spans and ticks >= 10
+
+
+def test_a_failing_typer_raises_instead_of_returning_untyped_spans(local_wordpiece_tokenizer):
+    det = _typed(local_wordpiece_tokenizer, _Typer(error=RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        det.detect(_sources(*PREDICT_INPUTS[0]))
+
+
+def test_a_typed_call_logs_no_customer_text(local_wordpiece_tokenizer, caplog):
+    caplog.set_level(logging.DEBUG)
+    _typed(local_wordpiece_tokenizer).detect(
+        PromptInput(prompt="the capital of france is paris .", answer="paris is the capital")
+    )
+    assert "paris is the capital" not in caplog.text
+    assert "france is paris" not in caplog.text
+
+
+class TestTypedEncoderDetectorContract(TestEncoderDetectorContract):
+    """The detector contract suite, run against an EncoderDetector with a stub typer."""
+
+    def make_detector(self, on_call=None):
+        """Build a typed detector whose stub model calls ``on_call`` in its forward pass."""
+        return EncoderDetector(
+            _stub_model(on_call=on_call),
+            self.tokenizer,
+            _Typer(),
+            config=EncoderConfig(max_length=512),
+            model_id="stub-encoder",
+        )
+
+    def test_every_span_is_typed(self):
+        """Every span of both request kinds carries both labels."""
+        detector = self.make_detector()
+        for request in self._requests():
+            spans = detector.detect(request).spans
+            assert spans and all(s.category and s.subcategory for s in spans)

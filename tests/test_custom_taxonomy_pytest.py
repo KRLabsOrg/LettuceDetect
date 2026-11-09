@@ -211,7 +211,7 @@ class TestTaxonomyTyperCustomLabels:
         monkeypatch.setattr(
             th, "AutoModel", type("M", (), {"from_pretrained": lambda *a, **k: StubModel()})
         )
-        typer = th.TaxonomyTyper(
+        typer = th.TaxonomyTyper.from_pretrained(
             "stub", device="cpu", categories=CUSTOM_CATS, subcategories=CUSTOM_SUBS
         )
         assert typer.cat_names == ["pricing_claim"]

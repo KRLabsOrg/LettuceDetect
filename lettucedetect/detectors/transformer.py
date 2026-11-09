@@ -75,7 +75,9 @@ class TransformerDetector(EncoderDetector):
         categories, subcategories = _resolve_taxonomy(taxonomy_head, include_taxonomy)
         tokenizer = AutoTokenizer.from_pretrained(model_path, **tok_kwargs)
         model = AutoModelForTokenClassification.from_pretrained(model_path, **tok_kwargs)
-        device, typer = _finish_load(model, device, taxonomy_head, categories, subcategories)
+        device, typer = _finish_load(
+            model, device, taxonomy_head, categories, subcategories, tok_kwargs
+        )
         version = None if Path(model_path).is_dir() else _resolved_commit(model_path, tok_kwargs)
         super().__init__(
             model,

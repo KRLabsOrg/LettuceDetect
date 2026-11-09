@@ -16,6 +16,7 @@ import pytest
 import torch
 
 from lettucedetect.detectors.transformer import TransformerDetector
+from lettucedetect.detectors.types import Chunk, PromptInput, SourcesInput
 from tests.golden import assert_golden
 
 pytestmark = pytest.mark.filterwarnings(
@@ -159,3 +160,25 @@ class TestTransformerTypedSpansGolden:
                 "predict_prompt_batch": _predict_prompt_batch(detector, "spans"),
             },
         )
+
+    def test_detect_types_spans_like_predict(self, detector):
+        """``detect`` and ``predict`` hand the typer the same context, so labels agree."""
+        detector.typer = _StubTyper()
+        for context, answer, question in PREDICT_INPUTS:
+            request = SourcesInput(
+                sources=[Chunk(id=str(i), text=t) for i, t in enumerate(context)],
+                answer=answer,
+                question=question,
+            )
+            typed = detector.predict(context, answer, question, output_format="spans")
+            spans = detector.detect(request).spans
+            assert typed
+            assert [(s.start, s.end, s.category, s.subcategory) for s in spans] == [
+                (d["start"], d["end"], d["category"], d["subcategory"]) for d in typed
+            ]
+        for prompt, answer in zip(PROMPTS, ANSWERS, strict=True):
+            typed = detector.predict_prompt(prompt, answer, output_format="spans")
+            spans = detector.detect(PromptInput(prompt=prompt, answer=answer)).spans
+            assert [(s.category, s.subcategory) for s in spans] == [
+                (d["category"], d["subcategory"]) for d in typed
+            ]
