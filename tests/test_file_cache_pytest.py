@@ -121,6 +121,9 @@ class TestConstruction:
         assert path.read_bytes() == before
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 class TestFileFormat:
     """The file is compatible with ``CacheManager`` and stores TTL entries as a pair."""
 

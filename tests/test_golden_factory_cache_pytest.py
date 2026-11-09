@@ -196,6 +196,9 @@ class TestFacade:
         assert_golden("facade_rag_fact_checker", results)
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 class TestCacheManager:
     """The cache file format and the key strings the LLM detector builds."""
 

@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import hashlib
 import logging
 import math
 import threading
 import time
 from typing import Literal, Protocol, runtime_checkable
 
-from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.errors import InvalidInputError
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,14 @@ class ResponseCache(Protocol):
         ...
 
 
+def _hash_parts(*parts: str) -> str:
+    """Return the SHA-256 hex digest of ``parts`` joined by ``||``.
+
+    This is the hash ``CacheManager`` has always used, so existing cache files stay valid.
+    """
+    return hashlib.sha256("||".join(parts).encode()).hexdigest()
+
+
 def make_cache_key(
     prompt: str,
     model: str,
@@ -101,7 +109,7 @@ def make_cache_key(
     if model_version is not None:
         # Prefixed, so a version can never read as a kind ("native") and collide with its key.
         parts.append(f"model_version={model_version}")
-    return CacheManager._hash(*parts)
+    return _hash_parts(*parts)
 
 
 def _validate_ttl(ttl_seconds: float | None) -> None:

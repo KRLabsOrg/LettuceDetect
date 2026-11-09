@@ -48,19 +48,6 @@ def _is_expired(entry: object, now: float) -> bool:
     return _is_ttl_entry(entry) and now >= entry["expires_at"]  # type: ignore[index]
 
 
-def _read_value(entry: object, now: float) -> str | None:
-    """Return the string an entry holds, or ``None`` for a miss.
-
-    Entries of any other shape (such as the dict replies ``CacheManager`` holds for the LLM
-    detector) are a miss: a ``ResponseCache`` holds strings only.
-    """
-    if isinstance(entry, str):
-        return entry
-    if _is_ttl_entry(entry) and not _is_expired(entry, now):
-        return entry["value"]  # type: ignore[index]
-    return None
-
-
 class FileCache(SyncCacheBase):
     """A ``ResponseCache`` stored in one JSON file, for **a single process**.
 
@@ -96,7 +83,19 @@ class FileCache(SyncCacheBase):
     def get(self, key: str) -> str | None:
         """Return the value stored under ``key``, or ``None`` if it is missing or expired."""
         with self._lock:
-            return _read_value(self._load().get(key), time.time())
+            return self._decode(self._load().get(key), time.time())
+
+    def _decode(self, entry: object, now: float) -> Any:  # noqa: ANN401
+        """Return the string an entry holds, or ``None`` for a miss.
+
+        Entries of any other shape (such as the dict replies an old ``CacheManager`` file may
+        hold) are a miss: a ``ResponseCache`` holds strings only.
+        """
+        if isinstance(entry, str):
+            return entry
+        if _is_ttl_entry(entry) and not _is_expired(entry, now):
+            return entry["value"]  # type: ignore[index]  # ty: ignore[not-subscriptable]
+        return None
 
     def set(self, key: str, value: str, *, ttl_seconds: float | None = None) -> None:
         """Store ``value`` under ``key`` and write the file atomically.
