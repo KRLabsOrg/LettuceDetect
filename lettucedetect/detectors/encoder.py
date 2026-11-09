@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Any
 
 import torch
@@ -17,7 +18,9 @@ from lettucedetect.detectors.types import (
     DetectedSpan,
     Detection,
     DetectRequest,
+    ResultWarning,
     SourcesInput,
+    TokenScore,
     Usage,
 )
 
@@ -113,6 +116,7 @@ class EncoderDetector(BaseDetector):
     :param model_version: version reported in ``usage``.
     """
 
+    supports_tokens = True
     model_id: str | None = None
     model_version: str | None = None
     typer: Any = None
@@ -170,43 +174,217 @@ class EncoderDetector(BaseDetector):
     def _detect(
         self, request: DetectRequest, *, include_tokens: bool, include_detail: bool
     ) -> Detection:
-        """Score a request and return its spans.
+        """Score a request and return its spans, optional token scores, usage and warnings.
+
+        One forward pass per passage group serves the spans, the tokens, the usage and the
+        truncation check.
 
         :param request: the sources (or prompt) and the answer to check.
-        :param include_tokens: unused until token scores are supported.
+        :param include_tokens: whether to fill ``Detection.tokens``.
         :param include_detail: unused, there is no detail.
         :returns: the detection result.
         """
+        answer = request.answer
+        units: dict[str, int] = {"answer_chars": len(answer)}
+        requested = time.perf_counter()
         with self._get_scoring_lock():
+            started = time.perf_counter()
+            logger.debug(
+                "detect started: kind=%s model_id=%s include_tokens=%s lock_wait_ms=%.1f",
+                request.kind,
+                self.model_id,
+                include_tokens,
+                (started - requested) * 1000,
+            )
             if isinstance(request, SourcesInput):
                 context = [chunk.text for chunk in request.sources]
-                groups = self._group_passages_into_chunks(context, request.question, request.answer)
+                groups = self._group_passages_into_chunks(context, request.question, answer)
                 logger.debug(
                     "scoring sources request: sources=%d passage_groups=%d",
                     len(context),
                     len(groups),
                 )
-                if len(groups) == 1:
-                    prompt = PromptUtils.format_context(groups[0], request.question, self.lang)
-                    raw = self._predict_single(prompt, request.answer, "spans")
-                else:
-                    prompts = [
-                        PromptUtils.format_context(group, request.question, self.lang)
-                        for group in groups
-                    ]
-                    raw = self._predict_chunked(prompts, request.answer, "spans")
+                prompts = [
+                    PromptUtils.format_context(group, request.question, self.lang)
+                    for group in groups
+                ]
+                units["sources"] = len(context)
+                units["source_chars"] = sum(len(text) for text in context)
             else:
-                logger.debug("scoring prompt request")
-                raw = self._predict_single(request.prompt, request.answer, "spans")
+                prompts = [request.prompt]
+                units["source_chars"] = len(request.prompt)
+            scored = [self._score_tokens(prompt, answer) for prompt in prompts]
+            scoring_ms = (time.perf_counter() - started) * 1000
+
+        truncated = False
+        for index, (_, input_tokens, full_tokens) in enumerate(scored):
+            if full_tokens is not None:
+                truncated = True
+                logger.warning(
+                    "input_truncated: group %d of %d has %d tokens, max_length is %d",
+                    index + 1,
+                    len(scored),
+                    full_tokens,
+                    self.max_length,
+                )
+        units["input_tokens"] = sum(input_tokens for _, input_tokens, _ in scored)
+
+        tokens = (
+            scored[0][0]
+            if len(scored) == 1
+            else self._max_aggregate([group_tokens for group_tokens, _, _ in scored])
+        )
         spans = [
             DetectedSpan(
                 start=item["start"], end=item["end"], text=item["text"], score=item["confidence"]
             )
-            for item in raw
+            for item in self._spans_from_scored_tokens(tokens, answer)
         ]
-        logger.debug("detected spans: count=%d", len(spans))
-        usage = [Usage(model_id=self.model_id, model_version=self.model_version, units={})]
-        return Detection(spans=spans, usage=usage)
+        logger.debug(
+            "detect finished: spans=%d answer_tokens=%d input_tokens=%d groups=%d "
+            "truncated=%s scoring_ms=%.1f",
+            len(spans),
+            len(tokens),
+            units["input_tokens"],
+            len(scored),
+            truncated,
+            scoring_ms,
+        )
+        token_scores = (
+            [
+                TokenScore(
+                    token=t["token"],
+                    start=t["start"],
+                    end=t["end"],
+                    score=t["prob"],
+                    flagged=t["pred"] == 1,
+                )
+                for t in tokens
+            ]
+            if include_tokens
+            else None
+        )
+        warnings = (
+            [
+                ResultWarning(
+                    code="input_truncated",
+                    message=(
+                        "The input exceeded max_length tokens and was cut; raise max_length "
+                        "or pass sources so passages are split into groups."
+                    ),
+                )
+            ]
+            if truncated
+            else []
+        )
+        usage = [Usage(model_id=self.model_id, model_version=self.model_version, units=units)]
+        return Detection(spans=spans, tokens=token_scores, usage=usage, warnings=warnings)
+
+    def _score_tokens(self, prompt: str, answer: str) -> tuple[list[dict], int, int | None]:
+        """Score the answer tokens of one (prompt, answer) pair.
+
+        :param prompt: the prompt string.
+        :param answer: the answer string.
+        :returns: the answer tokens as dicts with ``token``, ``pred``, ``prob`` and the answer
+            offsets ``start`` and ``end``; the number of tokens fed to the model; and the
+            untruncated token count when the input was cut, else ``None``.
+        """
+        input_ids, probabilities, offsets, answer_start_token = self._run_model(prompt, answer)
+        seq_len = int(input_ids.size(0))
+        logger.debug(
+            "scored one group: input_tokens=%d answer_tokens=%d max_length=%d",
+            seq_len,
+            seq_len - answer_start_token,
+            self.max_length,
+        )
+        full_tokens = None
+        if seq_len >= self.max_length:
+            # Count only at the limit: an input that fits exactly is not truncated.
+            total = self.tokenizer(prompt, answer, add_special_tokens=True, return_tensors="pt")[
+                "input_ids"
+            ].shape[1]
+            if total > self.max_length:
+                full_tokens = int(total)
+        token_preds = torch.argmax(probabilities, dim=-1)
+        if answer_start_token < offsets.size(0):
+            answer_char_offset = offsets[answer_start_token][0].item()
+        else:
+            answer_char_offset = 0
+        tokens: list[dict] = []
+        for i in range(answer_start_token, seq_len):
+            start, end = offsets[i].tolist()
+            if start == end:  # special token such as the trailing [SEP]: zero-width at the end
+                start = end = len(answer)
+            else:
+                start, end = start - answer_char_offset, end - answer_char_offset
+            tokens.append(
+                {
+                    "token": self.tokenizer.decode([input_ids[i]]),
+                    "pred": token_preds[i].item(),
+                    "prob": probabilities[i, 1].item(),
+                    "start": start,
+                    "end": end,
+                }
+            )
+        return tokens, seq_len, full_tokens
+
+    @staticmethod
+    def _max_aggregate(all_token_results: list[list[dict]]) -> list[dict]:
+        """Aggregate per-group token results: the probability of a token is the ``max()``.
+
+        A token is flagged when the aggregated probability is at least 0.5. Other keys (such as
+        offsets) come from the first group, whose answer offsets equal those of every group.
+
+        :param all_token_results: one token list per group.
+        :returns: the aggregated token list.
+        """
+        aggregated: list[dict] = []
+        for tok_idx in range(len(all_token_results[0])):
+            max_prob = max(
+                chunk_result[tok_idx]["prob"]
+                for chunk_result in all_token_results
+                if tok_idx < len(chunk_result)
+            )
+            aggregated.append(
+                {
+                    **all_token_results[0][tok_idx],
+                    "pred": 1 if max_prob >= 0.5 else 0,
+                    "prob": max_prob,
+                }
+            )
+        return aggregated
+
+    @staticmethod
+    def _spans_from_scored_tokens(tokens: list[dict], answer: str) -> list[dict]:
+        """Merge consecutive flagged tokens into spans with the highest probability as score.
+
+        :param tokens: token dicts with ``pred``, ``prob``, ``start`` and ``end``.
+        :param answer: the answer string.
+        :returns: span dicts with ``start``, ``end``, ``confidence`` and ``text``.
+        """
+        spans: list[dict] = []
+        current: dict | None = None
+        for token in tokens:
+            if token["start"] == token["end"]:
+                continue
+            if token["pred"] == 1:
+                if current is None:
+                    current = {
+                        "start": token["start"],
+                        "end": token["end"],
+                        "confidence": token["prob"],
+                    }
+                else:
+                    current["end"] = token["end"]
+                    current["confidence"] = max(current["confidence"], token["prob"])
+            elif current is not None:
+                current["text"] = answer[current["start"] : current["end"]]
+                spans.append(current)
+                current = None
+        if current is not None:
+            current["text"] = answer[current["start"] : current["end"]]
+            spans.append(current)
+        return spans
 
     # ------------------------------------------------------------------
     # Chunking helpers
@@ -376,6 +554,19 @@ class EncoderDetector(BaseDetector):
         :param answer: The answer string.
         :param output_format: ``"tokens"`` or ``"spans"``.
         """
+        input_ids, probabilities, offsets, answer_start_token = self._run_model(prompt, answer)
+        return self._decode_sample(
+            input_ids, probabilities, offsets, answer_start_token, answer, output_format
+        )
+
+    def _run_model(self, prompt: str, answer: str) -> tuple[torch.Tensor, torch.Tensor, Any, int]:
+        """Tokenize one (prompt, answer) pair and run the model on it.
+
+        :param prompt: The prompt string.
+        :param answer: The answer string.
+        :returns: token ids ``(seq_len,)``, probabilities ``(seq_len, num_labels)``, character
+            offsets and the index of the first answer token.
+        """
         encoding, _, offsets, answer_start_token = HallucinationDataset.prepare_tokenized_input(
             self.tokenizer, prompt, answer, self.max_length
         )
@@ -389,11 +580,7 @@ class EncoderDetector(BaseDetector):
         with torch.no_grad():
             outputs = self.model(**encoding)
         probabilities = torch.softmax(outputs.logits, dim=-1)[0]
-        input_ids = encoding["input_ids"][0]
-
-        return self._decode_sample(
-            input_ids, probabilities, offsets, answer_start_token, answer, output_format
-        )
+        return encoding["input_ids"][0], probabilities, offsets, answer_start_token
 
     # ------------------------------------------------------------------
     # Batched prediction with one forward pass for many pairs
@@ -489,23 +676,7 @@ class EncoderDetector(BaseDetector):
             tokens = self._predict_single(chunk, answer, output_format="tokens")
             all_token_results.append(tokens)
 
-        n_tokens = len(all_token_results[0])
-
-        # Aggregate: max hallucination probability across chunks.
-        aggregated: list[dict] = []
-        for tok_idx in range(n_tokens):
-            max_prob = max(
-                chunk_result[tok_idx]["prob"]
-                for chunk_result in all_token_results
-                if tok_idx < len(chunk_result)
-            )
-            aggregated.append(
-                {
-                    "token": all_token_results[0][tok_idx]["token"],
-                    "pred": 1 if max_prob >= 0.5 else 0,
-                    "prob": max_prob,
-                }
-            )
+        aggregated = self._max_aggregate(all_token_results)
 
         if output_format == "tokens":
             return aggregated
