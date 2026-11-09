@@ -107,8 +107,7 @@ class RAGFactCheckerDetector(BaseDetector):
         min_confidence: float = 0.0,
     ) -> list[list[dict[str, Any]]]:
         """Batch prediction using RAGFactChecker's batch processing."""
-        if len(prompts) != len(answers):
-            raise ValueError("Number of prompts must match number of answers")
+        self._validate_batch_lengths(prompts, answers)
         self._validate_min_confidence(min_confidence)
 
         contexts = [[prompt] for prompt in prompts]  # Convert prompts to context lists
@@ -116,7 +115,7 @@ class RAGFactCheckerDetector(BaseDetector):
 
         # Convert each result to lettuceDetect format
         converted_results = []
-        for i, (answer, rag_result) in enumerate(zip(answers, rag_results)):
+        for i, (answer, rag_result) in enumerate(zip(answers, rag_results, strict=True)):
             if output_format == "tokens":
                 converted = self._convert_to_tokens(answer, rag_result)
             elif output_format == "spans":

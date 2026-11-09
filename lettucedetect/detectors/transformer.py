@@ -546,8 +546,7 @@ class TransformerDetector(BaseDetector):
         :returns: List of prediction lists, one per input pair.
         :raises ValueError: If ``len(prompts) != len(answers)``.
         """
-        if len(prompts) != len(answers):
-            raise ValueError("Number of prompts must match number of answers")
+        self._validate_batch_lengths(prompts, answers)
         if not prompts:
             return []
         if output_format not in ("tokens", "spans"):

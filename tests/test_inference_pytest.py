@@ -454,6 +454,23 @@ class TestMinConfidenceFilter:
         assert BaseDetector._filter_spans_by_confidence(spans, "spans", 0.9) == spans
 
 
+class TestBatchLengthValidation:
+    """Unit tests for the shared BaseDetector._validate_batch_lengths helper."""
+
+    def test_mismatch_message_shows_both_lengths(self):
+        """A length mismatch raises a ValueError that shows the two lengths."""
+        with pytest.raises(ValueError, match="got 2 prompts and 1 answers"):
+            BaseDetector._validate_batch_lengths(["p1", "p2"], ["a1"])
+
+    @pytest.mark.parametrize(
+        ("prompts", "answers"),
+        [([], []), (["p1"], ["a1"]), (["p1", "p2"], ["a1", "a2"])],
+    )
+    def test_equal_lengths_raise_no_error(self, prompts, answers):
+        """The helper accepts equal lengths, including two empty lists."""
+        BaseDetector._validate_batch_lengths(prompts, answers)
+
+
 class TestTransformerMinConfidence:
     """min_confidence behaviour wired through TransformerDetector."""
 

@@ -72,6 +72,20 @@ class BaseDetector(ABC):
             raise ValueError(f"min_confidence must be in [0, 1], got {min_confidence}")
 
     @staticmethod
+    def _validate_batch_lengths(prompts: list[str], answers: list[str]) -> None:
+        """Validate that ``prompts`` and ``answers`` have the same length.
+
+        :param prompts: The prompt strings of the batch.
+        :param answers: The answer strings of the batch.
+        :raises ValueError: If ``len(prompts) != len(answers)``.
+        """
+        if len(prompts) != len(answers):
+            raise ValueError(
+                "Number of prompts must match number of answers, "
+                f"got {len(prompts)} prompts and {len(answers)} answers"
+            )
+
+    @staticmethod
     def _filter_spans_by_confidence(
         result: list, output_format: str, min_confidence: float
     ) -> list:
