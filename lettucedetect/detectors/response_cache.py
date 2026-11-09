@@ -104,6 +104,23 @@ def make_cache_key(
     return CacheManager._hash(*parts)
 
 
+def _validate_ttl(ttl_seconds: float | None) -> None:
+    """Raise ``invalid_ttl_seconds`` unless ``ttl_seconds`` is ``None`` or a positive finite number."""
+    if ttl_seconds is None:
+        return
+    if (
+        isinstance(ttl_seconds, bool)
+        or not isinstance(ttl_seconds, (int, float))
+        or not math.isfinite(ttl_seconds)
+        or ttl_seconds <= 0
+    ):
+        raise InvalidInputError(
+            "ttl_seconds must be a positive, finite number, or None for no expiry.",
+            code="invalid_ttl_seconds",
+            param="ttl_seconds",
+        )
+
+
 class SyncCacheBase(abc.ABC):
     """Base class for backends that only have synchronous storage.
 
@@ -173,20 +190,8 @@ class InMemoryCache(SyncCacheBase):
         :raises InvalidInputError: ``ttl_seconds`` is not a positive, finite number
             (``invalid_ttl_seconds``).
         """
-        deadline = None
-        if ttl_seconds is not None:
-            if (
-                isinstance(ttl_seconds, bool)
-                or not isinstance(ttl_seconds, (int, float))
-                or not math.isfinite(ttl_seconds)
-                or ttl_seconds <= 0
-            ):
-                raise InvalidInputError(
-                    "ttl_seconds must be a positive, finite number, or None for no expiry.",
-                    code="invalid_ttl_seconds",
-                    param="ttl_seconds",
-                )
-            deadline = time.monotonic() + ttl_seconds
+        _validate_ttl(ttl_seconds)
+        deadline = None if ttl_seconds is None else time.monotonic() + ttl_seconds
         with self._lock:
             self._data[key] = (value, deadline)
 

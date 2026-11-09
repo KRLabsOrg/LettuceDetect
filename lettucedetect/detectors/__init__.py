@@ -9,6 +9,7 @@ from lettucedetect.detectors.errors import (
     UpstreamError,
 )
 from lettucedetect.detectors.factory import make_detector as _make_detector
+from lettucedetect.detectors.file_cache import FileCache
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.rag_fact_checker import RAGFactCheckerDetector
 from lettucedetect.detectors.response_cache import (
@@ -40,6 +41,7 @@ __all__ = [
     "DetectRequest",
     "DetectedSpan",
     "Detection",
+    "FileCache",
     "InMemoryCache",
     "InvalidInputError",
     "LLMDetector",
