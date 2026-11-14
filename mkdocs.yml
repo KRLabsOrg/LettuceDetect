@@ -99,6 +99,7 @@ nav:
         - Generative (Qwen-2b): code-hallucination/model_card_v2_qwen.md
         - Encoder (mmBERT-base): code-hallucination/model_card_v2_mmbert_base.md
         - Taxonomy Head: code-hallucination/model_card_v2_taxonomy_head.md
+      - Vela 2.0 0.3B Evaluation: code-hallucination/results_vela.md
   - Research:
     - TinyLettuce: TINYLETTUCE.md
     - Multilingual (EuroBERT): EUROBERT.md

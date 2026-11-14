@@ -52,6 +52,11 @@ api = [
 bedrock = [
     "boto3>=1.34",
 ]
+vela = [
+    "transformers>=5.17",
+    "safetensors",
+    "tokenizers",
+]
 docs = [
     "mkdocs-material>=9.0",
     "mkdocstrings[python]>=0.24",
@@ -70,7 +75,8 @@ lettucedetect = ["prompts/*.txt", "prompts/*.json"]
 testpaths = ["tests"]
 python_files = "test_*_pytest.py"
 asyncio_mode = "auto"
-addopts = "-v --tb=short --strict-markers"
+addopts = '-v --tb=short --strict-markers -m "not model_download"'
+markers = ["model_download: downloads a real model; run with -m model_download"]
 filterwarnings = ["error::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"]
 
 [tool.ruff]
