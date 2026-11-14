@@ -10,6 +10,14 @@ Usage:
         --dataset KRLabsOrg/lettucedetect-code-hallucination \
         --dataset KRLabsOrg/lettucedetect-prose-hallucination \
         --split test [--by language] [--limit N]
+
+    # A Vela 2.0 model through VelaDetector; pin the revision of its remote code. Each row's
+    # prompt (user request plus context, the format Vela was trained on) goes in as a PromptInput.
+    python scripts/evaluate_span_model.py \
+        --method vela --model-path vllm-sr/Vela-2.0-0.3B --revision <commit> \
+        --dataset KRLabsOrg/lettucedetect-code-hallucination \
+        --dataset KRLabsOrg/lettucedetect-prose-hallucination \
+        --split test
 """
 
 from __future__ import annotations
@@ -26,6 +34,7 @@ from datasets import load_dataset  # noqa: E402
 from span_eval_metrics import print_metrics_table  # noqa: E402
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationSample  # noqa: E402
+from lettucedetect.detectors.vela import VelaDetector  # noqa: E402
 from lettucedetect.models.inference import HallucinationDetector  # noqa: E402
 
 
@@ -59,6 +68,15 @@ def main() -> None:
     """CLI entry point."""
     ap = argparse.ArgumentParser(description="Per-source span-detector evaluation.")
     ap.add_argument("--model-path", required=True)
+    ap.add_argument(
+        "--method",
+        choices=["transformer", "vela"],
+        default="transformer",
+        help="transformer: a LettuceDetect encoder; vela: a Vela 2.0 model via VelaDetector.",
+    )
+    ap.add_argument(
+        "--revision", default=None, help="Model revision; pin a commit for --method vela."
+    )
     ap.add_argument("--dataset", action="append", default=[], required=True)
     ap.add_argument("--split", default="test")
     ap.add_argument("--by", choices=["dataset", "language"], default="dataset")
@@ -69,10 +87,15 @@ def main() -> None:
     ap.add_argument("--trust-remote-code", action="store_true")
     args = ap.parse_args()
 
-    kw = {"max_length": args.max_length, "trust_remote_code": args.trust_remote_code}
-    if args.device:
-        kw["device"] = args.device
-    detector = HallucinationDetector(method="transformer", model_path=args.model_path, **kw)
+    if args.method == "vela":
+        detector = VelaDetector.from_pretrained(
+            args.model_path, revision=args.revision, device=args.device
+        )
+    else:
+        kw = {"max_length": args.max_length, "trust_remote_code": args.trust_remote_code}
+        if args.device:
+            kw["device"] = args.device
+        detector = HallucinationDetector(method="transformer", model_path=args.model_path, **kw)
     samples = load_samples(args.dataset, args.split, args.limit, args.only)
 
     # Predict each sample ONCE; metrics are computed from the cached spans.
