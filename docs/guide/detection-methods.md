@@ -1,6 +1,6 @@
 # Detection Methods
 
-LettuceDetect supports three ways to detect hallucinations, each with different trade-offs.
+LettuceDetect supports four ways to detect hallucinations, each with different trade-offs.
 
 ## Transformer (Recommended)
 
@@ -112,3 +112,49 @@ detector = HallucinationDetector(method="rag_fact_checker", model_path="gpt-4o-m
 **How it works:** Extracts (subject, predicate, object) claims from the answer, then checks each claim against the context.
 
 **When to use:** When you want claim-level granularity and structured verification results.
+
+## Vela 2.0
+
+[Vela 2.0](https://huggingface.co/collections/vllm-sr/vela-20) models (a 0.3B encoder; 0.8B, 4B and 9B decoders) answer typed SystemOne questions about a request, a context and an answer. `VelaDetector` asks the hallucination span question and returns the unsupported spans of the answer with their probability as score.
+
+Run the model in-process. Its code ships in the model repository and runs with `trust_remote_code=True`, so pin `revision` to a commit you have reviewed:
+
+```python
+from lettucedetect.detectors import Chunk, SourcesInput, VelaDetector
+
+detector = VelaDetector.from_pretrained("vllm-sr/Vela-2.0-0.3B", revision="<commit>")
+result = detector.detect(
+    SourcesInput(
+        question="When does it ship?",
+        sources=[Chunk(id="doc-1", text="Ships Friday.")],
+        answer="Ships Monday.",
+    ),
+    min_score=0.5,
+)
+```
+
+Or call a SystemOne server (`POST /v1/systemone`), such as the `vela2_serve.py` script in the model repository. The URL and the key come from the caller; nothing is read from the environment:
+
+```python
+detector = VelaDetector.from_server(
+    "http://127.0.0.1:8001", model="vllm-sr/Vela-2.0-0.3B", api_key="<key>"
+)
+```
+
+A rejected key raises `ConfigurationError`. A timeout, a connection error, a rate limit, a server error or an unreadable reply raises `UpstreamError`, with `retryable` set when a retry can help. Install the in-process runtime with `pip install 'lettucedetect[vela]'`; the server mode needs no extra.
+
+### When to choose Vela
+
+Hallucination example-F1 on the 10,698-example test set and on RAGTruth, as reported by Vela ([EVALUATION.md](https://huggingface.co/vllm-sr/Vela-2.0-4B/blob/main/EVALUATION.md)); the 0.3B number is reproduced in [Vela 2.0 0.3B results](../code-hallucination/results_vela.md):
+
+| Model | 10,698 examples | RAGTruth |
+|---|--:|--:|
+| Vela 2.0 0.3B (encoder, CPU) | 0.848 | 0.706 |
+| Vela 2.0 4B | 0.874 | 0.770 |
+| Vela 2.0 9B | 0.885 | 0.774 |
+| lettucedect-v2-mmbert-base | 0.869 | 0.743 |
+| lettucedect-v2-qwen-2b | 0.921 | 0.817 |
+
+**Choose Vela** when one model should answer more than hallucination: the same Vela call can also return PII spans and prompt-attack and safety scores (not yet exposed by `VelaDetector`), or when you need a CPU model with an 8,192-token window between the encoder and generative lines.
+
+**Choose the LettuceDetect models** for the best hallucination F1, and when you need typed categories: they label each span with the hallucination taxonomy, while Vela returns one `unsupported` label.
