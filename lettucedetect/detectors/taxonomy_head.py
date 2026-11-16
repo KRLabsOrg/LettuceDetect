@@ -80,7 +80,7 @@ class TaxonomyTyper:
             max_length=1024,
             model_id=head_id,
         )
-        detector = EncoderDetector(model, model_tokenizer, typer, model_id=model_id)
+        detector = EncoderDetector(model, model_tokenizer, typer=typer, model_id=model_id)
         result = detector.detect(request)  # every span has category and subcategory
 
     The typer reads its device from ``encoder.device``, so move the encoder before building it.

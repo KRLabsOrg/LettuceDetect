@@ -6,8 +6,8 @@ have synchronous storage subclass :class:`SyncCacheBase` and get the async metho
 
 New error codes (public API, do not rename):
 
-- ``invalid_cache_kind``: ``kind`` of :func:`make_cache_key` is not ``"judge"``, ``"native"``
-  or ``"verify"``.
+- ``invalid_cache_kind``: ``kind`` of :func:`make_cache_key` is blank, is not a string or
+  contains ``=``.
 - ``invalid_ttl_seconds``: ``ttl_seconds`` is not a positive, finite number.
 """
 
@@ -20,14 +20,14 @@ import logging
 import math
 import threading
 import time
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from lettucedetect.detectors.errors import InvalidInputError
 
 logger = logging.getLogger(__name__)
 
-CacheKind = Literal["judge", "native", "verify"]
-_KINDS = ("judge", "native", "verify")
+CacheKind = str
+"""What a cached reply is for. The library uses ``"judge"``, ``"native"`` and ``"verify"``."""
 
 
 @runtime_checkable
@@ -93,13 +93,16 @@ def make_cache_key(
     :param model: The model name.
     :param model_version: A version or deployment id of the model, or ``None``.
     :param temperature: The sampling temperature.
-    :param kind: ``"judge"``, ``"native"`` or ``"verify"``.
+    :param kind: what the reply is for. The library uses ``"judge"``, ``"native"`` and
+        ``"verify"``; a detector of your own passes its own name.
     :returns: A SHA-256 hex digest.
-    :raises InvalidInputError: ``kind`` is not one of the three values (``invalid_cache_kind``).
+    :raises InvalidInputError: ``kind`` is blank, is not a string or contains ``=``
+        (``invalid_cache_kind``).
     """
-    if kind not in _KINDS:
+    # "=" is reserved for the model_version part, so a kind can never read as a version.
+    if not isinstance(kind, str) or not kind.strip() or "=" in kind:
         raise InvalidInputError(
-            f"kind must be one of {', '.join(_KINDS)}.",
+            "kind must be a non-blank string without '='.",
             code="invalid_cache_kind",
             param="kind",
         )

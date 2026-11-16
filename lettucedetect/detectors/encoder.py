@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import weakref
 from pathlib import Path
 from typing import Any
 
@@ -47,8 +48,12 @@ def _resolved_commit(model_id: str, loader_kwargs: dict[str, Any]) -> str | None
     return Path(cached).parent.name if isinstance(cached, str) else None
 
 
-# Makes two racing first calls on one detector get the same scoring lock.
+# Makes two racing first calls get the same scoring lock.
 _LOCK_GUARD = threading.Lock()
+# One scoring lock per tokenizer, by id(tokenizer). A fast tokenizer fails with "Already borrowed"
+# when two threads use it at once, also through two detectors. An entry lives as long as a
+# detector holds its lock, and that detector holds the tokenizer, so an id is never reused.
+_TOKENIZER_LOCKS: weakref.WeakValueDictionary[int, threading.RLock] = weakref.WeakValueDictionary()
 
 
 def _resolve_taxonomy(
@@ -153,7 +158,8 @@ class EncoderConfig(BaseModel):
     ``invalid_language`` or ``invalid_batch_size`` and ``param`` set to the option.
 
     :param max_length: maximum number of tokens of prompt plus answer.
-    :param batch_size: number of requests scored together in one padded forward pass.
+    :param batch_size: number of prompts ``predict_prompt_batch`` scores together in one padded
+        forward pass. ``detect`` scores one request at a time.
     :param lang: language of the prompt template, one of the supported languages.
     """
 
@@ -241,8 +247,8 @@ class EncoderDetector(BaseDetector):
         self,
         model: Any,  # noqa: ANN401
         tokenizer: Any,  # noqa: ANN401
-        typer: Any = None,  # noqa: ANN401
         *,
+        typer: Any = None,  # noqa: ANN401
         config: EncoderConfig | None = None,
         model_id: str | None = None,
         model_version: str | None = None,
@@ -317,7 +323,7 @@ class EncoderDetector(BaseDetector):
             detector,
             model,
             tokenizer,
-            typer,
+            typer=typer,
             config=config,
             model_id=model_id,
             model_version=version,
@@ -331,13 +337,19 @@ class EncoderDetector(BaseDetector):
     # ------------------------------------------------------------------
 
     def _get_scoring_lock(self) -> threading.RLock:
-        """Return the scoring lock, creating it on first use (not in ``__init__``)."""
+        """Return the scoring lock, taking it on first use (not in ``__init__``).
+
+        Detectors built on the same tokenizer share one lock.
+        """
         lock = vars(self).get("_scoring_lock")
         if lock is None:
             with _LOCK_GUARD:
                 lock = vars(self).get("_scoring_lock")
                 if lock is None:
-                    lock = threading.RLock()
+                    lock = _TOKENIZER_LOCKS.get(id(self.tokenizer))
+                    if lock is None:
+                        lock = threading.RLock()
+                        _TOKENIZER_LOCKS[id(self.tokenizer)] = lock
                     self._scoring_lock = lock
         return lock
 
@@ -449,6 +461,8 @@ class EncoderDetector(BaseDetector):
                     flagged=t["pred"] == 1,
                 )
                 for t in tokens
+                # Special tokens such as the trailing [SEP] are zero-width: not answer tokens.
+                if t["end"] > t["start"]
             ]
             if include_tokens
             else None

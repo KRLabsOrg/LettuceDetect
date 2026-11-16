@@ -66,10 +66,16 @@ class TestMakeCacheKey:
             "p", "m", None, 0.0, "native"
         )
 
-    def test_unknown_kind_raises_a_typed_error(self):
-        """Unknown kind raises a typed error."""
+    def test_a_kind_of_your_own_gets_its_own_key(self):
+        """A detector outside the library passes its own kind and gets a key of its own."""
+        own = make_cache_key("p", "m", None, 0.0, "fact_check")
+        assert own not in {make_cache_key("p", "m", None, 0.0, k) for k in ("judge", "native")}
+
+    @pytest.mark.parametrize("kind", ["", "  ", "model_version=v1", None, 3])
+    def test_invalid_kind_raises_a_typed_error(self, kind):
+        """A blank kind, a kind with ``=`` (it could read as a version) and a non-string raise."""
         with pytest.raises(InvalidInputError) as info:
-            make_cache_key("p", "m", None, 0.0, "other")  # type: ignore[arg-type]
+            make_cache_key("p", "m", None, 0.0, kind)
         assert info.value.code == "invalid_cache_kind"
         assert info.value.param == "kind"
 

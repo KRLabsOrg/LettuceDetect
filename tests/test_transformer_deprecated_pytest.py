@@ -14,7 +14,7 @@ import torch
 
 from lettucedetect.detectors import _deprecation as dep
 from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning
-from lettucedetect.detectors.encoder import EncoderConfig, EncoderDetector
+from lettucedetect.detectors.encoder import _TOKENIZER_LOCKS, EncoderConfig, EncoderDetector
 from lettucedetect.detectors.factory import make_detector
 from lettucedetect.detectors.transformer import TransformerDetector
 from lettucedetect.detectors.types import Chunk, PromptInput, SourcesInput
@@ -215,6 +215,7 @@ def test_new_answers_concurrent_predict_with_one_lock(local_wordpiece_tokenizer)
     ]
     state["max"] = 0
     det.__dict__.pop("_scoring_lock", None)  # race the first creation again
+    _TOKENIZER_LOCKS.pop(id(det.tokenizer), None)
 
     created, real = [], threading.RLock
 
