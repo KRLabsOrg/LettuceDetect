@@ -200,3 +200,30 @@ def test_default_hook_raises_not_implemented():
     """The base class itself, which has no hook and no legacy predict, raises NotImplementedError."""
     with pytest.raises(NotImplementedError):
         BaseDetector().detect(REQUEST)
+
+
+@pytest.mark.parametrize("request_", [{"sources": [], "answer": "a"}, "abc", None])
+def test_a_request_that_is_not_a_request_model_raises_a_typed_error(request_):
+    # A dict, a string and None raise InvalidInputError before the detector runs.
+    detector = FakeDetector()
+    with pytest.raises(InvalidInputError) as info:
+        detector.detect(request_)
+    assert (info.value.code, info.value.param) == ("invalid_request", "request")
+    assert detector.calls == []
+
+
+class _DetectOnly(BaseDetector):
+    """Detector with ``_detect`` only and no token scores."""
+
+    def _detect(self, request, *, include_tokens, include_detail):
+        return _result().model_copy(update={"tokens": None})
+
+
+def test_predict_on_a_detector_without_tokens_names_the_spans_format():
+    # predict defaults to "tokens"; the error names the argument the caller can change.
+    detector = _DetectOnly()
+    with pytest.raises(InvalidInputError) as info:
+        detector.predict([], "abcdefghij")
+    assert (info.value.code, info.value.param) == ("tokens_not_supported", "output_format")
+    assert 'output_format="spans"' in str(info.value)
+    assert len(detector.predict([], "abcdefghij", output_format="spans")) == 3

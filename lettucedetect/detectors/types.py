@@ -112,6 +112,12 @@ class TokenScore(BaseModel):
     score: float = Field(ge=0.0, le=1.0)
     flagged: bool
 
+    @model_validator(mode="after")
+    def _validate_offsets_in_order(self) -> TokenScore:
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        return self
+
 
 class Usage(BaseModel):
     """What one model or service did during a call.

@@ -83,7 +83,7 @@ are applications: they configure logging themselves and may print.
   mask `ConfigurationError`, `InvalidInputError` or bugs.
 - **`warnings.warn` is only for deprecations**, and uses `LettuceDetectDeprecationWarning`. The test
   suite treats that class as an error, so add each new deprecation to the catalogue in
-  `tests/test_deprecation.py`.
+  `tests/test_deprecation_pytest.py`.
 
 ### Logging
 

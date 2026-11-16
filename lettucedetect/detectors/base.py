@@ -87,9 +87,16 @@ class BaseDetector(ABC):
         :param include_tokens: also return token scores (needs ``supports_tokens``).
         :param include_detail: also return fact checker evidence (needs ``supports_detail``).
         :returns: the detection result.
-        :raises InvalidInputError: if ``min_score`` is outside ``[0, 1]``, or a flag is set that
+        :raises InvalidInputError: if ``request`` is not a ``SourcesInput`` or ``PromptInput``
+            (``invalid_request``), ``min_score`` is outside ``[0, 1]``, or a flag is set that
             the detector does not support.
         """
+        if not isinstance(request, (SourcesInput, PromptInput)):
+            raise InvalidInputError(
+                "request must be a SourcesInput or a PromptInput.",
+                code="invalid_request",
+                param="request",
+            )
         if not 0.0 <= min_score <= 1.0:
             raise InvalidInputError(
                 "min_score must be in [0, 1]; pass a value between 0.0 and 1.0.",
@@ -267,6 +274,12 @@ class BaseDetector(ABC):
     ) -> list:
         """Answer a ``predict*`` call with :meth:`detect`, in the legacy dict format."""
         self._check_legacy_arguments(output_format, min_confidence)
+        if output_format == "tokens" and not self.supports_tokens:
+            raise InvalidInputError(
+                'This detector does not return token scores; call with output_format="spans".',
+                code="tokens_not_supported",
+                param="output_format",
+            )
         detection = self.detect(
             request, min_score=min_confidence, include_tokens=output_format == "tokens"
         )

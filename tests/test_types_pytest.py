@@ -139,3 +139,10 @@ def test_detailed_result_accepts_json_string_keys():
     restored = DetailedResult.model_validate_json(_detail().model_dump_json())
     assert restored.fact_check_results == {0: False}
     assert restored.triplets.context == [["Barcelona", "north", "coast", "Madrid"]]
+
+
+@pytest.mark.parametrize(("start", "end"), [(3, 3), (5, 2)])
+def test_token_score_rejects_offsets_that_are_empty_or_reversed(start, end):
+    # A token is a part of the answer, so its end lies after its start, as for a Span.
+    with pytest.raises(ValidationError):
+        TokenScore(token="x", start=start, end=end, score=0.5, flagged=False)  # noqa: S106

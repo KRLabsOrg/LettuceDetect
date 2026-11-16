@@ -84,6 +84,18 @@ def test_construction_is_offline_and_leaves_cwd_empty(
     boom.assert_not_called()
 
 
+def test_everything_after_the_tokenizer_is_keyword_only(local_wordpiece_tokenizer):
+    # A config passed third must not be taken as the typer.
+    with pytest.raises(TypeError):
+        EncoderDetector(_stub_model(), local_wordpiece_tokenizer, EncoderConfig(max_length=512))
+
+
+def test_detectors_on_one_tokenizer_share_the_scoring_lock(local_wordpiece_tokenizer):
+    # A fast tokenizer fails with "Already borrowed" when two threads use it at once.
+    first, second = _detector(local_wordpiece_tokenizer), _detector(local_wordpiece_tokenizer)
+    assert first._get_scoring_lock() is second._get_scoring_lock()
+
+
 def test_config_defaults():
     config = EncoderConfig()
     assert (config.max_length, config.batch_size, config.lang) == (4096, 16, "en")
@@ -161,7 +173,8 @@ def _as_old_tokens(detection) -> list[dict]:
 
 
 def _round_tokens(tokens: list[dict]) -> list[dict]:
-    return [{**t, "prob": round(t["prob"], 6)} for t in tokens]
+    """Round the golden ``predict`` tokens and leave out [SEP], which ``detect`` does not return."""
+    return [{**t, "prob": round(t["prob"], 6)} for t in tokens if t["token"] != "[SEP]"]  # noqa: S105
 
 
 def test_tokens_equal_golden_output(local_wordpiece_tokenizer):
@@ -191,17 +204,11 @@ def test_token_offsets_lie_in_the_answer_and_spans_cover_flagged_tokens(local_wo
         result = det.detect(request, include_tokens=True)
         previous_end = 0
         for t in result.tokens:
-            assert 0 <= t.start <= t.end <= len(request.answer)
-            assert t.start >= previous_end or t.start == t.end
-            if t.start != t.end:
-                assert request.answer[t.start : t.end] == t.token
-                previous_end = t.end
-        assert result.tokens[-1].token == "[SEP]"  # noqa: S105
-        assert (result.tokens[-1].start, result.tokens[-1].end) == (
-            len(request.answer),
-            len(request.answer),
-        )
-        flagged = {(t.start, t.end) for t in result.tokens if t.flagged and t.start != t.end}
+            # Every token is a part of the answer: no zero-width special token such as [SEP].
+            assert previous_end <= t.start < t.end <= len(request.answer)
+            assert request.answer[t.start : t.end] == t.token
+            previous_end = t.end
+        flagged = {(t.start, t.end) for t in result.tokens if t.flagged}
         for span in result.spans:
             assert any(s >= span.start and e <= span.end for s, e in flagged)
 
@@ -536,7 +543,7 @@ def _typed(tokenizer, typer=None, **kwargs) -> EncoderDetector:
     return EncoderDetector(
         _stub_model(),
         tokenizer,
-        typer if typer is not None else _Typer(),
+        typer=typer if typer is not None else _Typer(),
         config=EncoderConfig(max_length=512),
         model_id="stub-encoder",
         **kwargs,
@@ -663,7 +670,7 @@ class TestTypedEncoderDetectorContract(TestEncoderDetectorContract):
         return EncoderDetector(
             _stub_model(on_call=on_call),
             self.tokenizer,
-            _Typer(),
+            typer=_Typer(),
             config=EncoderConfig(max_length=512),
             model_id="stub-encoder",
         )

@@ -82,7 +82,7 @@ class TransformerDetector(EncoderDetector):
         super().__init__(
             model,
             tokenizer,
-            typer,
+            typer=typer,
             config=EncoderConfig(max_length=max_length, batch_size=batch_size, lang=lang),
             model_id=model_path,
             model_version=version,
