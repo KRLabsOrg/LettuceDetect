@@ -191,7 +191,8 @@ class VelaDetector(BaseDetector):
     Vela ships its code in the model repository, so loading needs ``trust_remote_code=True``.
     :meth:`from_pretrained` sets it; pin ``revision`` to a commit you have reviewed.
     :meth:`from_server` calls a SystemOne server instead, such as the ``vela2_serve.py`` script in
-    the model repository; nothing is loaded in-process then.
+    the model repository; nothing is loaded in-process then. Call :meth:`close`, or use the
+    detector in a ``with`` block, to close its HTTP connections when it is no longer needed.
 
     Example::
 
@@ -310,7 +311,8 @@ class VelaDetector(BaseDetector):
 
         No request is sent here, and nothing is read from the environment: the URL and the key
         come from the caller. The server does not report which commit of the model it runs, so
-        ``usage`` carries the caller's ``model_version``.
+        ``usage`` carries the caller's ``model_version``. The detector holds an HTTP connection
+        pool; call :meth:`close` or use it in a ``with`` block when it is no longer needed.
 
         :param base_url: the server's base URL, for example ``http://127.0.0.1:8001``.
         :param model: the model name the server serves; also the ``model_id`` in ``usage``.
@@ -323,6 +325,24 @@ class VelaDetector(BaseDetector):
         """
         client = SystemOneClient(base_url, model=model, api_key=api_key, timeout=timeout)
         return cls(client, config=config, model_id=model, model_version=model_version)
+
+    def close(self) -> None:
+        """Close the model's connections, if it has any.
+
+        A detector from :meth:`from_server` closes its HTTP client; for a local model this does
+        nothing. Calling it more than once is safe.
+        """
+        close = getattr(self.model, "close", None)
+        if callable(close):
+            close()
+
+    def __enter__(self) -> VelaDetector:
+        """Return the detector, for use in a ``with`` block."""
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Close the model's connections at the end of a ``with`` block."""
+        self.close()
 
     # ------------------------------------------------------------------
     # Detection

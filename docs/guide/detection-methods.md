@@ -117,6 +117,8 @@ detector = HallucinationDetector(method="rag_fact_checker", model_path="gpt-4o-m
 
 [Vela 2.0](https://huggingface.co/collections/vllm-sr/vela-20) models (a 0.3B encoder; 0.8B, 4B and 9B decoders) answer typed SystemOne questions about a request, a context and an answer. `VelaDetector` asks the hallucination span question and returns the unsupported spans of the answer with their probability as score.
 
+**How it works:** The question and the sources go to Vela as one context, in the format it was trained on (`User request: <question>` followed by the sources). An input over the 8,192-token window is cut, and the result carries the `input_truncated` warning instead of failing.
+
 Run the model in-process. Its code ships in the model repository and runs with `trust_remote_code=True`, so pin `revision` to a commit you have reviewed:
 
 ```python
@@ -140,6 +142,8 @@ detector = VelaDetector.from_server(
     "http://127.0.0.1:8001", model="vllm-sr/Vela-2.0-0.3B", api_key="<key>"
 )
 ```
+
+Call `detector.close()`, or use the detector in a `with` block, to close its HTTP connections when it is no longer needed.
 
 A rejected key raises `ConfigurationError`. A timeout, a connection error, a rate limit, a server error or an unreadable reply raises `UpstreamError`, with `retryable` set when a retry can help. Install the in-process runtime with `pip install 'lettucedetect[vela]'`; the server mode needs no extra.
 

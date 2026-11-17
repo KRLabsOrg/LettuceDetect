@@ -102,7 +102,9 @@ class SystemOneClient:
     :param api_key: sent as ``Authorization: Bearer <api_key>``; ``None`` sends no header.
     :param timeout: seconds to wait for the server, per request.
     :param http_client: an ``httpx.Client`` to use instead of building one, for example with a
-        custom transport. Its base URL, headers and timeout are the caller's to set.
+        custom transport. Its base URL, headers and timeout are the caller's to set, so
+        ``base_url`` and ``timeout`` are not applied to it, and passing ``api_key`` with it raises
+        :class:`ConfigurationError`: set the ``Authorization`` header on the client instead.
     """
 
     # Read by VelaDetector: calls through this client need no scoring lock.
@@ -129,6 +131,15 @@ class SystemOneClient:
         if timeout <= 0:
             raise ConfigurationError(
                 "timeout must be greater than 0.", code="invalid_config", param="timeout"
+            )
+        if http_client is not None and api_key is not None:
+            # The key would not reach a client the caller built, and the server would answer
+            # 401 with no hint why.
+            raise ConfigurationError(
+                "api_key is not applied to a given http_client; set the Authorization header "
+                "on the http_client instead.",
+                code="invalid_config",
+                param="api_key",
             )
         self.model = model
         if http_client is None:

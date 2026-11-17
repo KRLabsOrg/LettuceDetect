@@ -278,3 +278,29 @@ def test_close_closes_the_http_client():
     with client:
         pass
     assert client._http.is_closed
+
+
+def test_detector_close_closes_the_client_from_server(mock_transport):
+    detector = VelaDetector.from_server(BASE_URL, model=MODEL)
+    detector.detect(SOURCES)
+    detector.close()
+    assert detector.model._http.is_closed
+    detector.close()  # a second close is harmless
+
+
+def test_detector_in_a_with_block_closes_the_client(mock_transport):
+    with VelaDetector.from_server(BASE_URL, model=MODEL) as detector:
+        detector.detect(SOURCES)
+    assert detector.model._http.is_closed
+
+
+def test_close_on_a_local_model_does_nothing():
+    VelaDetector(FakeVela()).close()
+
+
+def test_api_key_with_a_given_http_client_raises_configuration_error():
+    http = httpx.Client(base_url=BASE_URL, transport=httpx.MockTransport(_served(FakeVela())))
+    with pytest.raises(ConfigurationError) as exc:
+        SystemOneClient(BASE_URL, model=MODEL, api_key=API_KEY, http_client=http)
+    assert (exc.value.code, exc.value.param) == ("invalid_config", "api_key")
+    assert API_KEY not in exc.value.message
