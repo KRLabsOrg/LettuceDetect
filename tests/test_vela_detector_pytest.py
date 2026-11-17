@@ -153,13 +153,15 @@ def test_config_errors_carry_code_and_param(kwargs, param):
 # -- request mapping ----------------------------------------------------------------------
 
 
-def test_sources_with_a_question_are_sent_as_request_source_and_answer():
+def test_sources_with_a_question_are_sent_as_one_source_in_velas_training_format():
     model = FakeVela()
     _detector(model).detect(SOURCES)
     state, questions = model.calls[0]
     assert state == {
-        "request": "What is the capital of France?",
-        "source": "Paris is the capital of France.\n\nParis has two million people.",
+        "source": (
+            "User request: What is the capital of France?\n\n"
+            "Paris is the capital of France.\n\nParis has two million people."
+        ),
         "answer": ANSWER,
     }
     assert questions == {
@@ -171,7 +173,7 @@ def test_sources_with_a_question_are_sent_as_request_source_and_answer():
     }
 
 
-def test_sources_without_a_question_have_no_request():
+def test_sources_without_a_question_are_sent_as_they_are():
     model = FakeVela()
     request = SourcesInput(
         sources=[Chunk(id="s1", text="Ships Friday."), Chunk(id="s2", text=" ")],
@@ -217,6 +219,33 @@ def test_spans_map_offsets_probability_and_answer_text():
         (ANSWER.index("3 million"), ANSWER.index("3 million") + 9, "3 million", 0.6),
     ]
     assert all(s.category is None and s.subcategory is None for s in spans)
+
+
+TWO_CRITERIA = {"unsupported": "a claim not in the context", "contradicted": "contradicts it"}
+
+
+def test_with_several_criteria_the_label_is_the_category():
+    reply = {
+        "spans": {
+            "halu": [
+                _span_item(label="contradicted", start=0, end=3),
+                _span_item(label="unsupported", start=4, end=11),
+            ]
+        }
+    }
+    spans = _detector(FakeVela(reply=reply), criteria=TWO_CRITERIA).detect(SOURCES).spans
+    assert [(s.text, s.category) for s in spans] == [
+        ("The", "contradicted"),
+        ("capital", "unsupported"),
+    ]
+
+
+@pytest.mark.parametrize("label", ["made_up", None, 3, ["unsupported"]])
+def test_with_several_criteria_an_unknown_label_raises_upstream_error(label):
+    reply = {"spans": {"halu": [_span_item(label=label)]}}
+    with pytest.raises(UpstreamError) as exc:
+        _detector(FakeVela(reply=reply), criteria=TWO_CRITERIA).detect(SOURCES)
+    assert exc.value.code == "invalid_model_output"
 
 
 def test_span_text_comes_from_the_answer_and_numpy_numbers_are_accepted():
@@ -314,10 +343,10 @@ def test_blank_context_raises_invalid_input_error(request_):
 
 
 @pytest.mark.parametrize("sources", [[], [Chunk(id="s1", text="  ")]])
-def test_question_without_sources_is_sent_as_request_and_answer(sources):
+def test_question_without_sources_is_sent_as_the_source(sources):
     model = FakeVela()
     _detector(model).detect(SourcesInput(sources=sources, answer=ANSWER, question="Where?"))
-    assert model.calls[0][0] == {"request": "Where?", "answer": ANSWER}
+    assert model.calls[0][0] == {"source": "User request: Where?", "answer": ANSWER}
 
 
 class _SystemOneError(ValueError):
@@ -343,9 +372,22 @@ def test_input_that_does_not_fit_raises_invalid_input_error():
     assert exc.value.__cause__ is error
 
 
-def test_other_model_errors_are_not_translated():
-    with pytest.raises(_SystemOneError):
-        _detector(FakeVela(on_call=_raise(_SystemOneError("value_error")))).detect(SOURCES)
+def test_other_model_errors_raise_upstream_error_without_their_message():
+    error = _SystemOneError("value_error")
+    with pytest.raises(UpstreamError) as exc:
+        _detector(FakeVela(on_call=_raise(error))).detect(SOURCES)
+    assert (exc.value.code, exc.value.service) == ("invalid_model_output", "vela")
+    assert exc.value.__cause__ is error
+    assert str(error) not in exc.value.message
+
+
+def test_typed_errors_from_the_model_pass_through():
+    # A model that raises LettuceDetect's own errors, such as an HTTP client: InvalidInputError
+    # is also a ValueError and must not be wrapped as a rejected request.
+    error = InvalidInputError("too long", code="input_too_long", param="request")
+    with pytest.raises(InvalidInputError) as exc:
+        _detector(FakeVela(on_call=_raise(error))).detect(SOURCES)
+    assert exc.value is error
 
 
 # -- usage and warnings -------------------------------------------------------------------
@@ -380,8 +422,12 @@ def test_usage_has_no_input_tokens_when_the_model_does_not_report_them():
 
 @pytest.mark.parametrize(("input_tokens", "truncated"), [(8191, False), (8192, True), (9500, True)])
 def test_input_truncated_when_the_model_used_its_whole_budget(input_tokens, truncated, caplog):
+    # SOURCES has a question: long sources next to one are cut and warned about, not rejected.
     result = _detector(FakeVela(input_tokens=input_tokens)).detect(SOURCES)
     assert [w.code for w in result.warnings] == (["input_truncated"] if truncated else [])
+    if truncated:
+        # The reply cannot tell a cut input from an exact fit, and the warning says so.
+        assert "fits exactly" in result.warnings[0].message
     records = [r for r in caplog.records if r.getMessage().startswith("input_truncated")]
     assert len(records) == (1 if truncated else 0)
     assert ANSWER not in caplog.text

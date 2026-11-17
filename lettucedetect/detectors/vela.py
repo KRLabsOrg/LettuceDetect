@@ -23,7 +23,12 @@ from lettucedetect.detectors.encoder import (
     _model_load_error,
     _resolved_commit,
 )
-from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError, UpstreamError
+from lettucedetect.detectors.errors import (
+    ConfigurationError,
+    InvalidInputError,
+    LettuceDetectError,
+    UpstreamError,
+)
 from lettucedetect.detectors.types import (
     DetectedSpan,
     Detection,
@@ -43,6 +48,10 @@ _QUESTION_ID = "halu"
 # The hallucination question as Vela documents it (``halu_schema`` in the model's calibration.json).
 _DEFAULT_INSTRUCTIONS = "Which spans of the answer are not supported by the context?"
 _DEFAULT_CRITERIA = {"unsupported": "a claim not supported by the context"}
+
+# How Vela's hallucination question was trained to see a question: in front of the context, as
+# "User request: <question>\n\n<context>" (``detect_hallucination`` in the model's code).
+_REQUEST_PREFIX = "User request: "
 
 # Oldest transformers any Vela 2.0 model card suggests; the decoders ask for more (see the extra).
 _MIN_TRANSFORMERS = "4.57"
@@ -103,11 +112,14 @@ class VelaConfig(BaseModel):
     ``invalid_config`` and ``param`` set to the option.
 
     :param instructions: the span question asked about the answer.
-    :param criteria: span labels and their descriptions, at least one.
+    :param criteria: span labels and their descriptions, at least one. With more than one, each
+        span's ``category`` is the label it matched; with one, ``category`` is ``None``.
     :param threshold: probability above which Vela returns a span, in ``[0, 1]``. ``None`` uses
         the model's calibrated threshold. ``min_score`` of ``detect`` filters on top of it.
     :param max_length: the model's input budget in tokens. It does not change the model; a reply
-        that used the whole budget is reported with the ``input_truncated`` warning.
+        that used the whole budget is reported with the ``input_truncated`` warning. The reply
+        cannot tell a cut input from one that fits exactly or a long answer scored in windows,
+        so those are reported too.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
@@ -146,24 +158,30 @@ class VelaConfig(BaseModel):
 
 
 class VelaDetector(BaseDetector):
-    """Detect hallucinations with a Vela 2.0 model the caller already holds.
+    r"""Detect hallucinations with a Vela 2.0 model the caller already holds.
 
     Vela answers typed SystemOne questions about a request, a context and an answer. This detector
     asks one span question, "which spans of the answer are not supported by the context?", and
     returns Vela's spans with their probability as score. Any model with a
     ``system_one(state=..., questions=...)`` method that speaks SystemOne works.
 
-    The state sent to the model, in Vela's SystemOne keys:
+    The state sent to the model has two SystemOne keys, ``source`` and ``answer``:
 
-    * ``SourcesInput``: the question as ``request`` and the non-blank sources joined with blank
-      lines as ``source``; either may be left out, but not both.
-    * ``PromptInput``: the prompt as ``source``. A LettuceDetect prompt holds the request and the
-      context, which is what Vela reads as context.
+    * ``SourcesInput``: ``"User request: <question>\n\n<sources>"``, the non-blank sources joined
+      with blank lines. Either the question or the sources may be left out, but not both.
+    * ``PromptInput``: the prompt. A LettuceDetect prompt holds the request and the context.
 
-    Vela fits the input into its token window by cutting one part: ``request`` when the state has
-    one, else ``source``. A question with sources too long for the window therefore raises
-    ``InvalidInputError`` (``input_too_long``), while a long prompt is cut and reported with the
-    ``input_truncated`` warning.
+    The question goes into ``source`` because that is how Vela's hallucination question was
+    trained. Measured on the 10,698-example test set with every row sent as ``SourcesInput``, the
+    0.3B scores an example-F1 of 0.847 with this join, 0.844 with the question and the sources
+    joined by a blank line, and 0.840 with the encoder's prompt (``PromptUtils.format_context``).
+    With the question as a separate ``request`` part it scored 0.830, and 586 rows failed: Vela
+    fits an input into its token window by cutting the first part it does not score, which was
+    then the request, so long sources could not be cut. With one ``source`` a long input is cut
+    and reported with the ``input_truncated`` warning. That warning also marks an input that fits
+    exactly or a long answer scored in windows, since the reply cannot tell them apart.
+
+    With more than one criterion in the config, each span's ``category`` is the label Vela matched.
 
     Construction downloads nothing, reads no environment variable and writes no file. Calls run
     under one private lock, so concurrent calls on one instance run one at a time.
@@ -281,8 +299,9 @@ class VelaDetector(BaseDetector):
         :param include_detail: unused, there is no detail.
         :returns: the detection result.
         :raises InvalidInputError: (``empty_context``) the request has no context to check against;
-            (``input_too_long``) the input does not fit the model's token window.
-        :raises UpstreamError: (``invalid_model_output``) the reply does not have the span shape.
+            (``input_too_long``) Vela could not cut the input into its token window.
+        :raises UpstreamError: (``invalid_model_output``) Vela rejected the request, or the reply
+            does not have the span shape.
         """
         answer = request.answer
         units: dict[str, int] = {"answer_chars": len(answer)}
@@ -308,15 +327,25 @@ class VelaDetector(BaseDetector):
             )
             try:
                 reply = self.model.system_one(state=state, questions=self._questions())
+            except LettuceDetectError:
+                # A model that already raises typed errors (InvalidInputError is a ValueError)
+                # passes them through as they are.
+                raise
             except ValueError as exc:
-                # Vela's SystemOneError (a ValueError) has type "too_long" when it cannot cut the
-                # input into its window; its message holds no customer text.
-                if getattr(exc, "type", None) != "too_long":
-                    raise
-                raise InvalidInputError(
-                    "The input does not fit the model's token window; pass shorter sources.",
-                    code="input_too_long",
-                    param="request",
+                # Vela raises its SystemOneError (a ValueError) for a request it rejects. Its
+                # message may quote the input, so it is chained but never repeated.
+                if getattr(exc, "type", None) == "too_long":
+                    # With one source part Vela can cut the input, so this is left for questions
+                    # that alone do not fit the window.
+                    raise InvalidInputError(
+                        "The input does not fit the model's token window; pass a shorter input.",
+                        code="input_too_long",
+                        param="request",
+                    ) from exc
+                raise UpstreamError(
+                    "Vela rejected the request. Check that the model speaks SystemOne.",
+                    code="invalid_model_output",
+                    service="vela",
                 ) from exc
             scoring_ms = (time.perf_counter() - started) * 1000
 
@@ -343,8 +372,9 @@ class VelaDetector(BaseDetector):
                     ResultWarning(
                         code="input_truncated",
                         message=(
-                            "The input exceeded the model's token budget and part of it was not "
-                            "scored; pass a shorter input."
+                            "The input reached the model's token budget, so part of it may not "
+                            "have been scored. An input that fits exactly, or a long answer "
+                            "scored in windows, is reported the same way."
                         ),
                     )
                 )
@@ -363,30 +393,29 @@ class VelaDetector(BaseDetector):
 
     @staticmethod
     def _state(request: DetectRequest) -> dict[str, str]:
-        """Return the SystemOne state for a request: ``request``, ``source`` and ``answer``.
+        r"""Return the SystemOne state for a request: ``source`` and ``answer``.
 
-        Blank parts are left out, since Vela rejects an empty part.
+        For ``SourcesInput`` the source is ``"User request: <question>\n\n<sources>"``. A blank
+        question or blank sources are left out, since Vela rejects an empty part.
 
         :raises InvalidInputError: (``empty_context``) there is neither a question nor a source.
         """
-        state: dict[str, str] = {}
         if isinstance(request, SourcesInput):
+            parts = []
             if request.question and request.question.strip():
-                state["request"] = request.question
-            source = "\n\n".join(chunk.text for chunk in request.sources if chunk.text.strip())
+                parts.append(_REQUEST_PREFIX + request.question)
+            parts.extend(chunk.text for chunk in request.sources if chunk.text.strip())
+            source = "\n\n".join(parts)
         else:
             source = request.prompt if request.prompt.strip() else ""
-        if source:
-            state["source"] = source
-        if not state:
+        if not source:
             raise InvalidInputError(
                 "The request has no context to check the answer against; pass non-empty "
                 "sources, a question or a prompt.",
                 code="empty_context",
                 param="request",
             )
-        state["answer"] = request.answer
-        return state
+        return {"source": source, "answer": request.answer}
 
     def _questions(self) -> dict[str, dict[str, Any]]:
         """Return the SystemOne questions: the one span question, which targets the answer."""
@@ -399,14 +428,15 @@ class VelaDetector(BaseDetector):
             question["threshold"] = self.config.threshold
         return {_QUESTION_ID: question}
 
-    @staticmethod
-    def _parse_spans(reply: dict[str, Any], answer: str) -> list[DetectedSpan]:
+    def _parse_spans(self, reply: dict[str, Any], answer: str) -> list[DetectedSpan]:
         """Map Vela's ``{label, start, end, text, probability}`` spans to detected spans.
 
-        The span text is taken from the answer, so it always matches the offsets.
+        The span text is taken from the answer, so it always matches the offsets. With more than
+        one criterion the label goes into ``category``; with one it says nothing and is dropped.
 
         :raises UpstreamError: (``invalid_model_output``) a span is missing or malformed.
         """
+        labelled = len(self.config.criteria) > 1
         spans_by_question = reply.get("spans")
         items = spans_by_question.get(_QUESTION_ID) if isinstance(spans_by_question, dict) else None
         if not isinstance(items, list):
@@ -420,9 +450,20 @@ class VelaDetector(BaseDetector):
                 raise _invalid_output(f"spans[{index}] has offsets outside the answer")
             if not (_is_number(probability) and 0.0 <= probability <= 1.0):
                 raise _invalid_output(f"spans[{index}] has a probability outside [0, 1]")
+            category = None
+            if labelled:
+                category = item.get("label")
+                if not isinstance(category, str) or category not in self.config.criteria:
+                    raise _invalid_output(f"spans[{index}] has a label that is not a criterion")
             start, end = int(start), int(end)
             spans.append(
-                DetectedSpan(start=start, end=end, text=answer[start:end], score=float(probability))
+                DetectedSpan(
+                    start=start,
+                    end=end,
+                    text=answer[start:end],
+                    score=float(probability),
+                    category=category,
+                )
             )
         return spans
 

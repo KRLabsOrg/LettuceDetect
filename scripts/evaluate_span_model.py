@@ -11,8 +11,9 @@ Usage:
         --dataset KRLabsOrg/lettucedetect-prose-hallucination \
         --split test [--by language] [--limit N]
 
-    # A Vela 2.0 model through VelaDetector; pin the revision of its remote code. Each row's
-    # prompt (user request plus context, the format Vela was trained on) goes in as a PromptInput.
+    # A Vela 2.0 model through VelaDetector; pin the revision of its remote code. Each row goes in
+    # as a SourcesInput: its question and context, or its prompt as the source when it has
+    # neither (RAGTruth).
     python scripts/evaluate_span_model.py \
         --method vela --model-path vllm-sr/Vela-2.0-0.3B --revision <commit> \
         --dataset KRLabsOrg/lettucedetect-code-hallucination \
@@ -57,6 +58,8 @@ def load_samples(
                     task_type=r.get("task_type", ""),
                     dataset=r.get("dataset", name),
                     language=r.get("language", "en"),
+                    context=r.get("context"),
+                    question=r.get("question"),
                 )
             )
             if limit and len(out) >= limit:
@@ -103,7 +106,16 @@ def main() -> None:
 
     rows = []
     for s in tqdm(samples, desc="predict"):
-        pred = detector.predict_prompt(s.prompt, s.answer, output_format="spans")
+        if args.method == "vela":
+            # SourcesInput, the path a service calls. A row without question and context
+            # (RAGTruth) has only its prompt, which then is the source.
+            if s.context or s.question:
+                sources = [s.context] if s.context else []
+            else:
+                sources = [s.prompt]
+            pred = detector.predict(sources, s.answer, s.question, output_format="spans")
+        else:
+            pred = detector.predict_prompt(s.prompt, s.answer, output_format="spans")
         rows.append((getattr(s, args.by), s.labels, pred))
 
     print_metrics_table(rows)

@@ -9,14 +9,16 @@ results can be compared directly with the
 
 ## Setup
 
-- **Model:** `vllm-sr/Vela-2.0-0.3B`, loaded with `VelaDetector.from_pretrained`(),
- which runs the inference code from the model repository as is.
+- **Model:** `vllm-sr/Vela-2.0-0.3B`, loaded with `VelaDetector.from_pretrained`, which runs the
+  inference code from the model repository as is.
 - **Question:** Vela's documented hallucination span question (`VelaConfig()` defaults) at Vela's
   calibrated threshold.
 - **Data:** the test splits of `KRLabsOrg/lettucedetect-code-hallucination` and
   `KRLabsOrg/lettucedetect-prose-hallucination`, 10,698 rows.
-- **Input:** each row's `prompt` (user request plus context) goes in as `PromptInput`, which
-  `VelaDetector` sends to Vela as the context, with the `answer` as the answer.
+- **Input:** each row goes in as `SourcesInput`, with its `question` and its `context` as the one
+  source. `VelaDetector` joins them into one context for Vela,
+  `User request: <question>\n\n<context>`, the format Vela was trained on. RAGTruth rows have no
+  question or context, so their `prompt` is the source.
 - **Metrics:** `scripts/span_eval_metrics.py`, the same char-overlap span-F1, example-F1 and IoU
   as the v2 model cards. Vela's headline number is **example-F1**.
 
@@ -52,10 +54,27 @@ python scripts/evaluate_span_model.py \
 The target is the reported example-F1 within ±0.01; the result is 0.0006 below it. The RAGTruth
 example-F1 (0.707) also matches Vela's reported RAGTruth F1 for the 0.3B (0.706).
 
+## How the question is sent
+
+Vela's state can hold the question as a separate `request` part or inside the context. The same
+test set, every row sent as `SourcesInput`, with four ways of building the state:
+
+| Question and sources sent as | ALL ex_F1 | ALL span_F1 | rows failed (`input_too_long`) |
+|---|--:|--:|--:|
+| **one source, `User request: <question>\n\n<sources>`** (used) | **0.847** | **0.629** | 0 |
+| one source, `<question>\n\n<sources>` | 0.844 | 0.620 | 0 |
+| one source, the encoder's prompt (`PromptUtils.format_context`) | 0.840 | 0.588 | 0 |
+| a separate `request` part and the sources as `source` | 0.830 | 0.604 | 586 |
+
+With a separate `request`, Vela fits an input into its token window by cutting the request, the
+first part it does not score, so long sources could not be cut and 586 rows failed. With one
+source, a long input is cut instead.
+
 ## Notes
 
 - The inference code comes from the model repository and is used directly. A new commit there can
   change both the code and the scores, so a rerun may not match these numbers exactly.
 - Inputs over the model's 8,192-token budget have their context cut by Vela. `VelaDetector` reports
-  those rows with the `input_truncated` warning.
+  those rows with the `input_truncated` warning. The reply cannot tell a cut input from one that
+  fits exactly, so an exact fit is reported too.
   
