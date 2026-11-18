@@ -33,6 +33,7 @@ from lettucedetect.detectors.types import (
     TokenScore,
     Usage,
 )
+from lettucedetect.detectors.vela import VelaConfig, VelaDetector
 
 __all__ = [
     "BaseDetector",
@@ -61,6 +62,8 @@ __all__ = [
     "TransformerDetector",
     "UpstreamError",
     "Usage",
+    "VelaConfig",
+    "VelaDetector",
     "_make_detector",
     "make_cache_key",
 ]

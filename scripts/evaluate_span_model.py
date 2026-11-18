@@ -10,6 +10,15 @@ Usage:
         --dataset KRLabsOrg/lettucedetect-code-hallucination \
         --dataset KRLabsOrg/lettucedetect-prose-hallucination \
         --split test [--by language] [--limit N]
+
+    # A Vela 2.0 model through VelaDetector; pin the revision of its remote code. Each row goes in
+    # as a SourcesInput: its question and context, or its prompt as the source when it has
+    # neither (RAGTruth).
+    python scripts/evaluate_span_model.py \
+        --method vela --model-path vllm-sr/Vela-2.0-0.3B --revision <commit> \
+        --dataset KRLabsOrg/lettucedetect-code-hallucination \
+        --dataset KRLabsOrg/lettucedetect-prose-hallucination \
+        --split test
 """
 
 from __future__ import annotations
@@ -26,6 +35,7 @@ from datasets import load_dataset  # noqa: E402
 from span_eval_metrics import print_metrics_table  # noqa: E402
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationSample  # noqa: E402
+from lettucedetect.detectors.vela import VelaDetector  # noqa: E402
 from lettucedetect.models.inference import HallucinationDetector  # noqa: E402
 
 
@@ -48,6 +58,8 @@ def load_samples(
                     task_type=r.get("task_type", ""),
                     dataset=r.get("dataset", name),
                     language=r.get("language", "en"),
+                    context=r.get("context"),
+                    question=r.get("question"),
                 )
             )
             if limit and len(out) >= limit:
@@ -59,6 +71,15 @@ def main() -> None:
     """CLI entry point."""
     ap = argparse.ArgumentParser(description="Per-source span-detector evaluation.")
     ap.add_argument("--model-path", required=True)
+    ap.add_argument(
+        "--method",
+        choices=["transformer", "vela"],
+        default="transformer",
+        help="transformer: a LettuceDetect encoder; vela: a Vela 2.0 model via VelaDetector.",
+    )
+    ap.add_argument(
+        "--revision", default=None, help="Model revision; pin a commit for --method vela."
+    )
     ap.add_argument("--dataset", action="append", default=[], required=True)
     ap.add_argument("--split", default="test")
     ap.add_argument("--by", choices=["dataset", "language"], default="dataset")
@@ -69,10 +90,15 @@ def main() -> None:
     ap.add_argument("--trust-remote-code", action="store_true")
     args = ap.parse_args()
 
-    kw = {"max_length": args.max_length, "trust_remote_code": args.trust_remote_code}
-    if args.device:
-        kw["device"] = args.device
-    detector = HallucinationDetector(method="transformer", model_path=args.model_path, **kw)
+    if args.method == "vela":
+        detector = VelaDetector.from_pretrained(
+            args.model_path, revision=args.revision, device=args.device
+        )
+    else:
+        kw = {"max_length": args.max_length, "trust_remote_code": args.trust_remote_code}
+        if args.device:
+            kw["device"] = args.device
+        detector = HallucinationDetector(method="transformer", model_path=args.model_path, **kw)
     samples = load_samples(args.dataset, args.split, args.limit, args.only)
 
     # Predict each sample ONCE; metrics are computed from the cached spans.
@@ -80,7 +106,16 @@ def main() -> None:
 
     rows = []
     for s in tqdm(samples, desc="predict"):
-        pred = detector.predict_prompt(s.prompt, s.answer, output_format="spans")
+        if args.method == "vela":
+            # SourcesInput, the path a service calls. A row without question and context
+            # (RAGTruth) has only its prompt, which then is the source.
+            if s.context or s.question:
+                sources = [s.context] if s.context else []
+            else:
+                sources = [s.prompt]
+            pred = detector.predict(sources, s.answer, s.question, output_format="spans")
+        else:
+            pred = detector.predict_prompt(s.prompt, s.answer, output_format="spans")
         rows.append((getattr(s, args.by), s.labels, pred))
 
     print_metrics_table(rows)
