@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import logging
 import numbers
@@ -37,6 +38,7 @@ from lettucedetect.detectors.types import (
     SourcesInput,
     Usage,
 )
+from lettucedetect.detectors.vela_client import SystemOneClient
 
 logger = logging.getLogger(__name__)
 
@@ -183,11 +185,14 @@ class VelaDetector(BaseDetector):
 
     With more than one criterion in the config, each span's ``category`` is the label Vela matched.
 
-    Construction downloads nothing, reads no environment variable and writes no file. Calls run
-    under one private lock, so concurrent calls on one instance run one at a time.
+    Construction downloads nothing, reads no environment variable and writes no file. Calls to a
+    local model run under one private lock, so concurrent calls on one instance run one at a time.
 
     Vela ships its code in the model repository, so loading needs ``trust_remote_code=True``.
     :meth:`from_pretrained` sets it; pin ``revision`` to a commit you have reviewed.
+    :meth:`from_server` calls a SystemOne server instead, such as the ``vela2_serve.py`` script in
+    the model repository; nothing is loaded in-process then. Call :meth:`close`, or use the
+    detector in a ``with`` block, to close its HTTP connections when it is no longer needed.
 
     Example::
 
@@ -199,6 +204,10 @@ class VelaDetector(BaseDetector):
                 answer="Ships Monday.",
             ),
             min_score=0.5,
+        )
+
+        served = VelaDetector.from_server(
+            "http://127.0.0.1:8001", model="vllm-sr/Vela-2.0-0.3B", api_key="<key>"
         )
 
     :param model: a loaded Vela model, or any object with a system_one(state=..., questions=...) method..
@@ -227,8 +236,10 @@ class VelaDetector(BaseDetector):
         self.model_version = model_version
         # Scoring lock is created here, not lazily as in EncoderDetector: from_pretrained
         # calls cls(), so __init__ always runs and no first-call race exists. A plain Lock is
-        # enough because only _detect takes it, once per call.
+        # enough because only _detect takes it, once per call. A model that says it is
+        # thread_safe, such as SystemOneClient, is called without it.
         self._scoring_lock = threading.Lock()
+        self._lock_calls = not getattr(model, "thread_safe", False)
         logger.debug(
             "vela detector built: model_id=%s criteria=%d threshold=%s max_length=%d",
             model_id,
@@ -285,6 +296,54 @@ class VelaDetector(BaseDetector):
         _log_model_loaded(model_id, version, device, started, module_logger=logger)
         return detector
 
+    @classmethod
+    def from_server(
+        cls,
+        base_url: str,
+        *,
+        model: str,
+        api_key: str | None = None,
+        timeout: float = 30.0,
+        config: VelaConfig | None = None,
+        model_version: str | None = None,
+    ) -> VelaDetector:
+        """Build a detector that calls a SystemOne server (``POST /v1/systemone``).
+
+        No request is sent here, and nothing is read from the environment: the URL and the key
+        come from the caller. The server does not report which commit of the model it runs, so
+        ``usage`` carries the caller's ``model_version``. The detector holds an HTTP connection
+        pool; call :meth:`close` or use it in a ``with`` block when it is no longer needed.
+
+        :param base_url: the server's base URL, for example ``http://127.0.0.1:8001``.
+        :param model: the model name the server serves; also the ``model_id`` in ``usage``.
+        :param api_key: sent as ``Authorization: Bearer <api_key>``; ``None`` sends no header.
+        :param timeout: seconds to wait for the server, per request.
+        :param config: options, ``VelaConfig()`` when ``None``.
+        :param model_version: version reported in ``usage``.
+        :raises ConfigurationError: (``invalid_config``) ``base_url`` or ``model`` is blank, or
+            ``timeout`` is not positive.
+        """
+        client = SystemOneClient(base_url, model=model, api_key=api_key, timeout=timeout)
+        return cls(client, config=config, model_id=model, model_version=model_version)
+
+    def close(self) -> None:
+        """Close the model's connections, if it has any.
+
+        A detector from :meth:`from_server` closes its HTTP client; for a local model this does
+        nothing. Calling it more than once is safe.
+        """
+        close = getattr(self.model, "close", None)
+        if callable(close):
+            close()
+
+    def __enter__(self) -> VelaDetector:
+        """Return the detector, for use in a ``with`` block."""
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Close the model's connections at the end of a ``with`` block."""
+        self.close()
+
     # ------------------------------------------------------------------
     # Detection
     # ------------------------------------------------------------------
@@ -302,6 +361,8 @@ class VelaDetector(BaseDetector):
             (``input_too_long``) Vela could not cut the input into its token window.
         :raises UpstreamError: (``invalid_model_output``) Vela rejected the request, or the reply
             does not have the span shape.
+            A detector from :meth:`from_server` also raises the errors of
+            :meth:`SystemOneClient.system_one`.
         """
         answer = request.answer
         units: dict[str, int] = {"answer_chars": len(answer)}
@@ -317,7 +378,7 @@ class VelaDetector(BaseDetector):
             return Detection(usage=[self._usage(units)])
 
         requested = time.perf_counter()
-        with self._scoring_lock:
+        with self._scoring_lock if self._lock_calls else contextlib.nullcontext():
             started = time.perf_counter()
             logger.debug(
                 "detect started: kind=%s model_id=%s lock_wait_ms=%.1f",
