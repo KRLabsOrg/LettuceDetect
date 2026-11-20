@@ -1,7 +1,7 @@
 """Golden (characterization) tests pinning today's ``RAGFactCheckerDetector`` output.
 
-The detector is built without its constructor (which needs an OpenAI key) and given a fake fact
-checker that returns fixed triplets and results, so the tests are network-free. Recordings live in
+The detector is given a fake fact checker that returns fixed triplets and results, so the tests
+are network-free. Recordings live in
 ``tests/fixtures/golden/rag_<case>_<format>.json``.
 """
 
@@ -23,7 +23,7 @@ def _result(hallucinated: list[list[str]]) -> dict:
         "answer_triplets": [["France", "population", "69 million"], ["Paris", "is", "capital"]],
         "context_triplets": [["France", "population", "67 million"]],
         "hallucinated_triplets": hallucinated,
-        "fact_check_results": {"0": "contradiction", "1": "entailment"},
+        "fact_check_results": {0: False, 1: True},
     }
 
 
@@ -59,9 +59,7 @@ class FakeFactChecker:
 
 
 def _detector(case: str) -> RAGFactCheckerDetector:
-    detector = RAGFactCheckerDetector.__new__(RAGFactCheckerDetector)  # skip the API-key __init__
-    detector.rag = FakeFactChecker(dict(CASES[case]))
-    return detector
+    return RAGFactCheckerDetector(fact_checker=FakeFactChecker(dict(CASES[case])))
 
 
 def _record(case: str, output_format: str) -> dict:

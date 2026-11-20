@@ -117,9 +117,19 @@ class BaseDetector(ABC):
             )
         result = self._detect(request, include_tokens=include_tokens, include_detail=include_detail)
         if min_score > 0.0:
-            result = result.model_copy(
-                update={"spans": [s for s in result.spans if s.score >= min_score]}
-            )
+            keep = [span.score >= min_score for span in result.spans]
+            update: dict[str, object] = {
+                "spans": [span for span, kept in zip(result.spans, keep, strict=True) if kept]
+            }
+            if result.detail is not None and result.detail.span_triplets:
+                # span_triplets is parallel to spans, so it is filtered with them.
+                triplets = result.detail.span_triplets
+                update["detail"] = result.detail.model_copy(
+                    update={
+                        "span_triplets": [t for t, kept in zip(triplets, keep, strict=True) if kept]
+                    }
+                )
+            result = result.model_copy(update=update)
         return result
 
     async def adetect(

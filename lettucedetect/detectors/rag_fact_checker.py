@@ -7,16 +7,24 @@ import threading
 import time
 from typing import Any
 
+from pydantic import ValidationError
+
 from lettucedetect.detectors.base import BaseDetector
-from lettucedetect.detectors.errors import ConfigurationError
+from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError, UpstreamError
 from lettucedetect.detectors.types import (
+    Chunk,
+    DetailedResult,
     DetectedSpan,
     Detection,
     DetectRequest,
+    PromptInput,
     ResultWarning,
     SourcesInput,
+    Triplets,
     Usage,
 )
+
+_LEGACY_FORMATS = ("tokens", "spans", "detailed")
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +49,14 @@ class RAGFactCheckerDetector(BaseDetector):
         (and ``detect_hallucinations_batch`` for the batch method). When passed, nothing is built
         and the environment is not read. When omitted, ``RAGFactChecker`` is built from the
         arguments above, for backward compatibility (it lives outside this package).
-    :param max_concurrency: the most ``detect`` and ``adetect`` calls that run the fact checker
-        at once on this instance (default 30).
+    :param max_concurrency: the most ``detect``, ``adetect``, ``predict`` and ``predict_prompt``
+        calls that run the fact checker at once on this instance (default 30).
     :param kwargs: ignored, kept for backward compatibility.
     :raises ConfigurationError: (``invalid_config``) ``max_concurrency`` is not an integer >= 1.
     """
 
     supports_tokens = False
-    supports_detail = False
+    supports_detail = True
 
     def __init__(
         self,
@@ -96,8 +104,11 @@ class RAGFactCheckerDetector(BaseDetector):
 
         :param request: the sources (or prompt) and the answer to check.
         :param include_tokens: unused, ``detect`` rejects it (``supports_tokens`` is ``False``).
-        :param include_detail: unused for now, ``detect`` rejects it.
+        :param include_detail: whether to fill ``Detection.detail`` with the triplets, the
+            fact-check results and the source triplet of each span.
         :returns: the detection result.
+        :raises UpstreamError: (``invalid_model_output``) ``include_detail`` is set and the fact
+            checker returned triplets or results of an unexpected shape.
         """
         answer = request.answer
         if isinstance(request, SourcesInput):
@@ -125,12 +136,14 @@ class RAGFactCheckerDetector(BaseDetector):
             result = self.rag.detect_hallucinations(context, answer, question)
             check_ms = (time.perf_counter() - started) * 1000
 
+        raw_spans = self._convert_to_spans(answer, result)
         spans = [
             DetectedSpan(
                 start=item["start"], end=item["end"], text=item["text"], score=item["confidence"]
             )
-            for item in self._convert_to_spans(answer, result)
+            for item in raw_spans
         ]
+        detail = self._detail(result, raw_spans) if include_detail else None
         warnings = (
             [
                 ResultWarning(
@@ -147,9 +160,77 @@ class RAGFactCheckerDetector(BaseDetector):
         logger.debug("detect finished: spans=%d check_ms=%.1f", len(spans), check_ms)
         return Detection(
             spans=spans,
+            detail=detail,
             usage=[Usage(model_id=self.model_id, model_version=None, units=units)],
             warnings=warnings,
         )
+
+    @staticmethod
+    def _detail(result: dict[str, Any], raw_spans: list[dict[str, Any]]) -> DetailedResult:
+        """Build the evidence of one fact check; ``span_triplets`` is parallel to the spans."""
+        try:
+            return DetailedResult(
+                triplets=Triplets(
+                    answer=result.get("answer_triplets", []),
+                    context=result.get("context_triplets", []),
+                    hallucinated=result.get("hallucinated_triplets", []),
+                ),
+                fact_check_results=result.get("fact_check_results", {}),
+                span_triplets=[item.get("triplet") for item in raw_spans],
+            )
+        except ValidationError as exc:
+            raise UpstreamError(
+                "The fact checker returned triplets or results of an unexpected shape.",
+                code="invalid_model_output",
+                service="rag_fact_checker",
+            ) from exc
+
+    @staticmethod
+    def _check_rag_arguments(output_format: str, min_confidence: float) -> None:
+        """Validate the arguments the ``predict*`` methods share."""
+        if output_format not in _LEGACY_FORMATS:
+            raise InvalidInputError(
+                f"Invalid output format '{output_format}'. "
+                "RAGFactChecker supports 'tokens', 'spans', or 'detailed'",
+                code="unsupported_output_format",
+                param="output_format",
+            )
+        if not 0.0 <= min_confidence <= 1.0:
+            raise InvalidInputError(
+                "min_confidence must be in [0, 1]; pass a value between 0.0 and 1.0.",
+                code="invalid_min_score",
+                param="min_confidence",
+            )
+
+    def _legacy_output(
+        self, request: DetectRequest, output_format: str, min_confidence: float
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """Answer a ``predict*`` call with :meth:`detect`, in the legacy dict format."""
+        detection = self.detect(request, include_detail=True)
+        detail = detection.detail
+        assert detail is not None  # noqa: S101 - detect fills it when asked
+        if output_format == "tokens":
+            return self._convert_to_tokens(
+                request.answer, {"hallucinated_triplets": detail.triplets.hallucinated}
+            )
+        spans = [
+            {
+                "start": span.start,
+                "end": span.end,
+                "text": span.text,
+                "confidence": span.score,
+                "triplet": triplet,
+            }
+            for span, triplet in zip(detection.spans, detail.span_triplets, strict=True)
+        ]
+        if output_format == "detailed":
+            # Detailed output is not filtered by min_confidence.
+            return {
+                "spans": spans,
+                "triplets": detail.triplets.model_dump(),
+                "fact_check_results": dict(detail.fact_check_results),
+            }
+        return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
     def predict(
         self,
@@ -160,7 +241,7 @@ class RAGFactCheckerDetector(BaseDetector):
         min_confidence: float = 0.0,
         **kwargs,
     ) -> list[dict[str, Any]] | dict[str, Any]:
-        """Predict hallucinations using RAGFactChecker.
+        """Predict hallucinations using RAGFactChecker, through :meth:`detect`.
 
         :param context: List of context documents
         :param answer: Answer text to check for hallucinations
@@ -172,33 +253,16 @@ class RAGFactCheckerDetector(BaseDetector):
         :param kwargs: Additional arguments
 
         :return: List of predictions in lettuceDetect format, or dict for detailed format
+        :raises InvalidInputError: (``unsupported_output_format``) for an unknown
+            ``output_format``; (``invalid_min_score``) for ``min_confidence`` outside ``[0, 1]``.
         """
-        if output_format not in ["tokens", "spans", "detailed"]:
-            raise ValueError(
-                f"Invalid output format '{output_format}'. "
-                "RAGFactChecker supports 'tokens', 'spans', or 'detailed'"
-            )
-        self._validate_min_confidence(min_confidence)
-
-        # Use our simple wrapper's detection method
-        result = self.rag.detect_hallucinations(context, answer, question)
-
-        # Convert to lettuceDetect's expected format
-        if output_format == "detailed":
-            return {
-                "spans": self._convert_to_spans(answer, result),
-                "triplets": {
-                    "answer": result.get("answer_triplets", []),
-                    "context": result.get("context_triplets", []),
-                    "hallucinated": result.get("hallucinated_triplets", []),
-                },
-                "fact_check_results": result.get("fact_check_results", {}),
-            }
-        elif output_format == "spans":
-            spans = self._convert_to_spans(answer, result)
-            return self._filter_spans_by_confidence(spans, output_format, min_confidence)
-        else:  # tokens
-            return self._convert_to_tokens(answer, result)
+        self._check_rag_arguments(output_format, min_confidence)
+        request = SourcesInput(
+            sources=[Chunk(id=str(i), text=text) for i, text in enumerate(context)],
+            answer=answer,
+            question=question,
+        )
+        return self._legacy_output(request, output_format, min_confidence)
 
     def predict_prompt(
         self,
@@ -206,11 +270,14 @@ class RAGFactCheckerDetector(BaseDetector):
         answer: str,
         output_format: str = "tokens",
         min_confidence: float = 0.0,
-    ) -> list[dict[str, Any]]:
-        """Predict using a single prompt string as context."""
-        return self.predict(
-            [prompt], answer, output_format=output_format, min_confidence=min_confidence
-        )
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """Predict using a single prompt string as context, through :meth:`detect`.
+
+        :raises InvalidInputError: as :meth:`predict`.
+        """
+        self._check_rag_arguments(output_format, min_confidence)
+        request = PromptInput(prompt=prompt, answer=answer)
+        return self._legacy_output(request, output_format, min_confidence)
 
     def predict_prompt_batch(
         self,
@@ -219,10 +286,30 @@ class RAGFactCheckerDetector(BaseDetector):
         output_format: str = "tokens",
         min_confidence: float = 0.0,
     ) -> list[list[dict[str, Any]]]:
-        """Batch prediction using RAGFactChecker's batch processing."""
+        """Batch prediction using RAGFactChecker's batch processing.
+
+        :raises InvalidInputError: (``length_mismatch``) for lists of different lengths;
+            (``invalid_min_score``) for ``min_confidence`` outside ``[0, 1]``;
+            (``unsupported_output_format``) for anything but ``"tokens"`` or ``"spans"``.
+        """
         if len(prompts) != len(answers):
-            raise ValueError("Number of prompts must match number of answers")
-        self._validate_min_confidence(min_confidence)
+            raise InvalidInputError(
+                "Number of prompts must match number of answers",
+                code="length_mismatch",
+                param="answers",
+            )
+        if not 0.0 <= min_confidence <= 1.0:
+            raise InvalidInputError(
+                "min_confidence must be in [0, 1]; pass a value between 0.0 and 1.0.",
+                code="invalid_min_score",
+                param="min_confidence",
+            )
+        if output_format not in ("tokens", "spans"):
+            raise InvalidInputError(
+                f"Unknown output format: {output_format}",
+                code="unsupported_output_format",
+                param="output_format",
+            )
 
         contexts = [[prompt] for prompt in prompts]  # Convert prompts to context lists
         rag_results = self.rag.detect_hallucinations_batch(contexts, answers)
@@ -232,13 +319,11 @@ class RAGFactCheckerDetector(BaseDetector):
         for i, (answer, rag_result) in enumerate(zip(answers, rag_results)):
             if output_format == "tokens":
                 converted = self._convert_to_tokens(answer, rag_result)
-            elif output_format == "spans":
+            else:  # spans
                 converted = self._convert_to_spans(answer, rag_result)
                 converted = self._filter_spans_by_confidence(
                     converted, output_format, min_confidence
                 )
-            else:
-                raise ValueError(f"Unknown output format: {output_format}")
             converted_results.append(converted)
 
         return converted_results

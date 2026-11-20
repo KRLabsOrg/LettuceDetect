@@ -10,13 +10,14 @@ from unittest.mock import patch
 
 import pytest
 
-from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError
+from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError, UpstreamError
 from lettucedetect.detectors.rag_fact_checker import RAGFactCheckerDetector
 from lettucedetect.detectors.types import (
     Chunk,
-    DetectedSpan,
+    DetailedResult,
     PromptInput,
     SourcesInput,
+    Triplets,
 )
 from tests.detector_contract import DetectorContract
 from tests.test_golden_rag_fact_checker_pytest import ANSWER_4, CASES
@@ -46,7 +47,7 @@ RESULT = {
         ["France", "population", "69 million"],
         ["Barcelona", "north", "coast", "Madrid"],
     ],
-    "fact_check_results": {"0": False},
+    "fact_check_results": {0: False},
 }
 
 
@@ -133,27 +134,6 @@ def test_invalid_max_concurrency_raises_configuration_error(value):
 # -- detect ----------------------------------------------------------------------------------
 
 
-def _legacy_as_spans(raw: list[dict]) -> list[DetectedSpan]:
-    return [
-        DetectedSpan(start=s["start"], end=s["end"], text=s["text"], score=s["confidence"])
-        for s in raw
-    ]
-
-
-@pytest.mark.parametrize("case", list(CASES))
-def test_detect_spans_equal_legacy_spans_with_score_as_confidence(case):
-    """``detect`` returns today's ``predict(output_format="spans")`` spans, score = confidence."""
-    detector = _detector(dict(CASES[case]))
-    for answer, _ in CASES[case]:
-        legacy = _legacy_as_spans(detector.predict(["context"], answer, "q", output_format="spans"))
-        sources = SourcesInput(sources=[Chunk(id="0", text="context")], answer=answer, question="q")
-        assert detector.detect(sources).spans == legacy
-        legacy_prompt = _legacy_as_spans(
-            detector.predict_prompt("prompt", answer, output_format="spans")
-        )
-        assert detector.detect(PromptInput(prompt="prompt", answer=answer)).spans == legacy_prompt
-
-
 def test_detect_passes_context_question_and_answer_to_the_fact_checker():
     """Sources become the context list; a prompt becomes a one-item context without question."""
     detector = _detector()
@@ -219,12 +199,143 @@ def test_usage_has_one_entry_with_sources_and_char_counts():
     }
 
 
+def test_include_detail_returns_triplets_results_and_a_triplet_per_span():
+    """``include_detail=True`` returns the evidence; ``span_triplets`` is parallel to the spans."""
+    detection = _detector().detect(SOURCES, include_detail=True)
+    assert detection.detail == DetailedResult(
+        triplets=Triplets(
+            answer=RESULT["answer_triplets"],
+            context=RESULT["context_triplets"],
+            hallucinated=RESULT["hallucinated_triplets"],
+        ),
+        fact_check_results={0: False},
+        span_triplets=[
+            ["France", "population", "69 million"],
+            ["Barcelona", "north", "coast", "Madrid"],
+        ],
+    )
+    assert [s.text for s in detection.spans] == ["69 million", "Madrid"]
+
+
+def test_without_include_detail_detail_is_none():
+    """``detail`` is ``None`` unless asked for."""
+    assert _detector().detect(SOURCES).detail is None
+
+
+def test_min_score_keeps_span_triplets_parallel_to_spans():
+    """Spans dropped by ``min_score`` take their source triplet with them."""
+    detection = _detector().detect(SOURCES, min_score=0.8, include_detail=True)
+    assert [s.text for s in detection.spans] == ["69 million"]
+    assert detection.detail.span_triplets == [["France", "population", "69 million"]]
+
+
+def test_malformed_fact_check_results_raise_upstream_error_only_with_detail():
+    """A reply that does not fit ``DetailedResult`` raises ``UpstreamError``; spans still work."""
+    malformed = {**RESULT, "fact_check_results": {"0": "contradiction"}}
+    detector = _detector({ANSWER: malformed})
+    with pytest.raises(UpstreamError) as exc:
+        detector.detect(SOURCES, include_detail=True)
+    assert exc.value.code == "invalid_model_output"
+    assert detector.detect(SOURCES).spans
+
+
 def test_include_tokens_raises_tokens_not_supported():
     """The detector has no token scores."""
     with pytest.raises(InvalidInputError) as exc:
         _detector().detect(SOURCES, include_tokens=True)
     assert exc.value.code == "tokens_not_supported"
     assert exc.value.param == "include_tokens"
+
+
+# -- legacy predict* methods -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("output_format", ["tokens", "spans", "detailed"])
+def test_predict_and_predict_prompt_go_through_detect(output_format):
+    """``predict`` and ``predict_prompt`` call ``detect`` once per call."""
+    detector = _detector()
+    with patch.object(detector, "detect", wraps=detector.detect) as detect:
+        detector.predict(["context"], ANSWER, output_format=output_format)
+        detector.predict_prompt("prompt", ANSWER, output_format=output_format)
+    assert detect.call_count == 2
+
+
+def test_predict_spans_carry_the_source_triplet():
+    """Legacy spans keep their ``triplet`` key."""
+    spans = _detector().predict(["context"], ANSWER, output_format="spans")
+    assert [(s["text"], s["triplet"]) for s in spans] == [
+        ("69 million", ["France", "population", "69 million"]),
+        ("Madrid", ["Barcelona", "north", "coast", "Madrid"]),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "code", "param"),
+    [
+        ({"output_format": "bad"}, "unsupported_output_format", "output_format"),
+        ({"min_confidence": 1.5}, "invalid_min_score", "min_confidence"),
+        ({"min_confidence": -0.1}, "invalid_min_score", "min_confidence"),
+    ],
+)
+def test_predict_and_predict_prompt_raise_invalid_input_error(kwargs, code, param):
+    """Bad legacy arguments raise ``InvalidInputError`` before the fact checker runs."""
+    detector = _detector()
+    for call in (
+        lambda: detector.predict(["context"], ANSWER, **kwargs),
+        lambda: detector.predict_prompt("prompt", ANSWER, **kwargs),
+    ):
+        with pytest.raises(InvalidInputError) as exc:
+            call()
+        assert (exc.value.code, exc.value.param) == (code, param)
+    assert detector.rag.calls == []
+
+
+@pytest.mark.parametrize(
+    ("args", "kwargs", "code"),
+    [
+        ((["p", "p"], [ANSWER]), {}, "length_mismatch"),
+        ((["p"], [ANSWER]), {"min_confidence": 2.0}, "invalid_min_score"),
+        ((["p"], [ANSWER]), {"output_format": "detailed"}, "unsupported_output_format"),
+    ],
+)
+def test_predict_prompt_batch_raises_invalid_input_error(args, kwargs, code):
+    """Bad batch arguments raise ``InvalidInputError`` before the fact checker runs."""
+    detector = _detector()
+    with patch.object(detector.rag, "detect_hallucinations_batch") as batch:
+        with pytest.raises(InvalidInputError) as exc:
+            detector.predict_prompt_batch(*args, **kwargs)
+    assert exc.value.code == code
+    batch.assert_not_called()
+
+
+def test_max_concurrency_bounds_concurrent_predict_calls():
+    """``predict`` and ``predict_prompt`` share the bound through ``detect``."""
+    lock = threading.Lock()
+    active = peak = 0
+
+    def count() -> None:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+
+    detector = RAGFactCheckerDetector(
+        fact_checker=FakeFactChecker({ANSWER: RESULT}, on_call=count), max_concurrency=1
+    )
+    threads = [
+        threading.Thread(target=detector.predict, args=(["context"], ANSWER)) for _ in range(4)
+    ] + [
+        threading.Thread(target=detector.predict_prompt, args=("prompt", ANSWER)) for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert len(detector.rag.calls) == 8
+    assert peak == 1
 
 
 # -- adetect and concurrency -----------------------------------------------------------------
