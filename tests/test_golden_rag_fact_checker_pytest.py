@@ -3,10 +3,6 @@
 The detector is built without its constructor (which needs an OpenAI key) and given a fake fact
 checker that returns fixed triplets and results, so the tests are network-free. Recordings live in
 ``tests/fixtures/golden/rag_<case>_<format>.json``.
-
-``rag_merge_overlap_text_shorter_than_offsets_*`` records a defect: ``_merge_overlapping_spans``
-extends ``end`` but keeps the first span's ``text``, so ``text`` is shorter than ``end - start``.
-The pull request that fixes it updates exactly those fixtures as an intended change.
 """
 
 from __future__ import annotations
@@ -39,8 +35,8 @@ CASES = {
     ],
     # The fourth element is only found by the single-word fallback, so confidence is 0.7.
     "single_word_match": [(ANSWER_3, _result([["Barcelona", "north", "coast", "Madrid"]]))],
-    # Both triplets match at the same start; merging keeps the first, shorter, text.
-    "merge_overlap_text_shorter_than_offsets": [
+    # Both triplets match at the same start; the merged text covers both.
+    "merge_overlap": [
         (ANSWER_4, _result([["France", "is", "unknown"], ["France", "is", "69 million"]]))
     ],
 }
@@ -108,10 +104,8 @@ def test_single_word_match_has_lower_confidence():
     assert [span["confidence"] for span in spans] == [0.7]
 
 
-def test_merge_leaves_text_shorter_than_offsets():
-    """Documents the defect the recording pins: merged ``text`` is shorter than its offsets."""
-    spans = _detector("merge_overlap_text_shorter_than_offsets").predict(
-        ["c"], ANSWER_4, output_format="spans"
-    )
+def test_merged_text_equals_answer_between_offsets():
+    """A merged span's ``text`` is the answer between its offsets."""
+    spans = _detector("merge_overlap").predict(["c"], ANSWER_4, output_format="spans")
     assert len(spans) == 1
-    assert len(spans[0]["text"]) < spans[0]["end"] - spans[0]["start"]
+    assert spans[0]["text"] == ANSWER_4[spans[0]["start"] : spans[0]["end"]]
