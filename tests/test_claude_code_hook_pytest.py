@@ -168,6 +168,81 @@ class TestMain:
         )
         assert code == 0
 
+    def test_min_confidence_keeps_unscored_spans(self, tmp_path, capsys):
+        """Test min confidence keeps unscored spans."""
+        ctx = self.make_context(tmp_path)
+        code = run_main(
+            ["--model-path", "stub", "--context-file", ctx, "--min-confidence", "0.5"],
+            {"transcript_path": str(FIXTURE)},
+            spans=[
+                {"text": "69 million", "hallucination_score": None},
+                {"text": "wrong version", "start": 0, "end": 13},
+            ],
+        )
+        assert code == 2
+        captured = capsys.readouterr()
+        assert "69 million" in captured.err
+        assert "wrong version" in captured.err
+
+    def test_min_confidence_mixes_scored_and_unscored(self, tmp_path, capsys):
+        """Test min confidence keeps unscored spans and drops scored ones."""
+        ctx = self.make_context(tmp_path)
+        code = run_main(
+            ["--model-path", "stub", "--context-file", ctx, "--min-confidence", "0.5"],
+            {"transcript_path": str(FIXTURE)},
+            spans=[
+                {"text": "low confidence", "confidence": 0.1},
+                {"text": "native typed span", "category": "unsupported_addition"},
+                {"text": "high confidence", "confidence": 0.9},
+            ],
+        )
+        assert code == 2
+        err = capsys.readouterr().err
+        assert "low confidence" not in err
+        assert "native typed span" in err
+        assert "high confidence" in err
+
+    def test_llm_mode_unscored_spans_reported_above_threshold(self, tmp_path, capsys):
+        """Test llm mode unscored spans reported above threshold."""
+        ctx = self.make_context(tmp_path)
+        seen = {}
+
+        class StubDetector:
+            """Stub LLM detector returning native-path spans without confidence."""
+
+            def __init__(self, **kwargs):
+                seen.update(kwargs)
+
+            def predict(self, **kwargs):
+                return [
+                    {
+                        "text": "added retry logic",
+                        "start": 0,
+                        "end": 19,
+                        "category": "unsupported_addition",
+                    }
+                ]
+
+        with (
+            patch("sys.stdin", io.StringIO(json.dumps({"transcript_path": str(FIXTURE)}))),
+            patch("lettucedetect.models.inference.HallucinationDetector", StubDetector),
+        ):
+            code = main(
+                [
+                    "--llm-model",
+                    "KRLabsOrg/lettucedect-v2-qwen-2b",
+                    "--llm-base-url",
+                    "http://localhost:8001/v1",
+                    "--context-file",
+                    ctx,
+                    "--min-confidence",
+                    "0.5",
+                ]
+            )
+        assert seen["base_url"] == "http://localhost:8001/v1"
+        assert code == 2
+        assert "added retry logic" in capsys.readouterr().err
+
     def test_invalid_stdin_exits_0(self):
         """Test invalid stdin exits 0."""
         with patch("sys.stdin", io.StringIO("not json")):
