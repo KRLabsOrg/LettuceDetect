@@ -458,15 +458,24 @@ class BaseDetector(ABC):
     ) -> list:
         """Answer a ``predict*`` call with :meth:`detect`, in the legacy dict format."""
         self._check_legacy_arguments(output_format, min_confidence)
+        self._check_legacy_tokens(output_format)
+        detection = self.detect(
+            request, min_score=min_confidence, include_tokens=output_format == "tokens"
+        )
+        return self._to_legacy(detection, output_format)
+
+    def _check_legacy_tokens(self, output_format: str) -> None:
+        """Reject ``"tokens"`` output on a detector without token scores."""
         if output_format == "tokens" and not self.supports_tokens:
             raise InvalidInputError(
                 'This detector does not return token scores; call with output_format="spans".',
                 code="tokens_not_supported",
                 param="output_format",
             )
-        detection = self.detect(
-            request, min_score=min_confidence, include_tokens=output_format == "tokens"
-        )
+
+    @staticmethod
+    def _to_legacy(detection: Detection, output_format: str) -> list:
+        """Convert a detection into the legacy dict format of the ``predict*`` methods."""
         if output_format == "tokens":
             assert detection.tokens is not None  # noqa: S101 - detect fills it when asked
             return [
@@ -542,7 +551,11 @@ class BaseDetector(ABC):
         output_format: str = "tokens",
         min_confidence: float = 0.0,
     ) -> list:
-        """Batch version of :meth:`predict_prompt`; for now one pair at a time.
+        """Batch version of :meth:`predict_prompt`.
+
+        The default builds the requests and calls :meth:`detect_batch`. A failed pair raises
+        its error, the first one in input order. A detector with its own ``predict_prompt``
+        gets every pair through that method instead.
 
         :param prompts: List of full prompt strings.
         :param answers: List of answers to inspect.
@@ -559,10 +572,23 @@ class BaseDetector(ABC):
                 code="length_mismatch",
                 param="answers",
             )
-        return [
-            self.predict_prompt(prompt, answer, output_format, min_confidence)
-            for prompt, answer in zip(prompts, answers, strict=True)
-        ]
+        if type(self).predict_prompt is not BaseDetector.predict_prompt:
+            return [
+                self.predict_prompt(prompt, answer, output_format, min_confidence)
+                for prompt, answer in zip(prompts, answers, strict=True)
+            ]
+        if not prompts:
+            return []
+        self._check_legacy_tokens(output_format)
+        results = self.detect_batch(
+            [
+                PromptInput(prompt=prompt, answer=answer)
+                for prompt, answer in zip(prompts, answers, strict=True)
+            ],
+            min_score=min_confidence,
+            include_tokens=output_format == "tokens",
+        )
+        return [self._to_legacy(result.get_or_raise(), output_format) for result in results]
 
     @staticmethod
     def _validate_min_confidence(min_confidence: float) -> None:

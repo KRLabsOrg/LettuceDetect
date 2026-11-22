@@ -346,3 +346,145 @@ async def test_llm_detector_forwards_batches_to_the_detector_it_built():
     with pytest.raises(InvalidInputError) as exc:
         detector.detect_batch(requests, include_tokens=True)
     assert exc.value.code == "tokens_not_supported"
+
+
+# -- predict_prompt_batch goes through detect_batch -----------------------------------------------
+
+
+class _Spy:
+    """Counts the ``detect_batch`` calls of a detector and passes them on."""
+
+    def __init__(self, detector: BaseDetector) -> None:
+        self.calls: list[list] = []
+        original = detector.detect_batch
+
+        def detect_batch(requests, **kwargs):
+            self.calls.append(list(requests))
+            return original(requests, **kwargs)
+
+        detector.detect_batch = detect_batch
+
+
+def test_default_predict_prompt_batch_goes_through_detect_batch():
+    detector = Echo()
+    spy = _Spy(detector)
+    out = detector.predict_prompt_batch(["p1", "p2"], ["one a", "two b"], "spans", 0.2)
+    assert out == [
+        [{"start": 0, "end": 3, "text": "one", "confidence": 0.5}],
+        [{"start": 0, "end": 3, "text": "two", "confidence": 0.5}],
+    ]
+    assert spy.calls == [
+        [PromptInput(prompt="p1", answer="one a"), PromptInput(prompt="p2", answer="two b")]
+    ]
+    assert detector.predict_prompt_batch(["p1"], ["one a"], "spans", 0.6) == [[]]
+    assert detector.predict_prompt_batch([], [], "tokens") == []
+
+
+def test_default_predict_prompt_batch_raises_the_first_failure_in_input_order():
+    class TwoFailures(Echo):
+        def _detect(self, request, *, include_tokens, include_detail):
+            try:
+                return super()._detect(
+                    request, include_tokens=include_tokens, include_detail=include_detail
+                )
+            except UpstreamError:
+                raise UpstreamError(
+                    "failed", code=request.answer.split()[1], service="stub"
+                ) from None
+
+    # The first failure in input order is the last one to happen.
+    detector = TwoFailures(max_concurrency=4, delays={"fail first_code": 0.1})
+    with pytest.raises(UpstreamError) as exc:
+        detector.predict_prompt_batch(
+            ["p"] * 4, ["one a", "fail first_code", "three c", "fail second_code"], "spans"
+        )
+    assert exc.value.code == "first_code"
+    assert detector.order[-1] == "fail first_code"
+    assert len(detector.order) == 4  # every pair ran; the failure is raised afterwards
+
+
+def test_default_predict_prompt_batch_keeps_using_an_overridden_predict_prompt():
+    class OwnPredictPrompt(Echo):
+        def predict_prompt(self, prompt, answer, output_format="tokens", min_confidence=0.0):
+            return [{"raw": prompt + answer}]
+
+    detector = OwnPredictPrompt()
+    spy = _Spy(detector)
+    assert detector.predict_prompt_batch(["p", "q"], ["a", "b"], "spans") == [
+        [{"raw": "pa"}],
+        [{"raw": "qb"}],
+    ]
+    assert spy.calls == []
+
+
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+@pytest.mark.parametrize("output_format", ["spans", "tokens"])
+def test_llm_detector_predict_prompt_batch_goes_through_detect_batch(output_format):
+    requests, replies = _numbered_judge(5)
+    prompts, answers = [r.prompt for r in requests], [r.answer for r in requests]
+    detector = LLMDetector(model="judge-model", client=FakeClient(replies))
+    spy = _Spy(detector)
+    batch = detector.predict_prompt_batch(prompts, answers, output_format=output_format)
+    assert spy.calls == [requests]
+    assert batch == [
+        detector.predict_prompt(prompt, answer, output_format=output_format)
+        for prompt, answer in zip(prompts, answers, strict=True)
+    ]
+
+
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+def test_llm_detector_predict_prompt_batch_raises_the_first_failure_in_input_order():
+    requests, replies = _numbered_judge(5)
+
+    class Failing(FakeClient):
+        def complete(self, system, user, model, temperature, schema) -> str:
+            for index in (1, 3):
+                if requests[index].answer in user:
+                    time.sleep(0.1 if index == 1 else 0.0)
+                    raise UpstreamError("failed", code=f"failed_{index}", service="stub")
+            return super().complete(system, user, model, temperature, schema)
+
+    detector = LLMDetector(model="judge-model", client=Failing(replies))
+    codes = [result.error.code for result in detector.detect_batch(requests) if not result.ok]
+    assert codes == ["failed_1", "failed_3"]
+    with pytest.raises(UpstreamError) as exc:
+        detector.predict_prompt_batch([r.prompt for r in requests], [r.answer for r in requests])
+    assert exc.value.code == "failed_1"
+
+
+@pytest.mark.parametrize("output_format", ["spans", "tokens"])
+def test_rag_predict_prompt_batch_goes_through_detect_batch(output_format):
+    detector, state, requests = _rag(3)
+    detector.rag.detect_hallucinations_batch = None  # the batch method of the checker is unused
+    spy = _Spy(detector)
+    prompts, answers = [r.prompt for r in requests], [r.answer for r in requests]
+    batch = detector.predict_prompt_batch(prompts, answers, output_format=output_format)
+    assert spy.calls == [requests]
+    assert state["max"] == 3
+    assert batch == [
+        detector.predict_prompt(prompt, answer, output_format=output_format)
+        for prompt, answer in zip(prompts, answers, strict=True)
+    ]
+    assert all(batch)
+
+
+def test_rag_predict_prompt_batch_raises_the_first_failure_in_input_order():
+    class Failing(FakeFactChecker):
+        def detect_hallucinations(self, context, answer, question=None):
+            if " 2 " in answer or " 7 " in answer:
+                number = answer.split()[2]
+                raise UpstreamError("failed", code=f"failed_{number}", service="stub")
+            return super().detect_hallucinations(context, answer, question)
+
+    _, _, requests = _rag(2)
+    checker = Failing({r.answer: {"hallucinated_triplets": []} for r in requests})
+    detector = RAGFactCheckerDetector(fact_checker=checker, max_concurrency=4)
+    with pytest.raises(UpstreamError) as exc:
+        detector.predict_prompt_batch(
+            [r.prompt for r in requests], [r.answer for r in requests], output_format="spans"
+        )
+    assert exc.value.code == "failed_2"

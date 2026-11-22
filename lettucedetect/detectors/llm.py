@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from concurrent.futures import ThreadPoolExecutor
 
 from lettucedetect.detectors._deprecation import (
     _UNSET,
@@ -354,31 +353,29 @@ class LLMDetector(BaseDetector):
         :param min_confidence: Drop ``"spans"`` below this confidence threshold.
         :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
         """
-        spans = self._detect_spans(prompt, answer, output_format, min_confidence)
-        if output_format == "tokens":
-            return self._convert_to_tokens(answer, spans)
-        return spans
+        detection = self._delegate.detect(
+            PromptInput(prompt=prompt, answer=answer),
+            min_score=self._legacy_min_score(output_format, min_confidence),
+        )
+        return self._legacy_output(detection, answer, output_format)
 
-    def _detect_spans(
-        self, prompt: str, answer: str, output_format: str, min_confidence: float
-    ) -> list[dict]:
-        """Run the generative or the judge detector and turn its result into span dicts.
+    @staticmethod
+    def _legacy_min_score(output_format: str, min_confidence: float) -> float:
+        """Return the ``min_score`` of a ``predict*`` call: token output is not filtered."""
+        return 0.0 if output_format == "tokens" else min_confidence
+
+    def _legacy_output(self, detection: Detection, answer: str, output_format: str) -> list:
+        """Turn a detection into the legacy span dicts, or into token dicts for ``"tokens"``.
 
         ``confidence`` is the span's ``score``. For ``"tokens"`` a span the model gave no
         confidence for has no ``confidence`` key, so its tokens get the fixed probability.
 
-        :param prompt: The prompt string.
+        :param detection: The result of the judge or the generative detector.
         :param answer: The answer string.
         :param output_format: ``"tokens"`` or ``"spans"``.
-        :param min_confidence: Passed as ``min_score`` for ``"spans"``; tokens are not filtered.
-        :returns: List of spans.
-        :raises UpstreamError: (``unparseable_response``) the reply can't be parsed.
+        :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
         """
         for_tokens = output_format == "tokens"
-        detection = self._delegate.detect(
-            PromptInput(prompt=prompt, answer=answer),
-            min_score=0.0 if for_tokens else min_confidence,
-        )
         # With a synthetic_score warning, a score of 1.0 marks a span without a model confidence.
         synthetic = any(warning.code == "synthetic_score" for warning in detection.warnings)
         spans = []
@@ -391,6 +388,8 @@ class LLMDetector(BaseDetector):
                 if value is not None:
                     item[key] = value
             spans.append(item)
+        if for_tokens:
+            return self._convert_to_tokens(answer, spans)
         return spans
 
     def predict(
@@ -445,6 +444,9 @@ class LLMDetector(BaseDetector):
     ) -> list:
         """Predict hallucination spans from the provided prompts and answers.
 
+        The pairs run through :meth:`detect_batch`; a failed pair raises its error, the first
+        one in input order.
+
         :param prompts: List of prompt strings.
         :param answers: List of answer strings.
         :param output_format: ``"tokens"`` for per-token dicts, ``"spans"`` for character spans.
@@ -463,9 +465,11 @@ class LLMDetector(BaseDetector):
             )
         self._check_legacy_arguments(output_format, min_confidence)
 
-        with ThreadPoolExecutor(max_workers=30) as pool:
-            futs = [
-                pool.submit(self._predict, p, a, output_format, min_confidence)
-                for p, a in zip(prompts, answers)
-            ]
-            return [fut.result() for fut in futs]
+        results = self.detect_batch(
+            [PromptInput(prompt=p, answer=a) for p, a in zip(prompts, answers)],
+            min_score=self._legacy_min_score(output_format, min_confidence),
+        )
+        return [
+            self._legacy_output(result.get_or_raise(), answer, output_format)
+            for result, answer in zip(results, answers)
+        ]
