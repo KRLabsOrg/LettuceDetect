@@ -20,6 +20,10 @@ from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import LLMClient
 from tests.golden import assert_golden
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
 FORMATS = ["tokens", "spans"]
 
 # (context passages, answer, question); the answers are not substrings of each other, so the fake

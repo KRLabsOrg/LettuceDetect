@@ -327,23 +327,13 @@ class TestJudgeDelegation:
 
         assert detector._judge is None
 
-    def test_missing_fewshot_path_still_sends_a_prompt_without_examples(self, cache_file):
-        """A fewshot_path that does not exist keeps working, with no examples in the prompt."""
-        prompts = []
+    def test_missing_fewshot_path_raises_configuration_error(self, cache_file):
+        """A fewshot_path that does not exist is rejected at construction."""
+        with pytest.raises(ConfigurationError) as exc:
+            LLMDetector(client=FakeClient("{}"), cache_file=cache_file, fewshot_path="no/such.json")
 
-        class Recording(LLMClient):
-            def complete(self, system, user, model, temperature, schema) -> str:
-                prompts.append(user)
-                return '{"hallucination_list": ["Spain"]}'
-
-        detector = LLMDetector(
-            client=Recording(), cache_file=cache_file, fewshot_path="no/such.json"
-        )
-
-        spans = detector.predict_prompt("p", "Lisbon is the capital of Spain.")
-
-        assert [span["text"] for span in spans] == ["Spain"]
-        assert "<example1>" not in prompts[0]
+        assert exc.value.code == "fewshot_not_found"
+        assert exc.value.param == "config.fewshot_path"
 
     def test_client_error_propagates(self, cache_file):
         """A typed error of the client comes out of predict unwrapped."""

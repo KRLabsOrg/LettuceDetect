@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
+from lettucedetect.detectors._deprecation import (
+    _UNSET,
+    _message,
+    _warn,
+    deprecated,
+    warn_if_passed,
+)
 from lettucedetect.detectors._llm_shared import (
     load_verify_template,
     locate_items,
     resolve_taxonomy,
 )
 from lettucedetect.detectors.base import BaseDetector
-from lettucedetect.detectors.cache import CacheManager
-from lettucedetect.detectors.errors import UpstreamError
+from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
+from lettucedetect.detectors.file_cache import FileCache
 from lettucedetect.detectors.generative import GenerativeConfig, GenerativeDetector
 from lettucedetect.detectors.llm_client import (
     LLMClient,
@@ -24,10 +29,8 @@ from lettucedetect.detectors.llm_judge import (
     LLMJudgeDetector,
     response_format_block,
 )
-from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
+from lettucedetect.detectors.prompt_utils import Lang, PromptUtils
 from lettucedetect.detectors.types import PromptInput
-
-logger = logging.getLogger(__name__)
 
 
 def _looks_native(model: str) -> bool:
@@ -50,8 +53,16 @@ _HALLUCINATED_TOKEN_PROB = 0.9
 _SUPPORTED_TOKEN_PROB = 0.1
 
 
+@deprecated("LLMJudgeDetector or GenerativeDetector")
 class LLMDetector(BaseDetector):
-    """LLM-powered hallucination detector."""
+    """LLM-powered hallucination detector.
+
+    .. deprecated:: 0.3.0
+        Use :class:`LLMJudgeDetector` or :class:`GenerativeDetector` and pass them a client.
+        ``LLMDetector`` will be removed in 0.5.0. It builds one of the two, chosen by the model
+        name or by ``native=``, and its ``provider``, ``client_kwargs`` and ``cache_file``
+        arguments and the omitted ``client`` are deprecated with it.
+    """
 
     def __init__(
         self,
@@ -62,7 +73,7 @@ class LLMDetector(BaseDetector):
         fewshot_path: str | None = None,
         prompt_path: str | None = None,
         cache_file: str | None = None,
-        provider: str = "openai",
+        provider: str = _UNSET,
         client: LLMClient | None = None,
         include_reasoning: bool = False,
         include_taxonomy: bool | list[str] | dict[str, str] = False,
@@ -79,9 +90,12 @@ class LLMDetector(BaseDetector):
         :param zero_shot: Whether to use zero-shot hallucination detection.
         :param fewshot_path: The path to the few-shot examples.
         :param prompt_path: The path to the prompt.
-        :param cache_file: The path to the cache file.
-        :param provider: Backend provider, ``"openai"`` or ``"bedrock"``. Ignored if ``client`` is given.
-        :param client: An explicit :class:`LLMClient` instance; overrides ``provider``.
+        :param cache_file: The path to the cache file. Deprecated: without it nothing is cached
+            and no file is written.
+        :param provider: Backend provider, ``"openai"`` (the default) or ``"bedrock"``. Ignored if
+            ``client`` is given. Deprecated.
+        :param client: An explicit :class:`LLMClient` instance; overrides ``provider``. Leaving it
+            out is deprecated.
         :param include_reasoning: If True, ask the LLM for a confidence score and a short
             reasoning per span and include them as ``confidence`` and ``reasoning`` keys
             in the returned spans.
@@ -96,10 +110,23 @@ class LLMDetector(BaseDetector):
             Only meaningful together with ``include_reasoning`` (which produces the score).
         :param verify: If True, run a second adversarial pass that re-judges each flagged
             span against the source and discards the ones it cannot confirm.
-        :param client_kwargs: Extra keyword arguments forwarded to the provider client constructor.
+        :param native: ``True`` runs :class:`GenerativeDetector`, ``False``
+            :class:`LLMJudgeDetector`; ``None`` chooses by the model name.
+        :param client_kwargs: Extra keyword arguments forwarded to the provider client
+            constructor. Deprecated.
+        :raises ConfigurationError: ``native_options_conflict`` for the native path with
+            ``zero_shot``, ``fewshot_path`` or ``prompt_path``; the codes of
+            :class:`LLMJudgeConfig` and :class:`GenerativeConfig` for an invalid option, such as
+            ``invalid_language`` and ``fewshot_not_found``.
         """
-        if lang not in LANG_TO_PASSAGE:
-            raise ValueError(f"Invalid language. Use one of: {', '.join(LANG_TO_PASSAGE.keys())}")
+        warn_if_passed(provider, "provider", "the 'client' argument")
+        warn_if_passed(client_kwargs or _UNSET, "client_kwargs", "the 'client' argument")
+        if cache_file is not None:
+            warn_if_passed(
+                cache_file,
+                "cache_file",
+                "cache=FileCache(path) on LLMJudgeDetector or GenerativeDetector",
+            )
 
         self.model = model
         self.temperature = temperature
@@ -112,77 +139,72 @@ class LLMDetector(BaseDetector):
         # with their frozen training prompt + hallucinated_spans contract, instead of
         # the zero-shot judge prompt. Auto-detected from the model id; override explicitly.
         self.native = _looks_native(model) if native is None else native
-        if self.native and (zero_shot or fewshot_path or prompt_path):
-            raise ValueError(
+        conflicts = {
+            "zero_shot": zero_shot,
+            "fewshot_path": fewshot_path,
+            "prompt_path": prompt_path,
+        }
+        conflict = next((name for name, value in conflicts.items() if value), None)
+        if self.native and conflict:
+            raise ConfigurationError(
                 "zero_shot, fewshot_path, and prompt_path have no effect on the native "
                 "generative detectors (they use their frozen training prompt); pass "
-                "native=False to prompt this model as a generic LLM judge instead."
+                "native=False to prompt this model as a generic LLM judge instead.",
+                code="native_options_conflict",
+                param=conflict,
             )
+        config = (
+            GenerativeConfig(
+                temperature=temperature,
+                lang=lang,
+                include_reasoning=include_reasoning,
+                include_taxonomy=include_taxonomy,
+                verify=verify,
+            )
+            if self.native
+            else LLMJudgeConfig(
+                temperature=temperature,
+                lang=lang,
+                zero_shot=zero_shot,
+                fewshot_path=fewshot_path,
+                prompt_path=prompt_path,
+                include_reasoning=include_reasoning,
+                include_taxonomy=include_taxonomy,
+                min_score=min_confidence,
+                verify=verify,
+            )
+        )
         self.categories, self.subcategories = resolve_taxonomy(include_taxonomy)
         self.schema = build_hallucination_schema(
             include_reasoning=include_reasoning,
             categories=list(self.categories) if self.categories else None,
             subcategories=list(self.subcategories) if self.subcategories else None,
         )
-        self.client = client or make_llm_client(provider, **client_kwargs)
-
-        if fewshot_path is not None and not Path(fewshot_path).exists():
-            logger.warning("Few-shot examples file not found at %s", fewshot_path)
-            # A missing file means a prompt without examples, which is the zero-shot prompt.
-            fewshot_path, zero_shot = None, True
-        if prompt_path is not None and not Path(prompt_path).exists():
-            raise FileNotFoundError(f"Prompt template not found at {prompt_path}")
+        if client is None:
+            _warn(
+                _message(
+                    "LLMDetector without the 'client' argument",
+                    "client=OpenAIClient(...) or client=BedrockClient(...)",
+                ),
+                2,
+            )
+            client = make_llm_client("openai" if provider is _UNSET else provider, **client_kwargs)
+        self.client = client
         self.verify_template = load_verify_template()
 
-        # Set up cache
-        if cache_file is None:
-            cache_file = (
-                Path(__file__).parent.parent
-                / "cache"
-                / f"cache_{model.replace(':', '_')}_{lang}.json"
-            )
-            logger.info("Using default cache file: %s", cache_file)
-        else:
-            logger.info("Using provided cache file: %s", cache_file)
-
-        self.cache = CacheManager(cache_file)
+        # A cache exists only for a cache_file the caller passed.
+        self.cache = None if cache_file is None else FileCache(cache_file)
 
         # The native path runs through GenerativeDetector, the judge path through LLMJudgeDetector.
         self._generative = (
-            GenerativeDetector(
-                self.client,
-                model,
-                config=GenerativeConfig(
-                    temperature=temperature,
-                    lang=lang,
-                    include_reasoning=include_reasoning,
-                    include_taxonomy=include_taxonomy,
-                    verify=verify,
-                ),
-                cache=self.cache,
-            )
+            GenerativeDetector(self.client, model, config=config, cache=self.cache)
             if self.native
             else None
         )
         self._judge = (
             None
             if self.native
-            else LLMJudgeDetector(
-                self.client,
-                model,
-                config=LLMJudgeConfig(
-                    temperature=temperature,
-                    lang=lang,
-                    zero_shot=zero_shot,
-                    fewshot_path=fewshot_path,
-                    prompt_path=prompt_path,
-                    include_reasoning=include_reasoning,
-                    include_taxonomy=include_taxonomy,
-                    min_score=min_confidence,
-                    verify=verify,
-                ),
-                cache=self.cache,
-            )
+            else LLMJudgeDetector(self.client, model, config=config, cache=self.cache)
         )
 
     def _response_format_block(self) -> str:

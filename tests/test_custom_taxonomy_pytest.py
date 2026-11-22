@@ -5,6 +5,7 @@ import json
 import pytest
 import torch
 
+from lettucedetect.detectors.errors import ConfigurationError
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import LLMClient, build_generative_schema
 from lettucedetect.detectors.taxonomy_head import resolve_taxonomy
@@ -109,7 +110,7 @@ class TestNativeCustomTaxonomy:
     def test_native_rejects_dead_args(self, tmp_path):
         """Test native rejects dead args."""
         for kwargs in ({"zero_shot": True}, {"fewshot_path": "x.json"}, {"prompt_path": "p.txt"}):
-            with pytest.raises(ValueError, match="native"):
+            with pytest.raises(ConfigurationError, match="native"):
                 LLMDetector(
                     model="KRLabsOrg/lettucedect-v2-qwen-2b",
                     client=CaptureClient(),
