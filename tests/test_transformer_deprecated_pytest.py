@@ -148,6 +148,9 @@ def test_loader_os_error_is_not_translated():
         TransformerDetector(model_path="dummy_path")
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_construction_logs_model_loaded_once(local_wordpiece_tokenizer, caplog):
     caplog.set_level(logging.DEBUG)
     det = _construct(local_wordpiece_tokenizer)
@@ -178,6 +181,9 @@ def test_detect_and_adetect_equal_an_encoder_detector_without_warning(local_word
 # -- predict output and __new__ -----------------------------------------------------------
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_predict_and_predict_prompt_equal_the_golden_files(local_wordpiece_tokenizer):
     det = _construct(local_wordpiece_tokenizer)
     for fmt in ("tokens", "spans"):
@@ -191,6 +197,9 @@ def test_predict_and_predict_prompt_equal_the_golden_files(local_wordpiece_token
         )
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_new_with_six_attributes_answers_predict_and_detect(local_wordpiece_tokenizer):
     det = _bare(local_wordpiece_tokenizer)
     assert_golden(
@@ -200,6 +209,9 @@ def test_new_with_six_attributes_answers_predict_and_detect(local_wordpiece_toke
     assert det.detect(_sources(*PREDICT_INPUTS[0])).spans is not None
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_new_answers_concurrent_predict_with_one_lock(local_wordpiece_tokenizer):
     state = {"active": 0, "max": 0}
     guard = threading.Lock()

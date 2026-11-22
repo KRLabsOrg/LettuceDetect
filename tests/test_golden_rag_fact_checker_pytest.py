@@ -12,6 +12,10 @@ import pytest
 from lettucedetect.detectors.rag_fact_checker import RAGFactCheckerDetector
 from tests.golden import assert_golden
 
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
 ANSWER = "The population of France is 69 million and Paris is its capital."
 ANSWER_2 = "Lisbon is the capital of Spain."
 ANSWER_3 = "Madrid is mentioned here."

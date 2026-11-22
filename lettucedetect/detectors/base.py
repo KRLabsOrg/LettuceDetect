@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import threading
 import warnings
 from abc import ABC
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any, TypeVar, cast
 
-from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning, _message
+from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning, _message, _warn
 from lettucedetect.detectors.errors import InvalidInputError, LettuceDetectError
 from lettucedetect.detectors.types import (
     BatchResult,
@@ -34,6 +36,39 @@ _warned_lock = threading.Lock()
 # is answering a ``detect`` call on this thread. A ``detect`` call made from inside that method
 # goes to ``_detect``, so an override that calls ``super().predict`` or ``detect`` does not recurse.
 _bridging = threading.local()
+
+# ``_legacy_calls.depth`` counts the deprecated ``predict*`` methods running on this thread, so
+# only the outermost one warns.
+_legacy_calls = threading.local()
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _deprecated_predict(replacement: str) -> Callable[[_F], _F]:
+    """Mark a ``predict*`` method as deprecated in favour of ``replacement``.
+
+    A call from outside ``lettucedetect`` warns once, at the caller's line. A call from inside
+    the package is silent, and so is a call made while another ``predict*`` method runs on this
+    thread or while the detector's ``predict*`` answers a ``detect`` call.
+    """
+
+    def decorate(method: _F) -> _F:
+        @functools.wraps(method)
+        def guard(self: BaseDetector, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            depth = getattr(_legacy_calls, "depth", 0)
+            if not depth and id(self) not in getattr(_bridging, "detectors", ()):
+                name = f"{type(self).__qualname__}.{method.__name__}"
+                _warn(_message(name, replacement), 2)
+            _legacy_calls.depth = depth + 1
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                _legacy_calls.depth = depth
+
+        setattr(guard, "__deprecated__", _message(method.__qualname__, replacement))
+        return cast(_F, guard)
+
+    return decorate
 
 
 def _reset_legacy_warnings() -> None:
@@ -497,6 +532,7 @@ class BaseDetector(ABC):
             result.append(item)
         return result
 
+    @_deprecated_predict("detect")
     def predict(
         self,
         context: list[str],
@@ -530,6 +566,7 @@ class BaseDetector(ABC):
         )
         return self._predict_via_detect(request, output_format, min_confidence)
 
+    @_deprecated_predict("detect")
     def predict_prompt(
         self, prompt: str, answer: str, output_format: str = "tokens", min_confidence: float = 0.0
     ) -> list:
@@ -553,6 +590,7 @@ class BaseDetector(ABC):
         request = PromptInput(prompt=prompt, answer=answer)
         return self._predict_via_detect(request, output_format, min_confidence)
 
+    @_deprecated_predict("detect_batch")
     def predict_prompt_batch(
         self,
         prompts: list[str],

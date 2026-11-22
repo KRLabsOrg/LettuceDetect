@@ -10,6 +10,7 @@ import torch
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
 from lettucedetect.detectors._deprecation import deprecated
+from lettucedetect.detectors.base import _deprecated_predict
 from lettucedetect.detectors.encoder import (
     EncoderConfig,
     EncoderDetector,
@@ -98,6 +99,7 @@ class TransformerDetector(EncoderDetector):
     # Public API
     # ------------------------------------------------------------------
 
+    @_deprecated_predict("detect")
     def predict(
         self,
         context: list[str],
@@ -140,6 +142,7 @@ class TransformerDetector(EncoderDetector):
             result = self.typer.type_spans(answer, "\n".join(context), result)
         return self._filter_spans_by_confidence(result, output_format, min_confidence)
 
+    @_deprecated_predict("detect")
     def predict_prompt(
         self, prompt: str, answer: str, output_format: str = "tokens", min_confidence: float = 0.0
     ) -> list:
@@ -180,6 +183,7 @@ class TransformerDetector(EncoderDetector):
             spans = self.typer.type_spans(answer, prompt, spans)
         return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
+    @_deprecated_predict("detect_batch")
     def predict_prompt_batch(
         self,
         prompts: list[str],

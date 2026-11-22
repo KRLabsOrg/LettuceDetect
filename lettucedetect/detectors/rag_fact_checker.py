@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from lettucedetect.detectors.base import BaseDetector
+from lettucedetect.detectors.base import BaseDetector, _deprecated_predict
 from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError, UpstreamError
 from lettucedetect.detectors.types import (
     Chunk,
@@ -239,6 +239,7 @@ class RAGFactCheckerDetector(BaseDetector):
             }
         return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
+    @_deprecated_predict("detect")
     def predict(
         self,
         context: list[str],
@@ -277,6 +278,7 @@ class RAGFactCheckerDetector(BaseDetector):
         )
         return self._legacy_output(request, output_format, min_confidence)
 
+    @_deprecated_predict("detect")
     def predict_prompt(
         self,
         prompt: str,
@@ -298,6 +300,7 @@ class RAGFactCheckerDetector(BaseDetector):
         request = PromptInput(prompt=prompt, answer=answer)
         return self._legacy_output(request, output_format, min_confidence)
 
+    @_deprecated_predict("detect_batch")
     def predict_prompt_batch(
         self,
         prompts: list[str],

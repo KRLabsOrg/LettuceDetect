@@ -104,6 +104,9 @@ def test_provider_with_a_client_still_warns_as_a_deprecated_argument():
     assert [str(w.message) for w in caught] == [CLASS_MESSAGE, PROVIDER_MESSAGE]
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_construction_inside_the_package_is_silent(tmp_path):
     kwargs = {"client": FakeClient(PLAIN), "cache_file": str(tmp_path / "c.json")}
     namespace = {
@@ -113,6 +116,7 @@ def test_construction_inside_the_package_is_silent(tmp_path):
         "kwargs": kwargs,
     }
     context, answer, question = CASES[0]
+    expected = _construct(native=False).predict(context, answer, question, output_format="spans")
     with patch(MAKE_CLIENT, return_value=FakeClient(PLAIN)), warnings.catch_warnings():
         warnings.simplefilter("error")
         exec(  # noqa: S102
@@ -120,9 +124,7 @@ def test_construction_inside_the_package_is_silent(tmp_path):
             namespace,
         )
         facade = HallucinationDetector(method="llm", provider="openai", **kwargs)
-        assert facade.predict(context, answer, question, output_format="spans") == _construct(
-            native=False
-        ).predict(context, answer, question, output_format="spans")
+        assert facade.predict(context, answer, question, output_format="spans") == expected
 
 
 def test_docstring_note_and_metadata():
@@ -192,6 +194,9 @@ def test_invalid_option_raises_configuration_error_before_a_client_is_built(kwar
 # -- cache --------------------------------------------------------------------------------
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_cache_file_builds_a_file_cache_and_warns_naming_cache(tmp_path):
     path = tmp_path / "cache.json"
     with pytest.warns(WARNING) as caught:
@@ -205,6 +210,9 @@ def test_cache_file_builds_a_file_cache_and_warns_naming_cache(tmp_path):
     assert path.is_file()
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize("native", [False, True])
 def test_without_cache_file_nothing_is_cached_and_no_file_is_written(native, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -286,6 +294,9 @@ def test_facade_returns_the_golden_output_without_warning():
     assert_golden("facade_llm", results)
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_min_confidence_is_the_min_score_of_the_delegate():
     detector = _construct(client=FakeClient(REASONED), include_reasoning=True)
     prompt, answer = PROMPTS[1], ANSWERS[1]
@@ -318,6 +329,9 @@ def _entry_points(detector: LLMDetector, **kwargs) -> list:
     ]
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize(
     ("kwargs", "code", "param"),
     [
@@ -335,6 +349,9 @@ def test_bad_call_arguments_raise_invalid_input_error_before_any_call(kwargs, co
     assert client.calls == 0
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_batch_length_mismatch_raises_invalid_input_error():
     client = _Failing()
     with pytest.raises(InvalidInputError) as exc:
@@ -343,6 +360,9 @@ def test_batch_length_mismatch_raises_invalid_input_error():
     assert client.calls == 0
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize(
     ("native", "reply"),
     [
@@ -360,6 +380,9 @@ def test_unparseable_reply_raises_the_typed_error_of_the_delegate(native, reply)
         assert exc.value.code == "unparseable_response"
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize("native", [False, True])
 def test_client_error_comes_out_of_every_entry_point_unwrapped(native):
     error = UpstreamError("down", code="upstream_unavailable", service="llm", retryable=True)

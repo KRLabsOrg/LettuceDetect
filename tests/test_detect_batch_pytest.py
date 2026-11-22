@@ -365,6 +365,9 @@ class _Spy:
         detector.detect_batch = detect_batch
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_default_predict_prompt_batch_goes_through_detect_batch():
     detector = Echo()
     spy = _Spy(detector)
@@ -380,6 +383,9 @@ def test_default_predict_prompt_batch_goes_through_detect_batch():
     assert detector.predict_prompt_batch([], [], "tokens") == []
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_default_predict_prompt_batch_raises_the_first_failure_in_input_order():
     class TwoFailures(Echo):
         def _detect(self, request, *, include_tokens, include_detail):
@@ -403,6 +409,9 @@ def test_default_predict_prompt_batch_raises_the_first_failure_in_input_order():
     assert len(detector.order) == 4  # every pair ran; the failure is raised afterwards
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_default_predict_prompt_batch_keeps_using_an_overridden_predict_prompt():
     class OwnPredictPrompt(Echo):
         def predict_prompt(self, prompt, answer, output_format="tokens", min_confidence=0.0):
@@ -456,6 +465,9 @@ def test_llm_detector_predict_prompt_batch_raises_the_first_failure_in_input_ord
     assert exc.value.code == "failed_1"
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize("output_format", ["spans", "tokens"])
 def test_rag_predict_prompt_batch_goes_through_detect_batch(output_format):
     detector, state, requests = _rag(3)
@@ -472,6 +484,9 @@ def test_rag_predict_prompt_batch_goes_through_detect_batch(output_format):
     assert all(batch)
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_rag_predict_prompt_batch_raises_the_first_failure_in_input_order():
     class Failing(FakeFactChecker):
         def detect_hallucinations(self, context, answer, question=None):

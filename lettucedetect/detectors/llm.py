@@ -15,7 +15,7 @@ from lettucedetect.detectors._llm_shared import (
     locate_items,
     resolve_taxonomy,
 )
-from lettucedetect.detectors.base import BaseDetector
+from lettucedetect.detectors.base import BaseDetector, _deprecated_predict
 from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError
 from lettucedetect.detectors.file_cache import FileCache
 from lettucedetect.detectors.generative import GenerativeConfig, GenerativeDetector
@@ -392,6 +392,7 @@ class LLMDetector(BaseDetector):
             return self._convert_to_tokens(answer, spans)
         return spans
 
+    @_deprecated_predict("detect")
     def predict(
         self,
         context: list[str],
@@ -418,6 +419,7 @@ class LLMDetector(BaseDetector):
         full_prompt = PromptUtils.format_context(context, question, self.lang)
         return self._predict(full_prompt, answer, output_format, min_confidence)
 
+    @_deprecated_predict("detect")
     def predict_prompt(
         self, prompt: str, answer: str, output_format: str = "spans", min_confidence: float = 0.0
     ) -> list:
@@ -435,6 +437,7 @@ class LLMDetector(BaseDetector):
         self._check_legacy_arguments(output_format, min_confidence)
         return self._predict(prompt, answer, output_format, min_confidence)
 
+    @_deprecated_predict("detect_batch")
     def predict_prompt_batch(
         self,
         prompts: list[str],
