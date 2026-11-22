@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from lettucedetect.detectors.errors import ConfigurationError
+from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
 from lettucedetect.detectors.generative import GenerativeConfig, GenerativeDetector
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import LLMClient
@@ -327,23 +327,13 @@ class TestJudgeDelegation:
 
         assert detector._judge is None
 
-    def test_missing_fewshot_path_still_sends_a_prompt_without_examples(self, cache_file):
-        """A fewshot_path that does not exist keeps working, with no examples in the prompt."""
-        prompts = []
+    def test_missing_fewshot_path_raises_configuration_error(self, cache_file):
+        """A fewshot_path that does not exist is rejected at construction."""
+        with pytest.raises(ConfigurationError) as exc:
+            LLMDetector(client=FakeClient("{}"), cache_file=cache_file, fewshot_path="no/such.json")
 
-        class Recording(LLMClient):
-            def complete(self, system, user, model, temperature, schema) -> str:
-                prompts.append(user)
-                return '{"hallucination_list": ["Spain"]}'
-
-        detector = LLMDetector(
-            client=Recording(), cache_file=cache_file, fewshot_path="no/such.json"
-        )
-
-        spans = detector.predict_prompt("p", "Lisbon is the capital of Spain.")
-
-        assert [span["text"] for span in spans] == ["Spain"]
-        assert "<example1>" not in prompts[0]
+        assert exc.value.code == "fewshot_not_found"
+        assert exc.value.param == "config.fewshot_path"
 
     def test_client_error_propagates(self, cache_file):
         """A typed error of the client comes out of predict unwrapped."""
@@ -437,13 +427,15 @@ class TestNativeDelegation:
         assert [(token["pred"], token["prob"]) for token in tokens] == [(0, 0.1)] * 5 + [(1, 0.9)]
 
     @pytest.mark.parametrize("reply", ["not json at all", '{"analysis": "nothing"}'])
-    def test_unparseable_reply_returns_no_spans_and_is_not_cached(self, cache_file, reply):
-        """A reply that can't be parsed gives no spans and is asked for again on the next call."""
+    def test_unparseable_reply_raises_and_is_not_cached(self, cache_file, reply):
+        """A reply that can't be parsed raises and is asked for again on the next call."""
         client = CountingClient(reply)
         detector = LLMDetector(client=client, cache_file=cache_file, native=True)
 
-        assert detector.predict_prompt("p", self.ANSWER) == []
-        assert detector.predict_prompt("p", self.ANSWER) == []
+        for _ in range(2):
+            with pytest.raises(UpstreamError) as exc:
+                detector.predict_prompt("p", self.ANSWER)
+            assert exc.value.code == "unparseable_response"
         assert client.calls == 2
 
     def test_client_error_propagates(self, cache_file):

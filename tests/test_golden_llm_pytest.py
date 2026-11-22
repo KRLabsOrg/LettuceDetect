@@ -6,7 +6,7 @@ network-free and need no API key. Each recording holds ``predict``, ``predict_pr
 ``tests/fixtures/golden/llm_<config>_<format>.json``.
 
 The ``llm_defect_*`` recordings are today's behaviour where the detectors epic changes it (spans
-without ``confidence``, unparseable replies returning no spans, items missing from the answer); the
+without ``confidence``, unparseable replies, items missing from the answer); the
 pull request that fixes one updates its fixture as an intended change.
 """
 
@@ -16,9 +16,14 @@ import json
 
 import pytest
 
+from lettucedetect.detectors.errors import UpstreamError
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import LLMClient
 from tests.golden import assert_golden
+
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 
 FORMATS = ["tokens", "spans"]
 
@@ -194,6 +199,14 @@ CONFIGS = {
 }
 
 
+def _call(entry_point) -> list | dict:
+    """Return the output of an entry point, or the code of the ``UpstreamError`` it raises."""
+    try:
+        return entry_point()
+    except UpstreamError as exc:
+        return {"error": exc.code}
+
+
 def _run(name: str, output_format: str, tmp_path) -> dict:
     kwargs, replies, verify_replies = CONFIGS[name]
     kwargs = {"native": False, **kwargs}
@@ -209,15 +222,15 @@ def _run(name: str, output_format: str, tmp_path) -> dict:
 
     return {
         "predict": [
-            detector().predict(ctx, ans, question, output_format=output_format)
+            _call(lambda: detector().predict(ctx, ans, question, output_format=output_format))
             for ctx, ans, question in CASES
         ],
         "predict_prompt": [
-            detector().predict_prompt(prompt, ans, output_format=output_format)
+            _call(lambda: detector().predict_prompt(prompt, ans, output_format=output_format))
             for prompt, ans in zip(PROMPTS, ANSWERS)
         ],
-        "predict_prompt_batch": detector().predict_prompt_batch(
-            PROMPTS, ANSWERS, output_format=output_format
+        "predict_prompt_batch": _call(
+            lambda: detector().predict_prompt_batch(PROMPTS, ANSWERS, output_format=output_format)
         ),
     }
 

@@ -57,12 +57,11 @@ class TestDeprecation:
         with pytest.warns(LettuceDetectDeprecationWarning):
             exec("CacheManager(path)", {**namespace, "__name__": "somewhere_else"})  # noqa: S102
 
-    def test_llm_detector_builds_it_without_a_warning(self, tmp_path):
-        """``LLMDetector`` keeps using ``CacheManager`` internally, silently."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+    def test_llm_detector_builds_a_file_cache_not_a_cache_manager(self, tmp_path):
+        """``LLMDetector`` builds a plain ``FileCache`` for its ``cache_file``."""
+        with pytest.warns(LettuceDetectDeprecationWarning):
             detector = LLMDetector(client=FakeClient(PLAIN), cache_file=str(tmp_path / "c.json"))
-        assert isinstance(detector.cache, CacheManager)
+        assert type(detector.cache) is FileCache
 
     def test_importing_the_module_has_no_import_cycle_or_warning(self):
         """A fresh interpreter imports ``cache`` first, then ``response_cache``, with no warning."""

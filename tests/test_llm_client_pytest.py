@@ -271,21 +271,23 @@ class TestLLMDetectorWithInjectedClient:
         with pytest.raises(ValueError):
             detector.predict_prompt_batch(["p"], ["a"], output_format="bogus")
 
-    def test_empty_client_output_yields_empty_spans(self, cache_file):
-        """An empty client response yields no spans instead of raising."""
+    def test_empty_client_output_raises_unparseable_response(self, cache_file):
+        """An empty client response raises instead of reading as no hallucination."""
         client = FakeClient("")
         detector = make_detector(client, cache_file)
 
-        spans = detector.predict(["ctx"], "answer", "q?", output_format="spans")
-        assert spans == []
+        with pytest.raises(UpstreamError) as exc:
+            detector.predict(["ctx"], "answer", "q?", output_format="spans")
+        assert exc.value.code == "unparseable_response"
 
-    def test_non_json_client_output_yields_empty_spans(self, cache_file):
-        """A non-JSON client response yields no spans instead of raising."""
+    def test_non_json_client_output_raises_unparseable_response(self, cache_file):
+        """A non-JSON client response raises instead of reading as no hallucination."""
         client = FakeClient("not valid json at all")
         detector = make_detector(client, cache_file)
 
-        spans = detector.predict(["ctx"], "answer", "q?", output_format="spans")
-        assert spans == []
+        with pytest.raises(UpstreamError) as exc:
+            detector.predict(["ctx"], "answer", "q?", output_format="spans")
+        assert exc.value.code == "unparseable_response"
 
     def test_include_reasoning_returns_confidence_and_reasoning_in_spans(self, cache_file):
         """With include_reasoning=True, spans carry the LLM's confidence and reasoning."""
@@ -456,13 +458,14 @@ class TestLLMDetectorWithInjectedClient:
             "is_hallucination",
         ]
 
-    def test_missing_key_in_client_output_yields_empty_spans(self, cache_file):
-        """A response missing the expected key yields no spans instead of raising."""
+    def test_missing_key_in_client_output_raises_unparseable_response(self, cache_file):
+        """A response missing the expected key raises instead of reading as no hallucination."""
         client = FakeClient('{"something_else": []}')
         detector = make_detector(client, cache_file)
 
-        spans = detector.predict(["ctx"], "answer", "q?", output_format="spans")
-        assert spans == []
+        with pytest.raises(UpstreamError) as exc:
+            detector.predict(["ctx"], "answer", "q?", output_format="spans")
+        assert exc.value.code == "unparseable_response"
 
 
 def _reasoning_response(items: list[dict]) -> str:
