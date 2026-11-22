@@ -13,11 +13,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from lettucedetect.detectors._llm_shared import (
     dropped_item_warnings,
     fetch_parsed,
+    load_verify_template,
     locate_items,
     request_context,
     resolve_taxonomy,
     to_detected_spans,
     unparseable_response,
+    verify_spans,
 )
 from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.errors import ConfigurationError
@@ -146,7 +148,14 @@ class GenerativeDetector(BaseDetector):
     give no confidence: every ``score`` is 1.0, "flagged without a score", and a result with
     spans carries one ``synthetic_score`` warning. Other warnings: ``span_not_found`` (items
     that are not in the answer were dropped), ``item_malformed`` (items that are neither a
-    string nor an object with ``text`` were dropped).
+    string nor an object with ``text`` were dropped) and ``verification_skipped`` (see below).
+
+    With ``verify=True`` a second call re-judges the flagged spans and the rejected ones are
+    dropped. When that call fails with an ``UpstreamError``, the first-pass spans are returned
+    with the ``verification_skipped`` warning.
+
+    ``usage`` has one entry with the units ``llm_calls`` (calls actually made, the verify call
+    included), ``cache_hits``, ``source_chars`` and ``answer_chars``.
 
     Example::
 
@@ -165,8 +174,10 @@ class GenerativeDetector(BaseDetector):
     :param client: the LLM client every call goes through. Its errors propagate unwrapped.
     :param model_id: the model name passed to the client; also the ``model_id`` in ``usage``.
     :param config: options, ``GenerativeConfig()`` when ``None``.
-    :param cache: a cache for the replies; ``None`` means no caching.
-    :param model_version: version reported in ``usage``.
+    :param cache: a cache for the replies; ``None`` means no caching and no file. A reply is
+        stored only after it parsed, under ``make_cache_key`` with the kinds ``"native"`` and
+        ``"verify"``.
+    :param model_version: version reported in ``usage`` and part of the cache key.
     """
 
     supports_tokens = False
@@ -206,6 +217,7 @@ class GenerativeDetector(BaseDetector):
             self._schema = build_generative_schema(
                 explain=explain, categories=list(categories), subcategories=list(subcategories)
             )
+        self._verify_template = load_verify_template()
         # Held only around a client call, so every entry point shares the bound.
         self._semaphore = threading.BoundedSemaphore(self.config.max_concurrency)
 
@@ -219,7 +231,8 @@ class GenerativeDetector(BaseDetector):
         :param include_detail: unused, ``detect`` rejects it (``supports_detail`` is ``False``).
         :returns: the detection result.
         :raises UpstreamError: (``unparseable_response``) the reply is not JSON, has no
-            ``hallucinated_spans`` or has one that is not a list.
+            ``hallucinated_spans`` or has one that is not a list. Such a reply is not cached,
+            and a cached one is deleted.
         """
         config = self.config
         answer = request.answer
@@ -230,7 +243,7 @@ class GenerativeDetector(BaseDetector):
         items = fetch_parsed(
             self.client,
             self._semaphore,
-            None,
+            self.cache,
             make_cache_key(
                 self._system + user, self.model_id, self.model_version, config.temperature, "native"
             ),
@@ -244,6 +257,29 @@ class GenerativeDetector(BaseDetector):
         )
         located, not_found, malformed = locate_items(to_items(items), answer)
         warnings = dropped_item_warnings(not_found, malformed, len(items))
+
+        if config.verify and located:
+            located, skipped = verify_spans(
+                self.client,
+                self._semaphore,
+                self.cache,
+                units,
+                self._verify_template,
+                located,
+                lang=config.lang,
+                context=context,
+                answer=answer,
+                model=self.model_id,
+                model_version=self.model_version,
+                temperature=config.temperature,
+            )
+            if skipped:
+                warnings.append(
+                    ResultWarning(
+                        code="verification_skipped",
+                        message="The verify call failed; the spans are unverified.",
+                    )
+                )
 
         spans, synthetic = to_detected_spans(located)
         if synthetic:

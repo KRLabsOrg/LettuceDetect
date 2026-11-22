@@ -11,7 +11,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from lettucedetect.detectors import GenerativeConfig, GenerativeDetector
+from lettucedetect.detectors import (
+    FileCache,
+    GenerativeConfig,
+    GenerativeDetector,
+    InMemoryCache,
+    make_cache_key,
+)
 from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
 from lettucedetect.detectors.types import Chunk, Detection, PromptInput, SourcesInput
 from lettucedetect.prompts import generative as gen
@@ -26,6 +32,7 @@ from tests.test_llm_judge_detector_pytest import (
     FakeClient,
     OwnClientError,
     RaisingClient,
+    SyncOnlyCache,
 )
 
 MODEL = "generative-model"
@@ -468,3 +475,296 @@ async def test_max_concurrency_bounds_client_calls_across_detect_and_adetect():
     assert [[s.text for s in result.spans] for result in results] == [
         [f"word-{chr(ord('a') + i)}"] for i in range(12)
     ]
+
+
+# -- cache and usage -------------------------------------------------------------------------
+
+
+def _cached(replies: dict[str, str] | str = TYPED, cache=None, **kwargs) -> GenerativeDetector:
+    cache = SyncOnlyCache() if cache is None else cache
+    return GenerativeDetector(FakeClient(replies), MODEL, cache=cache, **kwargs)
+
+
+def _key(detector: GenerativeDetector, call: int = 0, kind: str = "native") -> str:
+    """Return the cache key of a call the detector's client received."""
+    sent = detector.client.calls[call]
+    prompt = sent["user"] if kind == "verify" else sent["system"] + sent["user"]
+    return make_cache_key(prompt, MODEL, detector.model_version, detector.config.temperature, kind)
+
+
+def _units(result: Detection) -> dict[str, int]:
+    (usage,) = result.usage
+    return usage.units
+
+
+@pytest.mark.parametrize(
+    ("request_", "source_chars"),
+    [(SOURCES, sum(len(chunk.text) for chunk in SOURCES.sources)), (PROMPT, len(PROMPT.prompt))],
+)
+def test_usage_without_a_cache_counts_the_call(request_, source_chars):
+    """``usage`` has one entry with the model id, the version and the four units."""
+    detector = GenerativeDetector(FakeClient(TYPED), MODEL, model_version="v7")
+    (usage,) = detector.detect(request_).usage
+    assert usage.model_id == MODEL
+    assert usage.model_version == "v7"
+    assert usage.units == {
+        "llm_calls": 1,
+        "cache_hits": 0,
+        "source_chars": source_chars,
+        "answer_chars": len(ANSWER),
+    }
+
+
+def test_cache_hit_makes_no_client_call_and_is_counted_as_a_hit():
+    """The second call is served from the cache under the ``make_cache_key`` native key."""
+    detector = _cached()
+    miss = detector.detect(SOURCES)
+    hit = detector.detect(SOURCES)
+    assert len(detector.client.calls) == 1
+    assert detector.cache.get(_key(detector)) == TYPED
+    assert (_units(miss)["llm_calls"], _units(miss)["cache_hits"]) == (1, 0)
+    assert (_units(hit)["llm_calls"], _units(hit)["cache_hits"]) == (0, 1)
+    assert hit.spans == miss.spans
+    assert hit.warnings == miss.warnings
+
+
+def test_another_model_version_misses():
+    """The key holds the model version, so a new version does not read the old reply."""
+    cache = SyncOnlyCache()
+    old = _cached(cache=cache, model_version="v1")
+    new = _cached(cache=cache, model_version="v2")
+    old.detect(SOURCES)
+    new.detect(SOURCES)
+    assert len(new.client.calls) == 1
+    assert _key(old) != _key(new)
+    old.detect(SOURCES)
+    assert len(old.client.calls) == 1
+
+
+def test_unparseable_reply_is_never_stored():
+    """A reply that does not parse raises and leaves the cache empty."""
+    detector = _cached("not json at all")
+    with pytest.raises(UpstreamError):
+        detector.detect(SOURCES)
+    assert detector.cache.get(_key(detector)) is None
+
+
+def test_unparseable_cached_entry_is_deleted_and_raises():
+    """A cached entry that does not parse is removed, the call raises and no client call is made."""
+    detector = _cached()
+    detector.detect(SOURCES)
+    key = _key(detector)
+    detector.cache.set(key, "garbage")
+    with pytest.raises(UpstreamError) as exc:
+        detector.detect(SOURCES)
+    assert exc.value.code == "unparseable_response"
+    assert detector.cache.get(key) is None
+    assert len(detector.client.calls) == 1
+    assert _units(detector.detect(SOURCES))["llm_calls"] == 1
+
+
+async def test_adetect_has_the_cache_behaviour_of_detect():
+    """Through ``adetect``: a miss writes after parsing, then a hit, with ``detect``'s usage."""
+    detector = _cached()
+    miss = await detector.adetect(SOURCES)
+    assert detector.cache.get(_key(detector)) == TYPED
+    hit = await detector.adetect(SOURCES)
+    assert len(detector.client.calls) == 1
+    assert miss == _cached().detect(SOURCES)
+    assert hit == detector.detect(SOURCES)
+    assert _units(hit)["cache_hits"] == 1
+
+
+async def test_adetect_stores_no_unparseable_reply_and_deletes_an_unparseable_entry():
+    """Through ``adetect``: a bad reply is not stored, a bad entry is deleted and raises."""
+    bad = _cached("not json at all")
+    with pytest.raises(UpstreamError):
+        await bad.adetect(SOURCES)
+    assert bad.cache.get(_key(bad)) is None
+
+    detector = _cached()
+    await detector.adetect(SOURCES)
+    key = _key(detector)
+    detector.cache.set(key, "garbage")
+    with pytest.raises(UpstreamError) as exc:
+        await detector.adetect(SOURCES)
+    assert exc.value.code == "unparseable_response"
+    assert detector.cache.get(key) is None
+    assert len(detector.client.calls) == 1
+
+
+@pytest.mark.parametrize("reply", [TYPED, "not json at all"])
+async def test_cancelled_adetect_never_leaves_an_unparsed_reply_in_the_cache(reply):
+    """After a cancel the thread finishes: the key is absent or holds the parsed reply."""
+    entered, gate, returned = threading.Event(), threading.Event(), threading.Event()
+
+    def blocked() -> None:
+        entered.set()
+        gate.wait(10)
+        returned.set()
+
+    cache = SyncOnlyCache()
+    detector = GenerativeDetector(FakeClient(reply, on_call=blocked), MODEL, cache=cache)
+    task = asyncio.create_task(detector.adetect(SOURCES))
+    while not entered.is_set():
+        await asyncio.sleep(0.005)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    key = _key(detector)
+    assert cache.get(key) is None
+    gate.set()
+    while not returned.is_set():
+        await asyncio.sleep(0.005)
+    await asyncio.sleep(0.05)  # let the abandoned thread parse and write
+
+    if reply == TYPED:
+        assert cache.get(key) == TYPED
+        expected_counts = (0, 1)
+    else:
+        assert cache.get(key) is None
+        detector.client.replies = TYPED
+        expected_counts = (1, 0)
+    result = await detector.adetect(SOURCES)
+    assert [s.text for s in result.spans] == ["Berlin", "3 million"]
+    assert (_units(result)["llm_calls"], _units(result)["cache_hits"]) == expected_counts
+
+
+@pytest.mark.parametrize("backend", ["memory", "file"])
+async def test_concurrent_adetect_calls_lose_no_cache_key(backend, tmp_path):
+    """Concurrent calls with different requests each store their key and report their own usage."""
+    cache = InMemoryCache() if backend == "memory" else FileCache(tmp_path / "cache.json")
+    requests, replies = _numbered(6)
+    client = FakeClient(replies, on_call=lambda: time.sleep(0.03))
+    detector = GenerativeDetector(client, MODEL, cache=cache)
+    first = await asyncio.gather(*(detector.adetect(request) for request in requests))
+    assert all(
+        (_units(r)["llm_calls"], _units(r)["cache_hits"], _units(r)["answer_chars"])
+        == (1, 0, len(request.answer))
+        for r, request in zip(first, requests, strict=True)
+    )
+    for call in range(6):
+        assert cache.get(_key(detector, call)) in replies.values()
+    assert len({_key(detector, call) for call in range(6)}) == 6
+
+    second = await asyncio.gather(*(detector.adetect(request) for request in requests))
+    assert len(client.calls) == 6
+    assert all((_units(r)["llm_calls"], _units(r)["cache_hits"]) == (0, 1) for r in second)
+    assert [r.spans for r in second] == [r.spans for r in first]
+
+
+# -- verify pass -----------------------------------------------------------------------------
+
+REJECT_BERLIN = json.dumps(
+    {"verifications": [{"text": "Berlin", "reasoning": "r", "is_hallucination": False}]}
+)
+REJECT_NOTHING = json.dumps({"verifications": []})
+
+
+def _verifying(verify: str | Exception, replies: str = TYPED, cache=None, **options):
+    return GenerativeDetector(
+        FakeClient(replies, verify=verify),
+        MODEL,
+        config=GenerativeConfig(verify=True, **options),
+        cache=cache,
+    )
+
+
+async def test_verify_drops_rejected_spans_and_counts_its_call():
+    """A rejected span is dropped, the others are kept, and ``llm_calls`` includes the verify call."""
+    detector = _verifying(REJECT_BERLIN)
+    result = detector.detect(SOURCES)
+    assert [(s.text, s.category) for s in result.spans] == [("3 million", "contradiction")]
+    assert _codes(result) == ["synthetic_score"]
+    assert _units(result)["llm_calls"] == 2
+    verify_call = detector.client.calls[1]
+    assert "strict fact-checker" in verify_call["system"]
+    assert "- Berlin\n- 3 million" in verify_call["user"]
+    assert await _verifying(REJECT_BERLIN).adetect(SOURCES) == result
+
+
+def test_verify_prompt_names_the_configured_language():
+    """``lang`` reaches the verify prompt."""
+    detector = _verifying(REJECT_NOTHING, lang="de")
+    detector.detect(SOURCES)
+    assert "German" in detector.client.calls[1]["user"]
+
+
+def test_verify_is_not_called_without_spans():
+    """With no first-pass span there is nothing to verify and one call is made."""
+    detector = _verifying(REJECT_BERLIN, _reply())
+    result = detector.detect(SOURCES)
+    assert result.spans == []
+    assert _units(result)["llm_calls"] == 1
+
+
+@pytest.mark.parametrize(
+    "verify",
+    [
+        "not valid json",
+        json.dumps({"verdicts": []}),
+        json.dumps({"verifications": "none"}),
+        UpstreamError("down", code="upstream_unavailable"),
+    ],
+)
+async def test_failed_verify_keeps_first_pass_spans_with_a_warning(verify, caplog):
+    """A verify reply that can't be parsed keeps the spans, warns and logs ``fallback_used`` once."""
+    with caplog.at_level(logging.DEBUG):
+        result = _verifying(verify).detect(SOURCES)
+    assert [s.text for s in result.spans] == ["Berlin", "3 million"]
+    assert _codes(result) == ["verification_skipped", "synthetic_score"]
+    assert _units(result)["llm_calls"] == 2
+    fallbacks = [r for r in caplog.records if getattr(r, "event", None) == "fallback_used"]
+    assert len(fallbacks) == 1
+    assert fallbacks[0].levelno == logging.WARNING
+    assert "verification_skipped" in fallbacks[0].getMessage()
+    assert "Berlin" not in fallbacks[0].getMessage()
+    assert await _verifying(verify).adetect(SOURCES) == result
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConfigurationError("bad key", code="authentication_failed"), OwnClientError("boom")],
+)
+async def test_verify_fallback_does_not_swallow_other_errors(error):
+    """Only ``UpstreamError`` triggers the fallback; other errors of the client come out."""
+    with pytest.raises(type(error)) as sync_exc:
+        _verifying(error).detect(SOURCES)
+    assert sync_exc.value is error
+    with pytest.raises(type(error)) as async_exc:
+        await _verifying(error).adetect(SOURCES)
+    assert async_exc.value is error
+
+
+def test_verify_reply_is_cached_under_the_verify_key():
+    """The verify reply has its own key; a second call makes no client call at all."""
+    detector = _verifying(REJECT_BERLIN, cache=SyncOnlyCache())
+    first = detector.detect(SOURCES)
+    assert detector.cache.get(_key(detector, 1, kind="verify")) == REJECT_BERLIN
+    second = detector.detect(SOURCES)
+    assert len(detector.client.calls) == 2
+    assert (_units(second)["llm_calls"], _units(second)["cache_hits"]) == (0, 2)
+    assert second.spans == first.spans
+
+
+def test_unparseable_verify_reply_is_not_cached():
+    """A verify reply that can't be parsed is not stored, so the next call asks again."""
+    detector = _verifying("not valid json", cache=SyncOnlyCache())
+    detector.detect(SOURCES)
+    assert detector.cache.get(_key(detector, 1, kind="verify")) is None
+    result = detector.detect(SOURCES)
+    assert (_units(result)["llm_calls"], _units(result)["cache_hits"]) == (1, 1)
+
+
+def test_max_concurrency_counts_the_verify_call():
+    """First-pass and verify calls of concurrent requests share the one bound."""
+    requests, replies = _numbered(6)
+    client = FakeClient(replies, on_call=lambda: time.sleep(0.03), verify=REJECT_NOTHING)
+    detector = GenerativeDetector(
+        client, MODEL, config=GenerativeConfig(verify=True, max_concurrency=1)
+    )
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(detector.detect, requests))
+    assert client.max_in_flight == 1
+    assert len(client.calls) == 12
+    assert all(len(result.spans) == 1 for result in results)
