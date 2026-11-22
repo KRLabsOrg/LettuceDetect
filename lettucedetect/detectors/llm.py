@@ -6,21 +6,17 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from lettucedetect.detectors._llm_shared import (
-    VERIFY_SYSTEM,
-    build_verify_prompt,
     load_verify_template,
     locate_items,
-    parse_rejected,
     resolve_taxonomy,
 )
 from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.cache import CacheManager
 from lettucedetect.detectors.errors import UpstreamError
+from lettucedetect.detectors.generative import GenerativeConfig, GenerativeDetector
 from lettucedetect.detectors.llm_client import (
     LLMClient,
-    build_generative_schema,
     build_hallucination_schema,
-    build_verification_schema,
     make_llm_client,
 )
 from lettucedetect.detectors.llm_judge import (
@@ -30,7 +26,6 @@ from lettucedetect.detectors.llm_judge import (
 )
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
 from lettucedetect.detectors.types import PromptInput
-from lettucedetect.prompts import generative as gen
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +118,6 @@ class LLMDetector(BaseDetector):
                 "generative detectors (they use their frozen training prompt); pass "
                 "native=False to prompt this model as a generic LLM judge instead."
             )
-        self._custom_taxonomy = not isinstance(include_taxonomy, bool)
         self.categories, self.subcategories = resolve_taxonomy(include_taxonomy)
         self.schema = build_hallucination_schema(
             include_reasoning=include_reasoning,
@@ -153,7 +147,23 @@ class LLMDetector(BaseDetector):
 
         self.cache = CacheManager(cache_file)
 
-        # The judge path runs through LLMJudgeDetector; the native path stays on this class.
+        # The native path runs through GenerativeDetector, the judge path through LLMJudgeDetector.
+        self._generative = (
+            GenerativeDetector(
+                self.client,
+                model,
+                config=GenerativeConfig(
+                    temperature=temperature,
+                    lang=lang,
+                    include_reasoning=include_reasoning,
+                    include_taxonomy=include_taxonomy,
+                    verify=verify,
+                ),
+                cache=self.cache,
+            )
+            if self.native
+            else None
+        )
         self._judge = (
             None
             if self.native
@@ -249,20 +259,15 @@ class LLMDetector(BaseDetector):
         :param min_confidence: Drop ``"spans"`` below this confidence threshold.
         :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
         """
-        if self.native:
-            spans = self._filter_spans_by_confidence(
-                self._predict_native(prompt, answer), output_format, min_confidence
-            )
-        else:
-            spans = self._predict_judge(prompt, answer, output_format, min_confidence)
+        spans = self._detect_spans(prompt, answer, output_format, min_confidence)
         if output_format == "tokens":
             return self._convert_to_tokens(answer, spans)
         return spans
 
-    def _predict_judge(
+    def _detect_spans(
         self, prompt: str, answer: str, output_format: str, min_confidence: float
     ) -> list[dict]:
-        """Judge path: run :class:`LLMJudgeDetector` and turn its result into span dicts.
+        """Run the generative or the judge detector and turn its result into span dicts.
 
         ``confidence`` is the span's ``score``. For ``"tokens"`` a span the model gave no
         confidence for has no ``confidence`` key, so its tokens get the fixed probability.
@@ -274,8 +279,9 @@ class LLMDetector(BaseDetector):
         :returns: List of spans.
         """
         for_tokens = output_format == "tokens"
+        detector = self._generative if self.native else self._judge
         try:
-            detection = self._judge.detect(
+            detection = detector.detect(
                 PromptInput(prompt=prompt, answer=answer),
                 min_score=0.0 if for_tokens else min_confidence,
             )
@@ -297,93 +303,6 @@ class LLMDetector(BaseDetector):
                     item[key] = value
             spans.append(item)
         return spans
-
-    def _predict_native(self, context: str, answer: str) -> list[dict]:
-        """Native path: serve a fine-tuned generative span detector (lettucedect-v2-*).
-
-        Sends the frozen training prompt and parses the model's ``hallucinated_spans``
-        JSON (typed with category/subcategory, plus explanation when ``include_reasoning``),
-        recovering character offsets by matching each span verbatim in the answer.
-
-        :param context: The formatted source/context block (already includes the request).
-        :param answer: The answer string.
-        :returns: List of typed spans.
-        """
-        if self._custom_taxonomy and self.categories:
-            # Experimental: labels enter the trained prompt only as name/description text,
-            # so a custom taxonomy keeps the structure the model was trained on. Without
-            # custom subcategories the subcategory label collapses to "unspecified".
-            subs = self.subcategories or {
-                "unspecified": gen.SUBCATEGORY_DESCRIPTIONS["unspecified"]
-            }
-            system = gen.build_system_prompt(
-                explain=self.include_reasoning, categories=self.categories, subcategories=subs
-            )
-            schema = build_generative_schema(
-                explain=self.include_reasoning,
-                categories=list(self.categories),
-                subcategories=list(subs),
-            )
-        else:
-            system = gen.SYSTEM_EXPL if self.include_reasoning else gen.SYSTEM_BASE
-            schema = build_generative_schema(explain=self.include_reasoning)
-        user = gen.build_user_message(context, answer)
-
-        cache_key = self.cache._hash(system + user, self.model, str(self.temperature), "native")
-        cached = self.cache.get(cache_key)
-        if cached is None:
-            cached = self.client.complete(
-                system=system,
-                user=user,
-                model=self.model,
-                temperature=self.temperature,
-                schema=schema,
-            )
-            self.cache.set(cache_key, cached)
-        spans = gen.spans_to_offsets(answer, gen.parse_spans(cached or ""))
-        for span in spans:  # unify the rationale key with the judge path
-            if "explanation" in span:
-                span["reasoning"] = span.pop("explanation")
-        if self.verify and spans:
-            spans = self._verify(context, answer, spans)
-        return spans
-
-    def _verify(self, context: str, answer: str, spans: list[dict]) -> list[dict]:
-        """Re-judge each flagged span against the source and drop the unconfirmed ones.
-
-        Runs one additional, deliberately strict LLM call. Spans the verifier marks
-        ``is_hallucination`` false are removed; spans it does not return are kept, so a
-        malformed or partial verdict never silently discards confirmed detections.
-
-        :param context: The formatted source/context block.
-        :param answer: The answer string.
-        :param spans: Spans produced by the first pass.
-        :returns: The subset of spans the verifier confirms.
-        """
-        user = build_verify_prompt(
-            self.verify_template, self.lang, context, answer, [span["text"] for span in spans]
-        )
-        cache_key = self.cache._hash(user, self.model, str(self.temperature), "verify")
-        cached = self.cache.get(cache_key)
-        from_cache = cached is not None
-        if not from_cache:
-            cached = self.client.complete(
-                system=VERIFY_SYSTEM,
-                user=user,
-                model=self.model,
-                temperature=self.temperature,
-                schema=build_verification_schema(),
-            )
-        try:
-            rejected = parse_rejected(cached)
-        except UpstreamError as e:
-            logger.error("Error parsing verification response: %s", e)
-            if from_cache:
-                self.cache.delete(cache_key)
-            return spans
-        if not from_cache:
-            self.cache.set(cache_key, cached)
-        return [span for span in spans if span["text"] not in rejected]
 
     def predict(
         self,
