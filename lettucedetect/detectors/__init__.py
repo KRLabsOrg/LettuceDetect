@@ -15,6 +15,7 @@ from lettucedetect.detectors.generative import GenerativeConfig, GenerativeDetec
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_judge import LLMJudgeConfig, LLMJudgeDetector
 from lettucedetect.detectors.rag_fact_checker import RAGFactCheckerDetector
+from lettucedetect.detectors.registry import load_detector
 from lettucedetect.detectors.response_cache import (
     InMemoryCache,
     ResponseCache,
@@ -71,5 +72,6 @@ __all__ = [
     "VelaConfig",
     "VelaDetector",
     "_make_detector",
+    "load_detector",
     "make_cache_key",
 ]

@@ -106,12 +106,19 @@ def test_provider_with_a_client_still_warns_as_a_deprecated_argument():
 
 def test_construction_inside_the_package_is_silent(tmp_path):
     kwargs = {"client": FakeClient(PLAIN), "cache_file": str(tmp_path / "c.json")}
-    namespace = {"__name__": "lettucedetect.fake_internal", "D": LLMDetector, "kwargs": kwargs}
+    namespace = {
+        "__name__": "lettucedetect.fake_internal",
+        "D": LLMDetector,
+        "make_detector": make_detector,
+        "kwargs": kwargs,
+    }
     context, answer, question = CASES[0]
     with patch(MAKE_CLIENT, return_value=FakeClient(PLAIN)), warnings.catch_warnings():
         warnings.simplefilter("error")
-        exec("D(**kwargs)\nD(provider='bedrock', region_name='eu')", namespace)  # noqa: S102
-        make_detector("llm", **kwargs)
+        exec(  # noqa: S102
+            "D(**kwargs)\nD(provider='bedrock', region_name='eu')\nmake_detector('llm', **kwargs)",
+            namespace,
+        )
         facade = HallucinationDetector(method="llm", provider="openai", **kwargs)
         assert facade.predict(context, answer, question, output_format="spans") == _construct(
             native=False
