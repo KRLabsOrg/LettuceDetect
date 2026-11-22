@@ -1,0 +1,5 @@
+{
+  "llm": "lettucedetect.detectors.llm.LLMDetector",
+  "rag_fact_checker": "lettucedetect.detectors.rag_fact_checker.RAGFactCheckerDetector",
+  "transformer": "lettucedetect.detectors.transformer.TransformerDetector"
+}

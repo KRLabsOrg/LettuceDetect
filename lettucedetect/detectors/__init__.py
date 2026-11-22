@@ -1,15 +1,79 @@
 from __future__ import annotations
 
+from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning
 from lettucedetect.detectors.base import BaseDetector
+from lettucedetect.detectors.encoder import EncoderConfig, EncoderDetector
+from lettucedetect.detectors.errors import (
+    ConfigurationError,
+    InvalidInputError,
+    LettuceDetectError,
+    UpstreamError,
+)
 from lettucedetect.detectors.factory import make_detector as _make_detector
+from lettucedetect.detectors.file_cache import FileCache
+from lettucedetect.detectors.generative import GenerativeConfig, GenerativeDetector
 from lettucedetect.detectors.llm import LLMDetector
+from lettucedetect.detectors.llm_judge import LLMJudgeConfig, LLMJudgeDetector
 from lettucedetect.detectors.rag_fact_checker import RAGFactCheckerDetector
+from lettucedetect.detectors.registry import load_detector
+from lettucedetect.detectors.response_cache import (
+    InMemoryCache,
+    ResponseCache,
+    SyncCacheBase,
+    make_cache_key,
+)
 from lettucedetect.detectors.transformer import TransformerDetector
+from lettucedetect.detectors.types import (
+    BatchResult,
+    Chunk,
+    DetailedResult,
+    DetectedSpan,
+    Detection,
+    DetectRequest,
+    PromptInput,
+    ResultWarning,
+    SourcesInput,
+    Span,
+    TokenScore,
+    Usage,
+)
+from lettucedetect.detectors.vela import VelaConfig, VelaDetector
 
 __all__ = [
     "BaseDetector",
+    "BatchResult",
+    "Chunk",
+    "ConfigurationError",
+    "DetailedResult",
+    "DetectRequest",
+    "DetectedSpan",
+    "Detection",
+    "EncoderConfig",
+    "EncoderDetector",
+    "FileCache",
+    "GenerativeConfig",
+    "GenerativeDetector",
+    "InMemoryCache",
+    "InvalidInputError",
     "LLMDetector",
+    "LLMJudgeConfig",
+    "LLMJudgeDetector",
+    "LettuceDetectDeprecationWarning",
+    "LettuceDetectError",
+    "PromptInput",
     "RAGFactCheckerDetector",
+    "ResponseCache",
+    "ResultWarning",
+    "SourcesInput",
+    "Span",
+    "SyncCacheBase",
+    "TokenScore",
     "TransformerDetector",
+    "UpstreamError",
+    "Usage",
+    "VelaConfig",
+    "VelaDetector",
     "_make_detector",
+    "load_detector",
+    "make_cache_key",
 ]

@@ -8,8 +8,8 @@ degrades. It intentionally differs from the judge prompt in
 and from the label *definitions* in :mod:`lettucedetect.datasets.taxonomy` (which are
 for data construction / the LLM judge, not this model).
 
-Used by :class:`lettucedetect.detectors.llm.LLMDetector` in its native (trained-model)
-mode; see ``LLMDetector(native=True)``.
+Used by :class:`lettucedetect.detectors.generative.GenerativeDetector`, which
+``LLMDetector(native=True)`` runs through.
 """
 
 from __future__ import annotations

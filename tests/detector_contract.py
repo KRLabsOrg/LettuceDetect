@@ -1,0 +1,638 @@
+"""Reusable contract suite that every detector must pass.
+
+The suite checks the invariants of ``detect``, ``adetect``, ``detect_batch`` and ``adetect_batch``
+and nothing else, so it does not care how a detector is built. It reads the public result and the public errors only.
+
+How a detector task plugs in
+============================
+
+1. Subclass :class:`DetectorContract` inside a ``tests/test_*_pytest.py`` file. The base class is
+   not collected by pytest itself, only your ``Test...`` subclass is::
+
+       from tests.detector_contract import DetectorContract
+
+       class TestMyDetectorContract(DetectorContract):
+           sources_request = SourcesInput(...)
+           prompt_request = PromptInput(...)
+
+           def make_detector(self, on_call=None):
+               return MyDetector(model=FakeModel(on_call))
+
+2. Set ``sources_request`` and ``prompt_request``. The answers must be long enough that no
+   short fragment of them also appears in an unrelated log message, and the detector must flag
+   spans with at least two different scores for the same request (the ``min_score`` and
+   ordering checks need that).
+3. Implement ``make_detector(on_call)``. It returns a fresh detector that works offline and
+   needs no GPU. When ``on_call`` is not ``None``, the detector must call ``on_call()`` once per
+   ``detect`` call, on the thread that runs the detection, after it started and before it
+   returns. Put it where the slow work happens (the model call or the HTTP call). The suite uses
+   it to make a detector slow, to block it on an event, or to make a call fail by raising from
+   it. A detector that scores several requests of a batch in one model call may call it once
+   for those requests together.
+4. Detectors that predate ``detect`` pass too. A ``predict``-only subclass is wrapped by
+   ``BaseDetector`` and is checked through ``detect`` and ``adetect``. Its test class must
+   silence ``LettuceDetectDeprecationWarning`` (``pytest.mark.filterwarnings("ignore::...")``).
+5. Detectors that do not support tokens or detail leave ``supports_tokens`` and
+   ``supports_detail`` at ``False``. The suite then expects ``InvalidInputError``.
+
+Every check is a plain method without pytest fixtures, so ``tests/test_detector_contract_pytest.py``
+can also run a check against a deliberately broken detector and assert that it fails.
+
+About cancelling ``adetect``
+============================
+
+``adetect`` runs ``detect`` in a worker thread. Cancelling the awaiting task, or timing out with
+``asyncio.wait_for``, stops the wait only. The thread keeps running until the detector returns,
+because Python cannot stop a thread. The cancel checks document that: the detector is still busy
+right after the cancel, the thread is let go afterwards, and only then do the checks run.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import inspect
+import io
+import logging
+import math
+import os
+import tempfile
+import threading
+import time
+from collections.abc import Awaitable, Callable, Generator
+from pathlib import Path
+
+import pytest
+
+from lettucedetect.detectors.base import BaseDetector
+from lettucedetect.detectors.errors import InvalidInputError, UpstreamError
+from lettucedetect.detectors.types import (
+    BatchResult,
+    Detection,
+    DetectRequest,
+    PromptInput,
+    SourcesInput,
+)
+
+CONTENT_LOGGER = "lettucedetect.content"
+"""The only logger allowed to carry answer or source text (CONTRIBUTING, "Errors and logging")."""
+
+_SLOW_SECONDS = 0.3
+_WAIT_SECONDS = 10.0
+
+
+@contextlib.contextmanager
+def _isolated_environment() -> Generator[tuple[Path, Path]]:
+    """Run with an empty temporary directory as cwd and as ``HOME``; yield both paths."""
+    with tempfile.TemporaryDirectory() as root:
+        cwd = Path(root) / "cwd"
+        home = Path(root) / "home"
+        cwd.mkdir()
+        home.mkdir()
+        old_cwd = Path.cwd()
+        saved = {key: os.environ.get(key) for key in ("HOME", "USERPROFILE")}
+        os.chdir(cwd)
+        os.environ["HOME"] = os.environ["USERPROFILE"] = str(home)
+        try:
+            yield cwd, home
+        finally:
+            os.chdir(old_cwd)
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+
+class _Recorder(logging.Handler):
+    """Collect every log record that reaches the root logger."""
+
+    def __init__(self) -> None:
+        """Create an empty recorder."""
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Keep the record."""
+        self.records.append(record)
+
+
+def _is_content_logger(name: str) -> bool:
+    return name == CONTENT_LOGGER or name.startswith(CONTENT_LOGGER + ".")
+
+
+def _texts_of(request: DetectRequest) -> list[str]:
+    """Return every piece of customer text in a request."""
+    if isinstance(request, SourcesInput):
+        texts = [chunk.text for chunk in request.sources]
+        if request.question:
+            texts.append(request.question)
+    else:
+        texts = [request.prompt]
+    texts.append(request.answer)
+    return [text for text in texts if text]
+
+
+def _assert_empty(directory: Path, what: str) -> None:
+    left = sorted(path.name for path in directory.rglob("*"))
+    assert not left, f"a call left files in the temporary {what}: {left}"
+
+
+class DetectorContract:
+    """The checks every detector must pass. Subclass it and set the three members below."""
+
+    sources_request: SourcesInput
+    prompt_request: PromptInput
+
+    def make_detector(self, on_call: Callable[[], None] | None = None) -> BaseDetector:
+        """Return a fresh detector that calls ``on_call()`` once per ``detect`` call."""
+        raise NotImplementedError
+
+    # -- helpers ---------------------------------------------------------------------------
+
+    def _requests(self) -> list[DetectRequest]:
+        return [self.sources_request, self.prompt_request]
+
+    def _distinct_scores(self, request: DetectRequest) -> list[float]:
+        scores = sorted({span.score for span in self.make_detector().detect(request).spans})
+        assert len(scores) >= 2, "the sample request must produce spans with two different scores"
+        return scores
+
+    # -- result shape ----------------------------------------------------------------------
+
+    def test_span_text_equals_answer_between_offsets(self) -> None:
+        """Every span's text equals the answer between its offsets, for both request kinds."""
+        detector = self.make_detector()
+        for request in self._requests():
+            spans = detector.detect(request).spans
+            assert spans, "the sample request must produce at least one span"
+            for span in spans:
+                assert request.answer[span.start : span.end] == span.text
+
+    def test_every_span_has_a_numeric_score_and_min_score_filters_on_it(self) -> None:
+        """Every span has a numeric score in [0, 1], and min_score keeps exactly the spans at or above it."""
+        detector = self.make_detector()
+        for request in self._requests():
+            everything = detector.detect(request).spans
+            for span in everything:
+                assert isinstance(span.score, int | float)
+                assert not isinstance(span.score, bool)
+                assert 0.0 <= span.score <= 1.0
+            for threshold in [0.0, *self._distinct_scores(request), 1.0]:
+                kept = detector.detect(request, min_score=threshold).spans
+                assert kept == [s for s in everything if s.score >= threshold]
+
+    def test_usage_has_an_entry_with_the_model_id_and_a_model_version_field(self) -> None:
+        """The usage list has an entry whose model_id is the detector's and that has a model_version field."""
+        detector = self.make_detector()
+        for request in self._requests():
+            usage = detector.detect(request).usage
+            matching = [u for u in usage if u.model_id == detector.model_id]
+            assert matching, f"no usage entry for model_id {detector.model_id!r}"
+            assert "model_version" in type(matching[0]).model_fields
+            assert hasattr(matching[0], "model_version")
+
+    def test_tokens_and_detail_raise_where_unsupported(self) -> None:
+        """include_tokens / include_detail raise InvalidInputError where unsupported, and return data where supported."""
+        detector = self.make_detector()
+        for request in self._requests():
+            if detector.supports_tokens:
+                assert detector.detect(request, include_tokens=True).tokens is not None
+                assert detector.detect(request).tokens is None
+            else:
+                with pytest.raises(InvalidInputError) as exc:
+                    detector.detect(request, include_tokens=True)
+                assert exc.value.param == "include_tokens"
+            if detector.supports_detail:
+                assert detector.detect(request, include_detail=True).detail is not None
+                assert detector.detect(request).detail is None
+            else:
+                with pytest.raises(InvalidInputError) as exc:
+                    detector.detect(request, include_detail=True)
+                assert exc.value.param == "include_detail"
+
+    # -- repeatability and side effects ----------------------------------------------------
+
+    def test_same_input_gives_the_same_result_also_after_other_input(self) -> None:
+        """A second call with the same input returns the same result, also after a call with other input."""
+        detector = self.make_detector()
+        for request, other in [
+            (self.sources_request, self.prompt_request),
+            (self.prompt_request, self.sources_request),
+        ]:
+            first = detector.detect(request)
+            assert detector.detect(request) == first
+            detector.detect(other)
+            assert detector.detect(request) == first
+
+    def test_a_call_leaves_an_empty_cwd_and_home_empty(self) -> None:
+        """With an empty temporary directory as cwd and HOME, single calls and batches leave both empty."""
+        detector = self.make_detector()
+        with _isolated_environment() as (cwd, home):
+            for request in self._requests():
+                detector.detect(request)
+                asyncio.run(detector.adetect(request))
+            detector.detect_batch(self._requests())
+            asyncio.run(detector.adetect_batch(self._requests()))
+            _assert_empty(cwd, "cwd")
+            _assert_empty(home, "HOME")
+
+    def test_a_call_prints_nothing_and_logs_no_text_outside_the_content_logger(self) -> None:
+        """A call prints nothing, and no log record outside lettucedetect.content holds answer, source or prompt text."""
+        detector = self.make_detector()
+        recorder = _Recorder()
+        root = logging.getLogger()
+        old_level = root.level
+        root.addHandler(recorder)
+        root.setLevel(logging.DEBUG)
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                for request in self._requests():
+                    detector.detect(request)
+                    asyncio.run(detector.adetect(request))
+                detector.detect_batch(self._requests())
+                asyncio.run(detector.adetect_batch(self._requests()))
+        finally:
+            root.removeHandler(recorder)
+            root.setLevel(old_level)
+        assert out.getvalue() == "", "a call printed to stdout"
+        assert err.getvalue() == "", "a call printed to stderr"
+        texts = [text for request in self._requests() for text in _texts_of(request)]
+        for record in recorder.records:
+            if _is_content_logger(record.name):
+                continue
+            rendered = record.getMessage() + (record.exc_text or "")
+            for text in texts:
+                assert text not in rendered, f"logger {record.name!r} logged customer text"
+
+    # -- adetect ---------------------------------------------------------------------------
+
+    async def test_adetect_equals_detect(self) -> None:
+        """Adetect returns the same result as detect, for both request kinds and with min_score."""
+        detector = self.make_detector()
+        for request in self._requests():
+            assert await detector.adetect(request) == detector.detect(request)
+            threshold = self._distinct_scores(request)[-1]
+            assert await detector.adetect(request, min_score=threshold) == detector.detect(
+                request, min_score=threshold
+            )
+
+    async def test_adetect_runs_off_the_loop_thread_and_keeps_the_loop_free(self) -> None:
+        """The detector runs on a thread other than the loop's, and a loop ticker keeps ticking while it is slow."""
+        thread_ids: list[int] = []
+
+        def slow() -> None:
+            thread_ids.append(threading.get_ident())
+            time.sleep(_SLOW_SECONDS)
+
+        detector = self.make_detector(on_call=slow)
+        ticks = 0
+
+        async def ticker() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        task = asyncio.create_task(ticker())
+        try:
+            await detector.adetect(self.sources_request)
+        finally:
+            task.cancel()
+        assert thread_ids, "the detector never called on_call"
+        assert thread_ids[0] != threading.get_ident(), "the detector ran on the event loop thread"
+        assert ticks >= 5, f"the loop was blocked while the detector waited (ticks={ticks})"
+
+    async def test_concurrent_adetect_returns_results_in_call_order(self) -> None:
+        """Concurrent adetect calls under asyncio.gather finish out of order but return results in call order."""
+        scores = self._distinct_scores(self.sources_request)
+        thresholds = [0.0, scores[0], scores[-1]]
+        delays = iter([0.15, 0.08, 0.0])
+
+        def make_slow(delay: float) -> BaseDetector:
+            return self.make_detector(on_call=lambda: time.sleep(delay))
+
+        detectors = [make_slow(next(delays)) for _ in thresholds]
+        expected = [
+            self.make_detector().detect(self.sources_request, min_score=t) for t in thresholds
+        ]
+        assert len({len(e.spans) for e in expected}) > 1, (
+            "the thresholds must give different results"
+        )
+        results = await asyncio.gather(
+            *(
+                d.adetect(self.sources_request, min_score=t)
+                for d, t in zip(detectors, thresholds, strict=True)
+            )
+        )
+        assert list(results) == expected
+
+    async def test_adetect_errors_match_detect_errors(self) -> None:
+        """Out-of-range min_score and unsupported flags come out of the await with the same class, code and param as from detect."""
+        detector = self.make_detector()
+        cases: list[dict] = [
+            {"min_score": -0.1},
+            {"min_score": 1.1},
+            {"min_score": math.nan},
+        ]
+        if not detector.supports_tokens:
+            cases.append({"include_tokens": True})
+        if not detector.supports_detail:
+            cases.append({"include_detail": True})
+        for kwargs in cases:
+            with pytest.raises(InvalidInputError) as sync_exc:
+                detector.detect(self.sources_request, **kwargs)
+            with pytest.raises(InvalidInputError) as async_exc:
+                await detector.adetect(self.sources_request, **kwargs)
+            assert type(async_exc.value) is type(sync_exc.value)
+            assert async_exc.value.code == sync_exc.value.code
+            assert async_exc.value.param == sync_exc.value.param
+            assert async_exc.value.param is not None
+
+    # -- cancelling adetect ----------------------------------------------------------------
+
+    async def _cancel_and_check(
+        self, cancel: Callable[[asyncio.Task[Detection]], Awaitable[None]]
+    ) -> None:
+        """Cancel a blocked ``adetect`` with ``cancel`` and check the detector stays usable."""
+        entered, gate, returned = threading.Event(), threading.Event(), threading.Event()
+        loop_errors: list[dict] = []
+        loop = asyncio.get_running_loop()
+        loop.set_exception_handler(lambda _loop, context: loop_errors.append(context))
+
+        def blocked() -> None:
+            entered.set()
+            gate.wait(_WAIT_SECONDS)
+            returned.set()
+
+        detector = self.make_detector(on_call=blocked)
+        request = self.sources_request
+        gate.set()
+        baseline = detector.detect(request)
+        gate.clear()
+        entered.clear()
+        returned.clear()
+
+        with _isolated_environment() as (cwd, home):
+            task = asyncio.create_task(detector.adetect(request))
+            deadline = time.monotonic() + _WAIT_SECONDS
+            while not entered.is_set():
+                assert time.monotonic() < deadline, "the detector never started"
+                await asyncio.sleep(0.005)
+            await cancel(task)
+            # The wait is over, the thread is not: it keeps running until the detector returns.
+            assert not returned.is_set(), "the detector stopped when the wait was cancelled"
+            gate.set()
+            while not returned.is_set():
+                assert time.monotonic() < deadline, "the abandoned thread never finished"
+                await asyncio.sleep(0.005)
+            await asyncio.sleep(0.05)  # let the loop see anything the thread would report
+
+            assert detector.detect(request) == baseline
+            assert await detector.adetect(request) == baseline
+            assert loop_errors == [], f"the abandoned thread reported to the loop: {loop_errors}"
+            _assert_empty(cwd, "cwd")
+            _assert_empty(home, "HOME")
+
+    async def test_task_cancel_leaves_the_detector_usable(self) -> None:
+        """After Task.cancel() on a busy adetect the thread keeps running; once it finishes the detector is valid."""
+
+        async def cancel(task: asyncio.Task[Detection]) -> None:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        await self._cancel_and_check(cancel)
+
+    async def test_wait_for_timeout_leaves_the_detector_usable(self) -> None:
+        """After asyncio.wait_for times out on a busy adetect the thread keeps running; once it finishes the detector is valid."""
+
+        async def cancel(task: asyncio.Task[Detection]) -> None:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(task, timeout=0.05)
+
+        await self._cancel_and_check(cancel)
+
+    # -- detect_batch and adetect_batch -----------------------------------------------------
+
+    def _batch(self) -> list[DetectRequest]:
+        """Return twenty requests, both kinds mixed: more than one padded group of an encoder."""
+        return [self.sources_request, self.prompt_request, self.prompt_request] * 6 + [
+            self.sources_request,
+            self.sources_request,
+        ]
+
+    def _batch_options(self, detector: BaseDetector) -> list[dict]:
+        """Return the option sets a batch is checked with: none, a threshold, supported flags."""
+        options: list[dict] = [{}, {"min_score": self._distinct_scores(self.sources_request)[-1]}]
+        if detector.supports_tokens:
+            options.append({"include_tokens": True})
+        if detector.supports_detail:
+            options.append({"include_detail": True})
+        return options
+
+    def test_detect_batch_returns_one_result_per_request_in_order_equal_to_single_calls(
+        self,
+    ) -> None:
+        """A batch returns, in input order, what detect returns for each request, with every option."""
+        detector = self.make_detector()
+        requests = self._batch()
+        for options in self._batch_options(detector):
+            results = detector.detect_batch(requests, **options)
+            assert all(isinstance(result, BatchResult) for result in results)
+            assert all(result.ok and result.error is None for result in results)
+            assert [result.get_or_raise() for result in results] == [
+                detector.detect(request, **options) for request in requests
+            ]
+
+    async def test_empty_batch_returns_an_empty_list_without_calling_the_detector(self) -> None:
+        """No requests give an empty list from detect_batch and adetect_batch, and nothing runs."""
+        calls: list[int] = []
+        detector = self.make_detector(on_call=lambda: calls.append(1))
+        assert detector.detect_batch([]) == []
+        assert await detector.adetect_batch([]) == []
+        assert calls == []
+
+    async def test_adetect_batch_equals_detect_batch(self) -> None:
+        """Adetect_batch is a coroutine function and returns what detect_batch returns."""
+        detector = self.make_detector()
+        assert inspect.iscoroutinefunction(detector.adetect_batch)
+        requests = self._batch()
+        for options in self._batch_options(detector):
+            assert await detector.adetect_batch(requests, **options) == detector.detect_batch(
+                requests, **options
+            )
+
+    async def test_adetect_batch_runs_off_the_loop_thread_and_keeps_the_loop_free(self) -> None:
+        """The batch runs on a thread other than the loop's, and a loop ticker keeps ticking meanwhile."""
+        thread_ids: list[int] = []
+
+        def slow() -> None:
+            thread_ids.append(threading.get_ident())
+            time.sleep(_SLOW_SECONDS)
+
+        detector = self.make_detector(on_call=slow)
+        ticks = 0
+
+        async def ticker() -> None:
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        task = asyncio.create_task(ticker())
+        try:
+            results = await detector.adetect_batch([self.sources_request, self.prompt_request])
+        finally:
+            task.cancel()
+        assert [result.ok for result in results] == [True, True]
+        assert thread_ids, "the detector never called on_call"
+        assert threading.get_ident() not in thread_ids, "the batch ran on the event loop thread"
+        assert ticks >= 5, f"the loop was blocked while the batch ran (ticks={ticks})"
+
+    async def test_batch_errors_are_raised_before_any_request_runs(self) -> None:
+        """A bad option or item raises InvalidInputError for the whole batch, sync and async alike."""
+        calls: list[int] = []
+        detector = self.make_detector(on_call=lambda: calls.append(1))
+        requests = [self.sources_request, self.prompt_request]
+        cases: list[tuple[list, dict, str]] = [
+            (requests, {"min_score": -0.1}, "min_score"),
+            (requests, {"min_score": math.nan}, "min_score"),
+            ([self.sources_request, "not a request"], {}, "requests"),
+        ]
+        if not detector.supports_tokens:
+            cases.append((requests, {"include_tokens": True}, "include_tokens"))
+        if not detector.supports_detail:
+            cases.append((requests, {"include_detail": True}, "include_detail"))
+        texts = [text for request in requests for text in _texts_of(request)]
+        for batch, options, param in cases:
+            with pytest.raises(InvalidInputError) as sync_exc:
+                detector.detect_batch(batch, **options)
+            with pytest.raises(InvalidInputError) as async_exc:
+                await detector.adetect_batch(batch, **options)
+            for exc in (sync_exc.value, async_exc.value):
+                assert exc.param == param
+                assert exc.code == sync_exc.value.code
+                assert not any(text in str(exc) for text in texts)
+            if param == "requests":
+                assert sync_exc.value.code == "invalid_request"
+                assert "requests[1]" in str(sync_exc.value)
+        assert calls == [], "a request ran although the batch was invalid"
+
+    def test_failed_request_is_reported_beside_the_results_of_the_others(self) -> None:
+        """A request that raises a typed error gets that error as its result; the others get theirs."""
+        error = UpstreamError("the stub failed", code="upstream_unavailable", service="stub")
+        guard = threading.Lock()
+        calls = 0
+
+        def fail_first() -> None:
+            nonlocal calls
+            with guard:
+                calls += 1
+                first = calls == 1
+            if first:
+                raise error
+
+        requests = self._batch()
+        healthy = self.make_detector()
+        expected = [healthy.detect(request) for request in requests]
+        results = self.make_detector(on_call=fail_first).detect_batch(requests)
+        assert len(results) == len(requests)
+        failed = [result for result in results if not result.ok]
+        assert failed, "the failure was not reported"
+        assert len(failed) < len(results), "the results of the other requests were dropped"
+        for result, detection in zip(results, expected, strict=True):
+            if result.ok:
+                assert result.error is None
+                assert result.get_or_raise() == detection
+            else:
+                assert result.detection is None
+                assert result.error is error
+                with pytest.raises(UpstreamError) as exc:
+                    result.get_or_raise()
+                assert exc.value is error
+
+    async def test_adetect_batch_reports_failures_like_detect_batch(self) -> None:
+        """When every request fails, both batch methods return the error for each and raise nothing."""
+        error = UpstreamError("the stub failed", code="upstream_unavailable", service="stub")
+
+        def fail() -> None:
+            raise error
+
+        detector = self.make_detector(on_call=fail)
+        requests = [self.sources_request, self.prompt_request, self.sources_request]
+        for results in (detector.detect_batch(requests), await detector.adetect_batch(requests)):
+            assert [result.ok for result in results] == [False] * len(requests)
+            assert all(result.error is error for result in results)
+
+    async def test_an_error_that_is_not_typed_fails_the_whole_batch(self) -> None:
+        """An exception that is no LettuceDetectError is a bug: it is raised, not stored in a result."""
+
+        class Bug(Exception):
+            pass
+
+        def fail() -> None:
+            raise Bug("a bug in the detector")
+
+        detector = self.make_detector(on_call=fail)
+        requests = [self.sources_request, self.prompt_request]
+        with pytest.raises(Bug):
+            detector.detect_batch(requests)
+        with pytest.raises(Bug):
+            await detector.adetect_batch(requests)
+
+    async def test_cancelled_adetect_batch_leaves_the_detector_usable(self) -> None:
+        """After Task.cancel() on a busy adetect_batch the batch still finishes, and the next batch is right."""
+        entered, gate = threading.Event(), threading.Event()
+        guard = threading.Lock()
+        calls = 0
+        loop_errors: list[dict] = []
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: loop_errors.append(context)
+        )
+
+        def blocked() -> None:
+            nonlocal calls
+            entered.set()
+            gate.wait(_WAIT_SECONDS)
+            with guard:
+                calls += 1
+
+        detector = self.make_detector(on_call=blocked)
+        requests = [self.sources_request, self.prompt_request] * 3
+        gate.set()
+        baseline = detector.detect_batch(requests)
+        calls_per_batch = calls
+        assert [result.ok for result in baseline] == [True] * len(requests)
+        gate.clear()
+        entered.clear()
+
+        task = asyncio.create_task(detector.adetect_batch(requests))
+        deadline = time.monotonic() + _WAIT_SECONDS
+        while not entered.is_set():
+            assert time.monotonic() < deadline, "the batch never started"
+            await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        # The wait is over, the batch is not: its thread keeps running until the requests are done.
+        assert calls == calls_per_batch, "the batch finished although the detector was blocked"
+        gate.set()
+        while calls < 2 * calls_per_batch:
+            assert time.monotonic() < deadline, "the abandoned batch never finished"
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.05)  # let the loop see anything the thread would report
+
+        assert detector.detect_batch(requests) == baseline
+        assert await detector.adetect_batch(requests) == baseline
+        assert loop_errors == [], f"the abandoned batch reported to the loop: {loop_errors}"
+
+
+def run_check(contract: DetectorContract, name: str) -> None:
+    """Run one check of a contract instance, awaiting it when it is a coroutine function."""
+    method = getattr(contract, name)
+    if inspect.iscoroutinefunction(method):
+        asyncio.run(method())
+    else:
+        method()

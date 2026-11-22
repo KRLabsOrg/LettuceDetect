@@ -10,6 +10,20 @@ HALLUCINATED_RESULT = {"hallucinated_triplets": [["Paris", "is capital of", "Ger
 CLEAN_RESULT = {"hallucinated_triplets": []}
 
 
+def _result_by_answer(answers):
+    """Return a fake ``detect_hallucinations``: the first answer is hallucinated, the rest clean."""
+
+    def detect_hallucinations(context, answer, question=None):
+        return HALLUCINATED_RESULT if answer == answers[0] else CLEAN_RESULT
+
+    return detect_hallucinations
+
+
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
+
+
 @pytest.fixture
 def detector():
     """RAGFactCheckerDetector with a mock backend. The tests need no API key and no network."""
@@ -33,12 +47,12 @@ class TestPredictPromptBatchRAG:
         """A length mismatch raises a ValueError before the backend gets a request."""
         with pytest.raises(ValueError, match="Number of prompts must match number of answers"):
             detector.predict_prompt_batch(prompts, answers)
-        detector.rag.detect_hallucinations_batch.assert_not_called()
+        detector.rag.detect_hallucinations.assert_not_called()
 
     def test_matched_lengths_return_spans_in_input_order(self, detector):
         """Equal lengths give one spans result for each pair, in input order."""
-        detector.rag.detect_hallucinations_batch.return_value = [HALLUCINATED_RESULT, CLEAN_RESULT]
         answers = ["Paris is the capital of Germany.", "Berlin is the capital of Germany."]
+        detector.rag.detect_hallucinations.side_effect = _result_by_answer(answers)
 
         results = detector.predict_prompt_batch(["c1", "c2"], answers, output_format="spans")
 
@@ -48,18 +62,11 @@ class TestPredictPromptBatchRAG:
 
     def test_matched_lengths_return_tokens_in_input_order(self, detector):
         """Equal lengths give one tokens result for each pair, in input order."""
-        detector.rag.detect_hallucinations_batch.return_value = [HALLUCINATED_RESULT, CLEAN_RESULT]
         answers = ["Paris is the capital of Germany.", "Berlin is the capital of Germany."]
+        detector.rag.detect_hallucinations.side_effect = _result_by_answer(answers)
 
         results = detector.predict_prompt_batch(["c1", "c2"], answers, output_format="tokens")
 
         assert [len(tokens) for tokens in results] == [6, 6]
         assert any(token["pred"] == 1 for token in results[0])
         assert all(token["pred"] == 0 for token in results[1])
-
-    def test_short_backend_result_raises_instead_of_truncating(self, detector):
-        """The call raises a ValueError when the backend returns fewer results than answers."""
-        detector.rag.detect_hallucinations_batch.return_value = [CLEAN_RESULT]
-
-        with pytest.raises(ValueError, match="shorter"):
-            detector.predict_prompt_batch(["c1", "c2"], ["a1", "a2"], output_format="spans")

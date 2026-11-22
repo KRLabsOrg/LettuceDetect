@@ -1,0 +1,74 @@
+{
+  "predict": [
+    [
+      {
+        "category": "contradiction",
+        "confidence": 1.0,
+        "end": 38,
+        "reasoning": "source says 67 million",
+        "start": 28,
+        "subcategory": "numerical",
+        "text": "69 million"
+      }
+    ],
+    [
+      {
+        "category": "contradiction",
+        "confidence": 1.0,
+        "end": 30,
+        "reasoning": "source says Portugal",
+        "start": 25,
+        "subcategory": "entity",
+        "text": "Spain"
+      }
+    ]
+  ],
+  "predict_prompt": [
+    [
+      {
+        "category": "contradiction",
+        "confidence": 1.0,
+        "end": 38,
+        "reasoning": "source says 67 million",
+        "start": 28,
+        "subcategory": "numerical",
+        "text": "69 million"
+      }
+    ],
+    [
+      {
+        "category": "contradiction",
+        "confidence": 1.0,
+        "end": 30,
+        "reasoning": "source says Portugal",
+        "start": 25,
+        "subcategory": "entity",
+        "text": "Spain"
+      }
+    ]
+  ],
+  "predict_prompt_batch": [
+    [
+      {
+        "category": "contradiction",
+        "confidence": 1.0,
+        "end": 38,
+        "reasoning": "source says 67 million",
+        "start": 28,
+        "subcategory": "numerical",
+        "text": "69 million"
+      }
+    ],
+    [
+      {
+        "category": "contradiction",
+        "confidence": 1.0,
+        "end": 30,
+        "reasoning": "source says Portugal",
+        "start": 25,
+        "subcategory": "entity",
+        "text": "Spain"
+      }
+    ]
+  ]
+}

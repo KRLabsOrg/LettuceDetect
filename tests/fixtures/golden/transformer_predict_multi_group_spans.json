@@ -1,0 +1,42 @@
+{
+  "groups": [
+    [
+      "the capital of france is paris . the capital of france is paris ."
+    ],
+    [
+      "short answer word . short answer word . short answer word ."
+    ],
+    [
+      "the capital of france is paris . the capital of france is paris ."
+    ],
+    [
+      "word word word word word word word word word word word word word word ."
+    ]
+  ],
+  "output": [
+    {
+      "confidence": 0.952574,
+      "end": 8,
+      "start": 6,
+      "text": "is"
+    },
+    {
+      "confidence": 0.982014,
+      "end": 23,
+      "start": 13,
+      "text": "capital of"
+    },
+    {
+      "confidence": 0.880797,
+      "end": 34,
+      "start": 31,
+      "text": "and"
+    },
+    {
+      "confidence": 0.993307,
+      "end": 53,
+      "start": 46,
+      "text": "is word"
+    }
+  ]
+}

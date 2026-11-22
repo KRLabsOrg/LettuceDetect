@@ -5,10 +5,15 @@ import json
 import pytest
 import torch
 
+from lettucedetect.detectors.errors import ConfigurationError
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import LLMClient, build_generative_schema
 from lettucedetect.detectors.taxonomy_head import resolve_taxonomy
 from lettucedetect.prompts.generative import build_system_prompt
+
+pytestmark = pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 
 CUSTOM_CATS = {"pricing_claim": "any statement about price not supported by the context"}
 CUSTOM_SUBS = {"currency": "a currency amount not present in the context"}
@@ -105,7 +110,7 @@ class TestNativeCustomTaxonomy:
     def test_native_rejects_dead_args(self, tmp_path):
         """Test native rejects dead args."""
         for kwargs in ({"zero_shot": True}, {"fewshot_path": "x.json"}, {"prompt_path": "p.txt"}):
-            with pytest.raises(ValueError, match="native"):
+            with pytest.raises(ConfigurationError, match="native"):
                 LLMDetector(
                     model="KRLabsOrg/lettucedect-v2-qwen-2b",
                     client=CaptureClient(),
@@ -207,7 +212,7 @@ class TestTaxonomyTyperCustomLabels:
         monkeypatch.setattr(
             th, "AutoModel", type("M", (), {"from_pretrained": lambda *a, **k: StubModel()})
         )
-        typer = th.TaxonomyTyper(
+        typer = th.TaxonomyTyper.from_pretrained(
             "stub", device="cpu", categories=CUSTOM_CATS, subcategories=CUSTOM_SUBS
         )
         assert typer.cat_names == ["pricing_claim"]

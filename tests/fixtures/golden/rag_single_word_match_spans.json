@@ -1,0 +1,50 @@
+{
+  "predict": [
+    [
+      {
+        "confidence": 0.7,
+        "end": 6,
+        "start": 0,
+        "text": "Madrid",
+        "triplet": [
+          "Barcelona",
+          "north",
+          "coast",
+          "Madrid"
+        ]
+      }
+    ]
+  ],
+  "predict_prompt": [
+    [
+      {
+        "confidence": 0.7,
+        "end": 6,
+        "start": 0,
+        "text": "Madrid",
+        "triplet": [
+          "Barcelona",
+          "north",
+          "coast",
+          "Madrid"
+        ]
+      }
+    ]
+  ],
+  "predict_prompt_batch": [
+    [
+      {
+        "confidence": 0.7,
+        "end": 6,
+        "start": 0,
+        "text": "Madrid",
+        "triplet": [
+          "Barcelona",
+          "north",
+          "coast",
+          "Madrid"
+        ]
+      }
+    ]
+  ]
+}

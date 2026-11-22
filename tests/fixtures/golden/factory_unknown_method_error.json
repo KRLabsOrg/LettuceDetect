@@ -1,0 +1,3 @@
+{
+  "message": "Unknown detector method: bogus. Use one of: transformer, llm, rag_fact_checker"
+}

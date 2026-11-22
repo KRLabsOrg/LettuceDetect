@@ -13,6 +13,8 @@ import logging
 import os
 from abc import ABC, abstractmethod
 
+from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
+
 logger = logging.getLogger(__name__)
 
 
@@ -224,6 +226,16 @@ class LLMClient(ABC):
         ...
 
 
+def _openai_unavailable(reason: str) -> UpstreamError:
+    """Build the error for an OpenAI call that may succeed when retried."""
+    return UpstreamError(
+        f"The OpenAI API did not answer: {reason}. Retry later.",
+        code="upstream_unavailable",
+        service="openai",
+        retryable=True,
+    )
+
+
 class OpenAIClient(LLMClient):
     """LLM client backed by the OpenAI chat completions API."""
 
@@ -248,23 +260,51 @@ class OpenAIClient(LLMClient):
         temperature: float,
         schema: dict,
     ) -> str:
-        """Run a completion via ``chat.completions`` with a strict JSON schema."""
-        resp = self._client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "hallucination_detection",
-                    "schema": schema,
-                    "strict": True,
+        """Run a completion via ``chat.completions`` with a strict JSON schema.
+
+        :raises ConfigurationError: (``authentication_failed``) the API key was rejected;
+            (``quota_exceeded``) the account has no quota left.
+        :raises UpstreamError: (``upstream_unavailable``) the request timed out, the connection
+            failed, the rate limit was hit or the server failed.
+        """
+        import openai
+
+        try:
+            resp = self._client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "hallucination_detection",
+                        "schema": schema,
+                        "strict": True,
+                    },
                 },
-            },
-            temperature=temperature,
-        )
+                temperature=temperature,
+            )
+        except openai.AuthenticationError as exc:
+            raise ConfigurationError(
+                "The OpenAI API rejected the credentials; check the API key.",
+                code="authentication_failed",
+            ) from exc
+        except openai.RateLimitError as exc:
+            # OpenAI reports an exhausted quota as a 429 with this code; waiting does not fix it.
+            if exc.code == "insufficient_quota":
+                raise ConfigurationError(
+                    "The OpenAI account has no quota left; check its plan and billing.",
+                    code="quota_exceeded",
+                ) from exc
+            raise _openai_unavailable("the rate limit was hit") from exc
+        except openai.APITimeoutError as exc:
+            raise _openai_unavailable("the request timed out") from exc
+        except openai.APIConnectionError as exc:
+            raise _openai_unavailable("the connection failed") from exc
+        except openai.InternalServerError as exc:
+            raise _openai_unavailable("the server failed") from exc
         return resp.choices[0].message.content
 
 
@@ -300,7 +340,10 @@ class BedrockClient(LLMClient):
         temperature: float,
         schema: dict,
     ) -> str:
-        """Run a completion via ``converse`` with a forced tool call for structured output."""
+        """Run a completion via ``converse`` with a forced tool call for structured output.
+
+        :raises UpstreamError: (``empty_response``) the reply has no tool call.
+        """
         resp = self._client.converse(
             modelId=model,
             system=[{"text": system}],
@@ -324,8 +367,11 @@ class BedrockClient(LLMClient):
         for block in resp["output"]["message"]["content"]:
             if "toolUse" in block:
                 return json.dumps(block["toolUse"]["input"])
-        logger.warning("Bedrock response contained no tool-use block; returning empty result")
-        return ""
+        raise UpstreamError(
+            "The Bedrock reply has no tool call; retry, or use a model that supports tool use.",
+            code="empty_response",
+            service="bedrock",
+        )
 
 
 def make_llm_client(provider: str, **kwargs) -> LLMClient:
