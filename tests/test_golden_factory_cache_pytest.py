@@ -74,6 +74,9 @@ class _Patched:
             p.stop()
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 class TestMakeDetector:
     """The factory builds the right class per method and rejects unknown ones."""
 
