@@ -2,6 +2,67 @@
 
 All notable changes to LettuceDetect are documented here.
 
+## [0.3.0] - Unreleased
+
+### Added
+- `detect(request, *, min_score=0.0, include_tokens=False, include_detail=False)` on every detector. It takes a `SourcesInput` or a `PromptInput` and returns one `Detection` with `spans`, optional `tokens`, optional `detail`, `usage` and `warnings`. Every span has a numeric `score`, and `min_score` drops the spans below it (#126)
+- `adetect`: the async version of `detect`. It runs `detect` in a worker thread on the event loop's default executor. That executor is shared with the rest of the service, DNS lookups included, so size it for many concurrent calls. Cancelling `adetect` stops the wait, not the thread. There is no `executor` argument
+- `detect_batch`: runs many requests and returns a `list[BatchResult]`, one per request in input order. A `BatchResult` holds the `detection` or the typed `error` of its request, with `ok` and `get_or_raise()`, so one failed request does not discard the others. At most `max_concurrency` requests run at once
+- `adetect_batch`: the async version of `detect_batch`. It runs on the same default executor as `adetect` and the same notes apply: size the executor, cancelling stops the wait and not the batch, and there is no `executor` argument
+- `EncoderDetector` with `EncoderConfig`: the encoder models on the typed interface. The constructor takes a loaded model and tokenizer and downloads nothing; `EncoderDetector.from_pretrained` loads them and records the resolved Hugging Face commit as `model_version`. `include_tokens=True` returns `TokenScore` items without zero-width special tokens, a `typer` adds `category` and `subcategory` to every span, an input over `max_length` adds the `input_truncated` warning, and `detect_batch` scores requests in padded groups of `batch_size`
+- `LLMJudgeDetector` with `LLMJudgeConfig`: the zero-shot and few-shot LLM judge with reasoning, taxonomy and the verify pass. It takes the LLM client as an argument, reads no environment variable and writes no file. Dropped items are reported with the `span_not_found` and `item_malformed` warnings, a skipped verify pass with `verification_skipped`
+- `GenerativeDetector` with `GenerativeConfig`: the fine-tuned generative models with their frozen prompt, typed spans and the custom taxonomy forms, on a client the caller passes
+- `VelaDetector` with `VelaConfig`: a detector for Vela 2.0 models. `VelaDetector.from_pretrained` loads a model in process (install the new `vela` extra), and `VelaDetector.from_server` calls a SystemOne server through `SystemOneClient` (#118)
+- `RAGFactCheckerDetector.detect` and `adetect`. `include_detail=True` returns a `DetailedResult` with the triplets and fact-check results. Two new keywords: `fact_checker` takes a ready fact checker, so nothing is built and the environment is not read, and `max_concurrency` (default 30) bounds the fact-check calls running at once on one instance
+- `TaxonomyTyper.from_pretrained`: loads the typing head and records its commit as `model_version`
+- `load_detector(model_id, ...)`: builds the detector of a registered KR Labs model id. An unknown id raises `InvalidInputError` (`unknown_model_id`) that lists the known ids, and a generative id without `client` raises `ConfigurationError` (`client_required`)
+- Reply caching that the caller controls: the `ResponseCache` protocol, the `SyncCacheBase` base class, `FileCache` (one JSON file, atomic writes, optional TTL, reads files written by `CacheManager`) and `InMemoryCache`. The LLM-backed detectors cache only when a `cache` is passed
+- `make_cache_key`: builds the cache key of a model call. With a `model_version` the key includes it, so a redeployed model does not read the replies of the old one; without one the key equals the key `LLMDetector` has always built, so existing cache files keep hitting
+- Request and result types: `Chunk`, `SourcesInput`, `PromptInput`, `DetectRequest`, `Detection`, `Span`, `DetectedSpan`, `TokenScore`, `DetailedResult`, `Usage`, `ResultWarning` and `BatchResult`. They are frozen pydantic models and their validation errors never contain the input text
+- Error types: `LettuceDetectError` and its subclasses `InvalidInputError` (an argument of a call), `ConfigurationError` (a constructor argument, a setting or a missing package) and `UpstreamError` (a failed or missing reply from a service). Each carries a stable `code`
+- `usage` on every `Detection`: one entry per model that ran, with `model_id`, `model_version` and counts such as `input_tokens`, `llm_calls` and `cache_hits`
+- The `synthetic_score` warning on a `Detection` whose scores are constants and not model outputs
+- `BaseDetector` bridges both interfaces: a subclass that implements `_detect` gets the `predict*` methods, and a subclass that implements only `predict` gets `detect`, which also goes through a `predict` overridden below the class that implements `_detect`. A subclass that implements neither raises `TypeError` when it is defined
+- `LettuceDetectDeprecationWarning`, the warning class of every deprecation in the library
+- `--method vela` and `--revision` in `scripts/evaluate_span_model.py`
+
+### Changed
+- `LLMDetector` spans that had no `confidence` key (the judge without `include_reasoning`, the generative models) now carry `confidence: 1.0`
+- `LLMDetector` used to cache every reply in `cache_<model>_<lang>.json` inside the installed package; it now caches, and writes a file, only when `cache_file` is passed
+- A reply that can't be parsed (not JSON, or without `hallucination_list` for the judge or `hallucinated_spans` for the generative models) used to return no spans; it now raises `UpstreamError` (`unparseable_response`)
+- A generative-model reply used to be cached before it was parsed, so a bad reply was replayed; a reply is now cached only after it parses, and a cached entry that doesn't parse is deleted
+- A generative-model reply item that is a bare string used to be skipped; it is now returned as a span without a category
+- `BedrockClient` used to return an empty string for a reply without a tool call, which read as "no spans"; it now raises `UpstreamError` (`empty_response`)
+- `OpenAIClient` used to let OpenAI's own exceptions through; authentication and quota errors now raise `ConfigurationError` (`authentication_failed`, `quota_exceeded`), and timeouts, connection errors, rate limits and server errors raise `UpstreamError` (`upstream_unavailable`), with the original error as `__cause__`
+- With `verify=True`, a verify call that failed in the provider used to raise; it now keeps the first-pass spans when the failure is an `UpstreamError`, as an unparseable verify reply already did
+- `LLMDetector` constructor errors are now `ConfigurationError`, which is not a `ValueError`: an unknown `lang` (`invalid_language`, was `ValueError`), `native` with `zero_shot`, `fewshot_path` or `prompt_path` (`native_options_conflict`, was `ValueError`), a missing `prompt_path` (`invalid_config`, was `FileNotFoundError`) and any other invalid option (`invalid_config`)
+- A `fewshot_path` that doesn't exist used to log a warning and run without examples; it now raises `ConfigurationError` (`fewshot_not_found`)
+- The `predict*` methods of `LLMDetector` and `RAGFactCheckerDetector` used to raise a plain `ValueError` for an unsupported `output_format`, a `min_confidence` outside `[0, 1]` or lists of different lengths; they now raise `InvalidInputError` (`unsupported_output_format`, `invalid_min_score`, `length_mismatch`), which is still a `ValueError`
+- A merged `RAGFactCheckerDetector` span used to keep the text of its first part; its `text` is now the answer between its offsets
+- `RAGFactCheckerDetector.predict_prompt_batch` used to make one `detect_hallucinations_batch` call; it now makes concurrent `detect_hallucinations` calls, and all `predict*` calls on one instance share the `max_concurrency` bound
+- A fact checker result that doesn't have the expected types used to be passed through; `RAGFactCheckerDetector` now raises `UpstreamError` (`invalid_model_output`)
+- `LLMDetector` used to log malformed items, dropped span texts and the raw reply on its module logger; module loggers now record counts only, and the raw reply is logged at DEBUG on the `lettucedetect.content` logger
+- `CacheManager` used to create its directory and read the file in the constructor; the constructor now touches no disk, the first write creates the directory, writes are atomic, and an invalid file raises `ConfigurationError` (`cache_file_invalid`) on first use
+- `TaxonomyTyper(model_path, device=...)` used to load the typing head itself; the constructor now takes a loaded encoder and tokenizer, and `TaxonomyTyper.from_pretrained(model_id, device=...)` does the loading. The old call raises `TypeError`
+- Concurrent `predict*` calls on one `TransformerDetector` used to run unsynchronised on the shared tokenizer; they now run one at a time
+- `pydantic`, `httpx`, `packaging` and `typing_extensions` are now required dependencies
+
+### Deprecated
+Each name below is deprecated since 0.3.0 and carries a `.. deprecated::` note in its docstring. `TransformerDetector`, `LLMDetector` and its arguments, `make_detector` and `CacheManager` warn with `LettuceDetectDeprecationWarning` when used from outside the `lettucedetect` package. The `predict*` methods and their `min_confidence` and `output_format` arguments do not emit a warning in this release. A `BaseDetector` subclass that implements only the `predict*` methods keeps working through `detect` and warns once per class; implement `_detect` instead.
+- `TransformerDetector`: use `EncoderDetector.from_pretrained`. Removed in 0.5.0.
+- `LLMDetector`: use `LLMJudgeDetector` or `GenerativeDetector`. Removed in 0.5.0.
+- The `provider`, `client_kwargs` and `cache_file` arguments of `LLMDetector`, and leaving out `client`: use `LLMJudgeDetector` or `GenerativeDetector`. Removed in 0.5.0. Build the client yourself (`OpenAIClient` or `BedrockClient`) and pass `cache=FileCache(path)` for a cache file.
+- `make_detector`: use `load_detector`. Removed in 0.5.0. For a model that is not a registered KR Labs model id, build the detector class directly.
+- `CacheManager`: use `FileCache`. Removed in 0.5.0.
+- `predict` and `predict_prompt`: use `detect`. Removed in 0.5.0.
+- `predict_prompt_batch`: use `detect_batch`. Removed in 0.5.0.
+- The `min_confidence` argument of the three methods above: use `min_score`. Removed in 0.5.0.
+- The `output_format` argument of the three methods above: use `include_tokens`. Removed in 0.5.0. Token scores come from `EncoderDetector` only; the token output of `LLMDetector` and `RAGFactCheckerDetector` has no replacement, and `"detailed"` becomes `include_detail=True`.
+
+### Documentation
+- Errors and logging convention in `CONTRIBUTING.md`
+- "Vela 2.0" section in the detection methods guide, with the reproduced Vela 2.0 0.3B results
+
 ## [0.2.3] - 2026-08-14
 
 ### Added

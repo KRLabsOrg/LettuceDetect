@@ -15,6 +15,19 @@ Open:
 
 Shipped in this milestone so far: the network-free unit suite as a merge gate ([#73](https://github.com/KRLabsOrg/LettuceDetect/issues/73)), the `lettucedetect` CLI ([#47](https://github.com/KRLabsOrg/LettuceDetect/issues/47)), the detector latency/throughput benchmark ([#58](https://github.com/KRLabsOrg/LettuceDetect/issues/58)), token output from the LLM detector ([#65](https://github.com/KRLabsOrg/LettuceDetect/issues/65)), the `min_confidence` documentation ([#64](https://github.com/KRLabsOrg/LettuceDetect/issues/64)), and deterministic localization of repeated LLM spans ([#85](https://github.com/KRLabsOrg/LettuceDetect/issues/85)).
 
+## Now: [0.3.0 — One typed detect interface for the detectors](https://github.com/KRLabsOrg/LettuceDetect/issues/126)
+
+Release 0.3.0 gives the detectors package one typed interface: `detect`, `adetect`, `detect_batch` and `adetect_batch` take a typed request and return a typed result with spans, scores, usage and warnings. The existing API keeps working through adapters that are deprecated in 0.3.0 and removed in 0.5.0. The [changelog](CHANGELOG.md) lists every deprecated name and every behavior that changes through the existing API.
+
+Follow-ups, outside this release:
+
+- Facade migration: move the `HallucinationDetector` facade, the CLI, the integrations, the evaluator and `lettucedetect_api/` off the deprecated names, then remove the rule that keeps calls from inside the package silent.
+- The HTTP contract: a typed detect route in `lettucedetect_api/` and deprecation of the old routes, related to [the stable HTTP contract](https://github.com/KRLabsOrg/LettuceDetect/issues/75).
+- Shared types: where `Chunk`, `Span`, `Usage` and the error classes live, and whether source ids must be unique. In 0.3.0 they are defined in `lettucedetect.detectors`, and source ids are not checked.
+- The LLM-call layer that replaces `LLMClient`, so that `usage` can report provider model names and token counts.
+- Native async LLM calls, the first follow-up after the LLM-call layer decision. The change adds to the signatures and results and removes nothing. The thread path stays as the default, because Bedrock, the fact checker and the encoder have no native async path. The caller owns the async client, as it owns the sync one. Two behaviors change and go in that release's changelog: cancelling `adetect` really cancels the call, and the OpenAI path stops using worker threads.
+- Documentation site: a migration page and pages for the new API. Re-exporting the new names from the `lettucedetect` root is also open.
+
 ## Next: [Validation — Typed-span workflows](https://github.com/KRLabsOrg/LettuceDetect/milestone/3)
 
 The detectors already emit typed spans (category and subcategory per detected span). This milestone tests whether that localization improves real debugging, evaluation, monitoring, and agent workflows.

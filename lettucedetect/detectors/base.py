@@ -509,6 +509,10 @@ class BaseDetector(ABC):
 
         The default builds a request and calls :meth:`detect`; a legacy detector overrides it.
 
+        .. deprecated:: 0.3.0
+            Use :meth:`detect`, with ``min_score`` in place of ``min_confidence`` and
+            ``include_tokens`` in place of ``output_format``. ``predict`` will be removed in 0.5.0.
+
         :param context: List of passages that were supplied to the LLM / user.
         :param answer: Model-generated answer to inspect.
         :param question: Original question (``None`` for summarisation).
@@ -533,6 +537,11 @@ class BaseDetector(ABC):
 
         The default builds a request and calls :meth:`detect`; a legacy detector overrides it.
 
+        .. deprecated:: 0.3.0
+            Use :meth:`detect` with a ``PromptInput``, with ``min_score`` in place of
+            ``min_confidence`` and ``include_tokens`` in place of ``output_format``.
+            ``predict_prompt`` will be removed in 0.5.0.
+
         :param prompt: Full prompt (context + question already concatenated).
         :param answer: Model-generated answer to inspect.
         :param output_format: ``"tokens"`` or ``"spans"``.
@@ -556,6 +565,11 @@ class BaseDetector(ABC):
         The default builds the requests and calls :meth:`detect_batch`. A failed pair raises
         its error, the first one in input order. A detector with its own ``predict_prompt``
         gets every pair through that method instead.
+
+        .. deprecated:: 0.3.0
+            Use :meth:`detect_batch`, with ``min_score`` in place of ``min_confidence`` and
+            ``include_tokens`` in place of ``output_format``. ``predict_prompt_batch`` will be
+            removed in 0.5.0.
 
         :param prompts: List of full prompt strings.
         :param answers: List of answers to inspect.
