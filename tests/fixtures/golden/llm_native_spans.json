@@ -3,6 +3,7 @@
     [
       {
         "category": "contradiction",
+        "confidence": 1.0,
         "end": 38,
         "start": 28,
         "subcategory": "numerical",
@@ -12,6 +13,7 @@
     [
       {
         "category": "contradiction",
+        "confidence": 1.0,
         "end": 30,
         "start": 25,
         "subcategory": "entity",
@@ -23,6 +25,7 @@
     [
       {
         "category": "contradiction",
+        "confidence": 1.0,
         "end": 38,
         "start": 28,
         "subcategory": "numerical",
@@ -32,6 +35,7 @@
     [
       {
         "category": "contradiction",
+        "confidence": 1.0,
         "end": 30,
         "start": 25,
         "subcategory": "entity",
@@ -43,6 +47,7 @@
     [
       {
         "category": "contradiction",
+        "confidence": 1.0,
         "end": 38,
         "start": 28,
         "subcategory": "numerical",
@@ -52,6 +57,7 @@
     [
       {
         "category": "contradiction",
+        "confidence": 1.0,
         "end": 30,
         "start": 25,
         "subcategory": "entity",

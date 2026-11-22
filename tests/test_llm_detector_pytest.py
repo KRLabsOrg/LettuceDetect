@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from lettucedetect.detectors.errors import ConfigurationError
+from lettucedetect.detectors.generative import GenerativeConfig, GenerativeDetector
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import LLMClient
 from lettucedetect.detectors.llm_judge import LLMJudgeConfig, LLMJudgeDetector
@@ -356,4 +357,105 @@ class TestJudgeDelegation:
 
         with pytest.raises(ConfigurationError) as exc:
             detector.predict_prompt("p", "an answer")
+        assert exc.value is error
+
+
+class TestNativeDelegation:
+    """The native path of LLMDetector runs through GenerativeDetector."""
+
+    ANSWER = "Lisbon is the capital of Spain."
+    REPLY = (
+        '{"hallucinated_spans": [{"text": "Spain", "category": "contradiction", '
+        '"subcategory": "entity", "explanation": "the source says Portugal"}]}'
+    )
+
+    def test_generative_detector_is_built_from_the_constructor_arguments(self, cache_file):
+        """Keywords map to GenerativeConfig; client, model and cache are shared."""
+        detector = make_detector(
+            self.REPLY,
+            cache_file,
+            model="my-model",
+            native=True,
+            temperature=0.3,
+            lang="de",
+            include_reasoning=True,
+            include_taxonomy=["minor"],
+            verify=True,
+        )
+
+        generative = detector._generative
+
+        assert isinstance(generative, GenerativeDetector)
+        assert generative.client is detector.client
+        assert generative.cache is detector.cache
+        assert generative.model_id == "my-model"
+        assert generative.config == GenerativeConfig(
+            temperature=0.3,
+            lang="de",
+            include_reasoning=True,
+            include_taxonomy=["minor"],
+            verify=True,
+        )
+
+    def test_judge_detector_has_no_generative_detector(self, cache_file):
+        """The judge path does not build a generative detector."""
+        detector = make_detector('{"hallucination_list": []}', cache_file, native=False)
+
+        assert detector._generative is None
+
+    def test_model_name_chooses_the_generative_detector(self, cache_file):
+        """Without ``native=``, the name of a fine-tuned generative model selects the path."""
+        detector = make_detector(self.REPLY, cache_file, model="KRLabsOrg/lettucedect-v2-qwen-2b")
+
+        assert detector._generative is not None
+        assert detector._judge is None
+
+    def test_spans_carry_confidence_one_and_the_typed_keys(self, cache_file):
+        """A native span has ``confidence`` 1.0, its labels and ``reasoning``."""
+        detector = make_detector(self.REPLY, cache_file, native=True, include_reasoning=True)
+
+        spans = detector.predict_prompt("p", self.ANSWER, min_confidence=0.9)
+
+        assert spans == [
+            {
+                "start": 25,
+                "end": 30,
+                "text": "Spain",
+                "confidence": 1.0,
+                "reasoning": "the source says Portugal",
+                "category": "contradiction",
+                "subcategory": "entity",
+            }
+        ]
+
+    def test_tokens_of_a_native_span_keep_the_fixed_probability(self, cache_file):
+        """Token output gives a flagged token the fixed probability, not the score 1.0."""
+        detector = make_detector(self.REPLY, cache_file, native=True)
+
+        tokens = detector.predict_prompt("p", self.ANSWER, output_format="tokens")
+
+        assert [(token["pred"], token["prob"]) for token in tokens] == [(0, 0.1)] * 5 + [(1, 0.9)]
+
+    @pytest.mark.parametrize("reply", ["not json at all", '{"analysis": "nothing"}'])
+    def test_unparseable_reply_returns_no_spans_and_is_not_cached(self, cache_file, reply):
+        """A reply that can't be parsed gives no spans and is asked for again on the next call."""
+        client = CountingClient(reply)
+        detector = LLMDetector(client=client, cache_file=cache_file, native=True)
+
+        assert detector.predict_prompt("p", self.ANSWER) == []
+        assert detector.predict_prompt("p", self.ANSWER) == []
+        assert client.calls == 2
+
+    def test_client_error_propagates(self, cache_file):
+        """A typed error of the client comes out of the native predict unwrapped."""
+        error = ConfigurationError("bad key", code="authentication_failed")
+
+        class Raising(LLMClient):
+            def complete(self, system, user, model, temperature, schema) -> str:
+                raise error
+
+        detector = LLMDetector(client=Raising(), cache_file=cache_file, native=True)
+
+        with pytest.raises(ConfigurationError) as exc:
+            detector.predict_prompt("p", self.ANSWER)
         assert exc.value is error
