@@ -89,7 +89,11 @@ def test_construction_warns_and_names_the_replacement(local_wordpiece_tokenizer)
 
 
 def test_construction_inside_the_package_is_silent(local_wordpiece_tokenizer):
-    namespace = {"__name__": "lettucedetect.fake_internal", "T": TransformerDetector}
+    namespace = {
+        "__name__": "lettucedetect.fake_internal",
+        "T": TransformerDetector,
+        "make_detector": make_detector,
+    }
     with (
         patch("transformers.AutoTokenizer.from_pretrained", return_value=local_wordpiece_tokenizer),
         patch(
@@ -99,8 +103,10 @@ def test_construction_inside_the_package_is_silent(local_wordpiece_tokenizer):
         warnings.catch_warnings(),
     ):
         warnings.simplefilter("error")
-        exec("T(model_path='dummy_path')", namespace)  # noqa: S102
-        make_detector("transformer", model_path="dummy_path")
+        exec(  # noqa: S102
+            "T(model_path='dummy_path')\nmake_detector('transformer', model_path='dummy_path')",
+            namespace,
+        )
         HallucinationDetector(method="transformer", model_path="dummy_path")
 
 
