@@ -2,8 +2,8 @@
   "predict": [
     {
       "fact_check_results": {
-        "0": "contradiction",
-        "1": "entailment"
+        "0": false,
+        "1": true
       },
       "spans": [
         {
@@ -49,8 +49,8 @@
     },
     {
       "fact_check_results": {
-        "0": "contradiction",
-        "1": "entailment"
+        "0": false,
+        "1": true
       },
       "spans": [
         {
@@ -98,8 +98,8 @@
   "predict_prompt": [
     {
       "fact_check_results": {
-        "0": "contradiction",
-        "1": "entailment"
+        "0": false,
+        "1": true
       },
       "spans": [
         {
@@ -145,8 +145,8 @@
     },
     {
       "fact_check_results": {
-        "0": "contradiction",
-        "1": "entailment"
+        "0": false,
+        "1": true
       },
       "spans": [
         {
