@@ -13,9 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from lettucedetect.detectors._llm_shared import (
     Labels,
+    dropped_item_warnings,
     fetch_parsed,
     load_verify_template,
     locate_items,
+    request_context,
     resolve_taxonomy,
     to_detected_spans,
     unparseable_response,
@@ -30,7 +32,6 @@ from lettucedetect.detectors.types import (
     Detection,
     DetectRequest,
     ResultWarning,
-    SourcesInput,
     Usage,
 )
 
@@ -351,18 +352,7 @@ class LLMJudgeDetector(BaseDetector):
         """
         config = self.config
         answer = request.answer
-        if isinstance(request, SourcesInput):
-            sources = [chunk.text for chunk in request.sources]
-            context = PromptUtils.format_context(sources, request.question, config.lang)
-        else:
-            sources = [request.prompt]
-            context = request.prompt
-        units = {
-            "llm_calls": 0,
-            "cache_hits": 0,
-            "source_chars": sum(len(text) for text in sources),
-            "answer_chars": len(answer),
-        }
+        context, units = request_context(request, config.lang)
         logger.debug("detect started: kind=%s model_id=%s", request.kind, self.model_id)
 
         prompt = self._build_prompt(context, answer)
@@ -381,31 +371,7 @@ class LLMJudgeDetector(BaseDetector):
         )
         located, not_found, malformed = locate_items(items, answer, config.min_score)
 
-        warnings = []
-        if not_found:
-            warnings.append(
-                ResultWarning(
-                    code="span_not_found",
-                    message=f"{not_found} of {len(items)} items are not in the answer and were dropped.",
-                )
-            )
-        if malformed:
-            warnings.append(
-                ResultWarning(
-                    code="item_malformed",
-                    message=(
-                        f"{malformed} of {len(items)} items are neither a string nor an object "
-                        "with text and were dropped."
-                    ),
-                )
-            )
-        if warnings:
-            logger.warning(
-                "items dropped: span_not_found=%d item_malformed=%d items=%d",
-                not_found,
-                malformed,
-                len(items),
-            )
+        warnings = dropped_item_warnings(not_found, malformed, len(items))
 
         if config.verify and located:
             located, skipped = verify_spans(

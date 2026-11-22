@@ -1,7 +1,7 @@
 """Steps shared by the LLM-backed detectors.
 
-Only :func:`fetch_parsed` touches a client or a cache, and :func:`verify_spans` calls it. The
-other functions are pure.
+Only :func:`fetch_parsed` touches a client or a cache, and :func:`verify_spans` calls it. No
+other function does I/O beyond logging.
 """
 
 from __future__ import annotations
@@ -20,7 +20,12 @@ from lettucedetect.detectors.errors import UpstreamError
 from lettucedetect.detectors.llm_client import LLMClient, build_verification_schema
 from lettucedetect.detectors.prompt_utils import PROMPT_DIR, PromptUtils
 from lettucedetect.detectors.response_cache import ResponseCache, make_cache_key
-from lettucedetect.detectors.types import DetectedSpan
+from lettucedetect.detectors.types import (
+    DetectedSpan,
+    DetectRequest,
+    ResultWarning,
+    SourcesInput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +79,29 @@ def unparseable_response(what: str) -> UpstreamError:
         code="unparseable_response",
         service="llm",
     )
+
+
+def request_context(request: DetectRequest, lang: str) -> tuple[str, dict[str, int]]:
+    """Return the context text of a request and the usage units of a call before any LLM call.
+
+    :param request: the sources (or prompt) and the answer to check.
+    :param lang: language code of the sources, for the passage labels.
+    :returns: the formatted sources and question, or the prompt; and the units ``llm_calls`` and
+        ``cache_hits`` at 0 with ``source_chars`` and ``answer_chars`` counted.
+    """
+    if isinstance(request, SourcesInput):
+        sources = [chunk.text for chunk in request.sources]
+        context = PromptUtils.format_context(sources, request.question, lang)
+    else:
+        sources = [request.prompt]
+        context = request.prompt
+    units = {
+        "llm_calls": 0,
+        "cache_hits": 0,
+        "source_chars": sum(len(text) for text in sources),
+        "answer_chars": len(request.answer),
+    }
+    return context, units
 
 
 def span_score(item: dict[str, Any]) -> float | None:
@@ -138,6 +166,42 @@ def locate_items(
                     span[key] = item[key]
         spans.append(span)
     return spans, not_found, malformed
+
+
+def dropped_item_warnings(not_found: int, malformed: int, total: int) -> list[ResultWarning]:
+    """Build the warnings for the items :func:`locate_items` dropped, and log their counts.
+
+    :param not_found: the number of items without a free match in the answer.
+    :param malformed: the number of malformed items.
+    :param total: the number of items in the reply.
+    :returns: ``span_not_found`` and ``item_malformed``, each only when its count is not 0.
+    """
+    warnings = []
+    if not_found:
+        warnings.append(
+            ResultWarning(
+                code="span_not_found",
+                message=f"{not_found} of {total} items are not in the answer and were dropped.",
+            )
+        )
+    if malformed:
+        warnings.append(
+            ResultWarning(
+                code="item_malformed",
+                message=(
+                    f"{malformed} of {total} items are neither a string nor an object "
+                    "with text and were dropped."
+                ),
+            )
+        )
+    if warnings:
+        logger.warning(
+            "items dropped: span_not_found=%d item_malformed=%d items=%d",
+            not_found,
+            malformed,
+            total,
+        )
+    return warnings
 
 
 def to_detected_spans(spans: list[dict[str, Any]]) -> tuple[list[DetectedSpan], bool]:
