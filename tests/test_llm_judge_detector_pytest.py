@@ -474,24 +474,14 @@ GOLDEN_NAMES = [
 ]
 
 
-def _golden_spans(name: str) -> dict:
-    """Load the span fixture of one configuration, with 1.0 where a span had no confidence."""
-    recorded = json.loads((GOLDEN_DIR / f"llm_{name}_spans.json").read_text(encoding="utf-8"))
-    for entry in ("predict", "predict_prompt"):
-        for spans in recorded[entry]:
-            for span in spans:
-                span.setdefault("confidence", 1.0)
-    return recorded
-
-
 @pytest.mark.parametrize("name", GOLDEN_NAMES)
 def test_output_equals_the_golden_fixtures(name):
-    """``detect`` output equals what ``LLMDetector`` recorded, with 1.0 for unscored spans."""
+    """``detect`` output equals the spans recorded for ``LLMDetector.predict*``."""
     kwargs, replies, verify_replies = CONFIGS[name]
     detector = LLMJudgeDetector(
         GoldenClient(replies, verify_replies), "gpt-4.1-mini", config=LLMJudgeConfig(**kwargs)
     )
-    recorded = _golden_spans(name)
+    recorded = json.loads((GOLDEN_DIR / f"llm_{name}_spans.json").read_text(encoding="utf-8"))
     from_sources = [
         detector.detect(
             SourcesInput(

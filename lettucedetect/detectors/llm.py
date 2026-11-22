@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from string import Template
 
-from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS, SUBCATEGORY_DEFINITIONS
+from lettucedetect.detectors._llm_shared import (
+    VERIFY_SYSTEM,
+    build_verify_prompt,
+    load_verify_template,
+    locate_items,
+    parse_rejected,
+    resolve_taxonomy,
+)
 from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.cache import CacheManager
+from lettucedetect.detectors.errors import UpstreamError
 from lettucedetect.detectors.llm_client import (
     LLMClient,
     build_generative_schema,
@@ -17,7 +23,13 @@ from lettucedetect.detectors.llm_client import (
     build_verification_schema,
     make_llm_client,
 )
+from lettucedetect.detectors.llm_judge import (
+    LLMJudgeConfig,
+    LLMJudgeDetector,
+    response_format_block,
+)
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, Lang, PromptUtils
+from lettucedetect.detectors.types import PromptInput
 from lettucedetect.prompts import generative as gen
 
 logger = logging.getLogger(__name__)
@@ -36,20 +48,6 @@ def _looks_native(model: str) -> bool:
         return False
     return "lettucede" in m and any(k in m for k in ("qwen", "lfm", "generative"))
 
-
-_RESPONSE_FORMAT = """**Return** a JSON object following *exactly* this schema
-   (no extra keys, no markdown, no code-block fences):
-
-   `{"hallucination_list": ["substring1", "substring2", …]}`
-
-   Each substring must be copied **verbatim** from the answer — an exact,
-   character-for-character match. List substrings in answer order and include a
-   repeated substring at most once per distinct occurrence. If none are found,
-   return `{"hallucination_list": []}`."""
-
-_VERIFY_SYSTEM = (
-    "You are a strict fact-checker confirming whether flagged spans are truly unsupported."
-)
 
 # Token-level probabilities reported when the LLM gave us no per-span confidence
 # (i.e. include_reasoning=False). Same fixed-constant idea as RAGFactCheckerDetector.
@@ -126,27 +124,7 @@ class LLMDetector(BaseDetector):
                 "native=False to prompt this model as a generic LLM judge instead."
             )
         self._custom_taxonomy = not isinstance(include_taxonomy, bool)
-        if (
-            isinstance(include_taxonomy, dict)
-            and include_taxonomy
-            and set(include_taxonomy) <= {"categories", "subcategories"}
-            and all(isinstance(v, dict) for v in include_taxonomy.values())
-        ):
-            # Nested form: full control over both label sets.
-            self.categories = dict(include_taxonomy.get("categories") or {}) or None
-            self.subcategories = dict(include_taxonomy.get("subcategories") or {}) or None
-        elif isinstance(include_taxonomy, bool):
-            self.categories = dict(CATEGORY_DEFINITIONS) if include_taxonomy else None
-            # The unified taxonomy is category + subcategory; enabling it types both.
-            self.subcategories = dict(SUBCATEGORY_DEFINITIONS) if include_taxonomy else None
-        elif isinstance(include_taxonomy, dict):
-            self.categories = dict(include_taxonomy) or None
-            self.subcategories = None  # custom category set: no defined subcategories
-        else:
-            self.categories = {
-                name: CATEGORY_DEFINITIONS.get(name) for name in include_taxonomy
-            } or None
-            self.subcategories = None
+        self.categories, self.subcategories = resolve_taxonomy(include_taxonomy)
         self.schema = build_hallucination_schema(
             include_reasoning=include_reasoning,
             categories=list(self.categories) if self.categories else None,
@@ -154,31 +132,13 @@ class LLMDetector(BaseDetector):
         )
         self.client = client or make_llm_client(provider, **client_kwargs)
 
-        # Load few-shot examples
-        if fewshot_path is None:
-            fewshot_path = (
-                Path(__file__).parent.parent / "prompts" / f"examples_{lang.lower()}.json"
-            )
-        path = Path(fewshot_path)
-        if not path.exists():
-            logger.warning("Few-shot examples file not found at %s", path)
-        self.fewshot = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
-
-        # Load hallucination detection template
-        if prompt_path is None:
-            prompt_path = Path(__file__).parent.parent / "prompts" / "hallucination_detection.txt"
-        template_path = Path(prompt_path)
-        if not template_path.exists():
-            raise FileNotFoundError(f"Prompt template not found at {template_path}")
-        self.template = Template(template_path.read_text(encoding="utf-8"))
-
-        # Load verification template
-        verify_template_path = (
-            Path(__file__).parent.parent / "prompts" / "hallucination_verification.txt"
-        )
-        if not verify_template_path.exists():
-            raise FileNotFoundError(f"Verification template not found at {verify_template_path}")
-        self.verify_template = Template(verify_template_path.read_text(encoding="utf-8"))
+        if fewshot_path is not None and not Path(fewshot_path).exists():
+            logger.warning("Few-shot examples file not found at %s", fewshot_path)
+            # A missing file means a prompt without examples, which is the zero-shot prompt.
+            fewshot_path, zero_shot = None, True
+        if prompt_path is not None and not Path(prompt_path).exists():
+            raise FileNotFoundError(f"Prompt template not found at {prompt_path}")
+        self.verify_template = load_verify_template()
 
         # Set up cache
         if cache_file is None:
@@ -193,105 +153,43 @@ class LLMDetector(BaseDetector):
 
         self.cache = CacheManager(cache_file)
 
-    def _fewshot_block(self) -> str:
-        if self.zero_shot or not self.fewshot:
-            return ""
-        lines = []
-        for i, ex in enumerate(self.fewshot, 1):
-            lines.append(
-                f"""<example{i}>
-<source>{ex["source"]}</source>
-<answer>{ex["answer"]}</answer>
-<target>{{"hallucination_list": {json.dumps(ex["hallucination_list"], ensure_ascii=False)} }}</target>
-</example{i}>"""
+        # The judge path runs through LLMJudgeDetector; the native path stays on this class.
+        self._judge = (
+            None
+            if self.native
+            else LLMJudgeDetector(
+                self.client,
+                model,
+                config=LLMJudgeConfig(
+                    temperature=temperature,
+                    lang=lang,
+                    zero_shot=zero_shot,
+                    fewshot_path=fewshot_path,
+                    prompt_path=prompt_path,
+                    include_reasoning=include_reasoning,
+                    include_taxonomy=include_taxonomy,
+                    min_score=min_confidence,
+                    verify=verify,
+                ),
+                cache=self.cache,
             )
-        return "\n".join(lines)
+        )
 
     def _response_format_block(self) -> str:
         """Compose the response-format instructions for the enabled options.
 
         :return: The response-format block for the prompt template.
         """
-        if not self.include_reasoning and not self.categories:
-            return _RESPONSE_FORMAT
-
-        example: dict = {"text": "substring1"}
-        notes = [
-            '- "text" must be an exact substring of the answer and items must be listed in answer order.',
-            "- For repeated substrings, return at most one item per distinct occurrence.",
-        ]
-        if self.include_reasoning:
-            example["reasoning"] = "compare the span against the source before judging it"
-            notes.append(
-                '- "reasoning" comes first: weigh the span against the source before scoring or judging it.'
-            )
-        if self.categories:
-            example["category"] = next(iter(self.categories))
-            category_lines = "\n".join(
-                f'     - "{name}": {desc}' if desc else f'     - "{name}"'
-                for name, desc in self.categories.items()
-            )
-            notes.append('- "category" classifies the hallucination as one of:\n' + category_lines)
-        if self.subcategories:
-            example["subcategory"] = next(iter(self.subcategories))
-            subcategory_lines = "\n".join(
-                f'     - "{name}": {desc}' if desc else f'     - "{name}"'
-                for name, desc in self.subcategories.items()
-            )
-            notes.append(
-                '- "subcategory" further classifies the span as one of:\n' + subcategory_lines
-            )
-        if self.include_reasoning:
-            example["confidence"] = 0.95
-            example["is_hallucination"] = True
-            notes.append(
-                '- "confidence" is your confidence between 0 and 1 that the span is hallucinated.'
-            )
-            notes.append(
-                '- "is_hallucination" is your final verdict. You may list a span you suspect and, after '
-                "reasoning, set this to false if you conclude it is actually supported; such spans are "
-                "discarded. Only spans you confirm should be true."
-            )
-        notes.append(
-            "- Examples above may show only the hallucinated substrings; still return full objects."
-        )
-
-        example_json = json.dumps(example, ensure_ascii=False)
-        notes_block = "\n   ".join(notes)
-        if self.include_reasoning:
-            schema_line = f'`{{"analysis": "...", "hallucination_list": [{example_json}, …]}}`'
-            notes_block = (
-                '- "analysis" (written first) is a brief claim-by-claim comparison of the answer '
-                "against the source; reason here before listing any spans.\n   " + notes_block
-            )
-            empty_line = 'return `{"analysis": "...", "hallucination_list": []}`'
-        else:
-            schema_line = f'`{{"hallucination_list": [{example_json}, …]}}`'
-            empty_line = 'return `{"hallucination_list": []}`'
-        return (
-            "**Return** a JSON object following *exactly* this schema\n"
-            "   (no extra keys, no markdown, no code-block fences):\n\n"
-            f"   {schema_line}\n\n"
-            f"   {notes_block}\n\n"
-            f"   If none are found, {empty_line}."
-        )
+        return response_format_block(self.include_reasoning, self.categories, self.subcategories)
 
     def _build_prompt(self, context: str, answer: str) -> str:
-        """Fill the template with runtime values, inserting few-shot examples.
+        """Fill the judge template with runtime values, inserting few-shot examples.
 
         :param context: The context string.
         :param answer: The answer string.
         :return: The filled template.
         """
-        language_name = PromptUtils.get_full_language_name(self.lang)
-
-        return self.template.substitute(
-            lang=language_name,
-            context=context,
-            answer=answer,
-            fewshot_block=self._fewshot_block(),
-            response_format_block=self._response_format_block(),
-        )
+        return self._judge._build_prompt(context, answer)
 
     @staticmethod
     def _to_spans(items: list[str | dict], answer: str, min_confidence: float = 0.0) -> list[dict]:
@@ -308,40 +206,7 @@ class LLMDetector(BaseDetector):
         :param min_confidence: Drop spans whose ``confidence`` is below this value.
         :returns: List of spans.
         """
-        spans = []
-        used: list[tuple[int, int]] = []
-        for item in items:
-            if not isinstance(item, (str, dict)):
-                logger.warning("Skipping malformed hallucination item: %r", item)
-                continue
-            sub = item.get("text") if isinstance(item, dict) else item
-            if not sub:
-                continue
-            match = next(
-                (
-                    match
-                    for match in re.finditer(re.escape(sub), answer)
-                    if not any(match.start() < end and start < match.end() for start, end in used)
-                ),
-                None,
-            )
-            if not match:
-                logger.debug("Dropping span without an unused verbatim match in answer: %r", sub)
-                continue
-            used.append((match.start(), match.end()))
-            if isinstance(item, dict):
-                if item.get("is_hallucination") is False:
-                    continue
-                confidence = item.get("confidence")
-                if confidence is not None and confidence < min_confidence:
-                    continue
-            span = {"start": match.start(), "end": match.end(), "text": sub}
-            if isinstance(item, dict):
-                for key in ("confidence", "reasoning", "category", "subcategory"):
-                    if key in item:
-                        span[key] = item[key]
-            spans.append(span)
-        return spans
+        return locate_items(items, answer, min_confidence)[0]
 
     @staticmethod
     def _convert_to_tokens(answer: str, spans: list[dict]) -> list[dict]:
@@ -373,65 +238,64 @@ class LLMDetector(BaseDetector):
             tokens.append({"token": match.group(), "pred": 0 if hit is None else 1, "prob": prob})
         return tokens
 
-    @staticmethod
-    def _parse_response(raw: str) -> list:
-        """Parse and validate the raw LLM response into a hallucination list.
-
-        Recovers the case where the model returns ``hallucination_list`` as a
-        JSON-encoded string instead of an array.
-
-        :param raw: Raw JSON string returned by the client.
-        :returns: The validated hallucination list.
-        :raises ValueError: If ``hallucination_list`` is not a list.
-        """
-        payload = json.loads(raw)
-        items = payload["hallucination_list"]
-        if isinstance(items, str):
-            items = json.loads(items)
-        if not isinstance(items, list):
-            raise ValueError(f"hallucination_list is {type(items).__name__}, expected list")
-        return items
-
-    def _predict(self, prompt: str, answer: str) -> list[dict]:
-        """Single (prompt, answer) pair → hallucination spans.
+    def _predict(
+        self, prompt: str, answer: str, output_format: str = "spans", min_confidence: float = 0.0
+    ) -> list:
+        """Single (prompt, answer) pair → hallucination spans or tokens.
 
         :param prompt: The prompt string.
         :param answer: The answer string.
-        :returns: List of spans.
+        :param output_format: ``"tokens"`` or ``"spans"``.
+        :param min_confidence: Drop ``"spans"`` below this confidence threshold.
+        :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
         """
         if self.native:
-            return self._predict_native(prompt, answer)
-        # Build the full LLM prompt using the template
-        llm_prompt = self._build_prompt(prompt, answer)
-
-        # Use the full LLM prompt for cache key calculation
-        cache_key = self.cache._hash(llm_prompt, self.model, str(self.temperature))
-
-        cached = self.cache.get(cache_key)
-        from_cache = cached is not None
-        if not from_cache:
-            cached = self.client.complete(
-                system="You are an expert in detecting hallucinations in LLM outputs.",
-                user=llm_prompt,
-                model=self.model,
-                temperature=self.temperature,
-                schema=self.schema,
+            spans = self._filter_spans_by_confidence(
+                self._predict_native(prompt, answer), output_format, min_confidence
             )
+        else:
+            spans = self._predict_judge(prompt, answer, output_format, min_confidence)
+        if output_format == "tokens":
+            return self._convert_to_tokens(answer, spans)
+        return spans
 
+    def _predict_judge(
+        self, prompt: str, answer: str, output_format: str, min_confidence: float
+    ) -> list[dict]:
+        """Judge path: run :class:`LLMJudgeDetector` and turn its result into span dicts.
+
+        ``confidence`` is the span's ``score``. For ``"tokens"`` a span the model gave no
+        confidence for has no ``confidence`` key, so its tokens get the fixed probability.
+
+        :param prompt: The prompt string.
+        :param answer: The answer string.
+        :param output_format: ``"tokens"`` or ``"spans"``.
+        :param min_confidence: Passed as ``min_score`` for ``"spans"``; tokens are not filtered.
+        :returns: List of spans.
+        """
+        for_tokens = output_format == "tokens"
         try:
-            items = self._parse_response(cached)
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
-            logger.error("Error parsing LLM response: %s", e)
-            logger.debug("Raw response: %s", cached)
-            if from_cache:
-                self.cache.delete(cache_key)
+            detection = self._judge.detect(
+                PromptInput(prompt=prompt, answer=answer),
+                min_score=0.0 if for_tokens else min_confidence,
+            )
+        except UpstreamError as exc:
+            if exc.code != "unparseable_response":
+                raise
+            # These methods keep returning no spans for a reply that can't be parsed.
             return []
-
-        if not from_cache:
-            self.cache.set(cache_key, cached)
-        spans = self._to_spans(items, answer, self.min_confidence)
-        if self.verify and spans:
-            spans = self._verify(prompt, answer, spans)
+        # With a synthetic_score warning, a score of 1.0 marks a span without a model confidence.
+        synthetic = any(warning.code == "synthetic_score" for warning in detection.warnings)
+        spans = []
+        for span in detection.spans:
+            item = {"start": span.start, "end": span.end, "text": span.text}
+            if not (for_tokens and synthetic and span.score == 1.0):
+                item["confidence"] = span.score
+            for key in ("reasoning", "category", "subcategory"):
+                value = getattr(span, key)
+                if value is not None:
+                    item[key] = value
+            spans.append(item)
         return spans
 
     def _predict_native(self, context: str, answer: str) -> list[dict]:
@@ -496,38 +360,29 @@ class LLMDetector(BaseDetector):
         :param spans: Spans produced by the first pass.
         :returns: The subset of spans the verifier confirms.
         """
-        candidates = "\n".join(f"- {span['text']}" for span in spans)
-        user = self.verify_template.substitute(
-            lang=PromptUtils.get_full_language_name(self.lang),
-            context=context,
-            answer=answer,
-            candidates=candidates,
+        user = build_verify_prompt(
+            self.verify_template, self.lang, context, answer, [span["text"] for span in spans]
         )
         cache_key = self.cache._hash(user, self.model, str(self.temperature), "verify")
         cached = self.cache.get(cache_key)
         from_cache = cached is not None
         if not from_cache:
             cached = self.client.complete(
-                system=_VERIFY_SYSTEM,
+                system=VERIFY_SYSTEM,
                 user=user,
                 model=self.model,
                 temperature=self.temperature,
                 schema=build_verification_schema(),
             )
         try:
-            verdicts = json.loads(cached)["verifications"]
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            rejected = parse_rejected(cached)
+        except UpstreamError as e:
             logger.error("Error parsing verification response: %s", e)
             if from_cache:
                 self.cache.delete(cache_key)
             return spans
         if not from_cache:
             self.cache.set(cache_key, cached)
-        rejected = {
-            v["text"]
-            for v in verdicts
-            if isinstance(v, dict) and v.get("is_hallucination") is False and "text" in v
-        }
         return [span for span in spans if span["text"] not in rejected]
 
     def predict(
@@ -557,10 +412,7 @@ class LLMDetector(BaseDetector):
         self._validate_min_confidence(min_confidence)
         # Use PromptUtils to format the context and question
         full_prompt = PromptUtils.format_context(context, question, self.lang)
-        spans = self._predict(full_prompt, answer)
-        if output_format == "tokens":
-            return self._convert_to_tokens(answer, spans)
-        return self._filter_spans_by_confidence(spans, output_format, min_confidence)
+        return self._predict(full_prompt, answer, output_format, min_confidence)
 
     def predict_prompt(
         self, prompt: str, answer: str, output_format: str = "spans", min_confidence: float = 0.0
@@ -580,10 +432,7 @@ class LLMDetector(BaseDetector):
                 f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"
             )
         self._validate_min_confidence(min_confidence)
-        spans = self._predict(prompt, answer)
-        if output_format == "tokens":
-            return self._convert_to_tokens(answer, spans)
-        return self._filter_spans_by_confidence(spans, output_format, min_confidence)
+        return self._predict(prompt, answer, output_format, min_confidence)
 
     def predict_prompt_batch(
         self,
@@ -612,14 +461,8 @@ class LLMDetector(BaseDetector):
         self._validate_min_confidence(min_confidence)
 
         with ThreadPoolExecutor(max_workers=30) as pool:
-            futs = [pool.submit(self._predict, p, a) for p, a in zip(prompts, answers)]
-            results = []
-            for answer, fut in zip(answers, futs):
-                spans = fut.result()
-                if output_format == "tokens":
-                    results.append(self._convert_to_tokens(answer, spans))
-                else:
-                    results.append(
-                        self._filter_spans_by_confidence(spans, output_format, min_confidence)
-                    )
-            return results
+            futs = [
+                pool.submit(self._predict, p, a, output_format, min_confidence)
+                for p, a in zip(prompts, answers)
+            ]
+            return [fut.result() for fut in futs]

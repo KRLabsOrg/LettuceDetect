@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import pytest
 
+from lettucedetect.detectors.errors import ConfigurationError
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import LLMClient
+from lettucedetect.detectors.llm_judge import LLMJudgeConfig, LLMJudgeDetector
 
 pytestmark = pytest.mark.filterwarnings(
     "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
@@ -164,6 +166,7 @@ class TestSpansUnaffected:
                 "start": answer.index("Spain"),
                 "end": answer.index("Spain") + len("Spain"),
                 "text": "Spain",
+                "confidence": 1.0,
             }
         ]
 
@@ -281,3 +284,76 @@ class TestPredictPromptBatchLengthValidationLLM:
         with pytest.raises(ValueError):
             detector.predict_prompt_batch(["p1", "p2", "p3"], ["a1"])
         assert client.calls == 0
+
+
+class TestJudgeDelegation:
+    """The judge path of LLMDetector runs through LLMJudgeDetector."""
+
+    def test_judge_detector_is_built_from_the_constructor_arguments(self, cache_file):
+        """Keywords map to LLMJudgeConfig; client, model and cache are shared."""
+        detector = make_detector(
+            '{"hallucination_list": []}',
+            cache_file,
+            model="my-model",
+            temperature=0.3,
+            lang="de",
+            zero_shot=True,
+            include_reasoning=True,
+            include_taxonomy=["minor"],
+            min_confidence=0.4,
+            verify=True,
+        )
+
+        judge = detector._judge
+
+        assert isinstance(judge, LLMJudgeDetector)
+        assert judge.client is detector.client
+        assert judge.cache is detector.cache
+        assert judge.model_id == "my-model"
+        assert judge.config == LLMJudgeConfig(
+            temperature=0.3,
+            lang="de",
+            zero_shot=True,
+            include_reasoning=True,
+            include_taxonomy=["minor"],
+            min_score=0.4,
+            verify=True,
+        )
+
+    def test_native_detector_has_no_judge(self, cache_file):
+        """The native path does not build a judge detector."""
+        detector = make_detector('{"hallucinated_spans": []}', cache_file, native=True)
+
+        assert detector._judge is None
+
+    def test_missing_fewshot_path_still_sends_a_prompt_without_examples(self, cache_file):
+        """A fewshot_path that does not exist keeps working, with no examples in the prompt."""
+        prompts = []
+
+        class Recording(LLMClient):
+            def complete(self, system, user, model, temperature, schema) -> str:
+                prompts.append(user)
+                return '{"hallucination_list": ["Spain"]}'
+
+        detector = LLMDetector(
+            client=Recording(), cache_file=cache_file, fewshot_path="no/such.json"
+        )
+
+        spans = detector.predict_prompt("p", "Lisbon is the capital of Spain.")
+
+        assert [span["text"] for span in spans] == ["Spain"]
+        assert "<example1>" not in prompts[0]
+
+    def test_client_error_propagates(self, cache_file):
+        """A typed error of the client comes out of predict unwrapped."""
+        error = ConfigurationError("bad key", code="authentication_failed")
+
+        class Raising(LLMClient):
+            def complete(self, system, user, model, temperature, schema) -> str:
+                raise error
+
+        detector = LLMDetector(client=Raising(), cache_file=cache_file)
+
+        with pytest.raises(ConfigurationError) as exc:
+            detector.predict_prompt("p", "an answer")
+        assert exc.value is error

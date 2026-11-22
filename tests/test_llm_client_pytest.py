@@ -182,6 +182,7 @@ class TestLLMDetectorWithInjectedClient:
                 "start": answer.index("Paris"),
                 "end": answer.index("Paris") + len("Paris"),
                 "text": "Paris",
+                "confidence": 1.0,
             }
         ]
 
@@ -214,6 +215,7 @@ class TestLLMDetectorWithInjectedClient:
                 "start": answer.index("Spain"),
                 "end": answer.index("Spain") + len("Spain"),
                 "text": "Spain",
+                "confidence": 1.0,
             }
         ]
 
@@ -230,7 +232,7 @@ class TestLLMDetectorWithInjectedClient:
         assert len(results) == 3
         assert all(isinstance(r, list) for r in results)
         # First answer contains "X", second does not.
-        assert results[0] == [{"start": 7, "end": 8, "text": "X"}]
+        assert results[0] == [{"start": 7, "end": 8, "text": "X", "confidence": 1.0}]
         assert results[1] == []
         assert client.calls and len(client.calls) == 3
 
@@ -340,7 +342,7 @@ class TestLLMDetectorWithInjectedClient:
         spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
 
         assert client.calls[0]["schema"] == PLAIN_SCHEMA
-        assert spans == [{"start": 9, "end": 14, "text": "sunny"}]
+        assert spans == [{"start": 9, "end": 14, "text": "sunny", "confidence": 1.0}]
 
     def test_include_taxonomy_returns_category_and_subcategory_in_spans(self, cache_file):
         """With include_taxonomy=True, spans carry category and subcategory."""
@@ -371,6 +373,7 @@ class TestLLMDetectorWithInjectedClient:
                 "start": answer.index("it is sunny"),
                 "end": answer.index("it is sunny") + len("it is sunny"),
                 "text": "it is sunny",
+                "confidence": 1.0,
                 "category": "unsupported_addition",
                 "subcategory": "entity",
             }
