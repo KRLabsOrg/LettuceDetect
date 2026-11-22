@@ -39,6 +39,10 @@ class TransformerDetector(EncoderDetector):
     across chunks with ``max()``.
     """
 
+    # ``predict`` and ``predict_prompt`` below score on their own and keep the old output format,
+    # so ``detect`` stays on the encoder's ``_detect``.
+    _keeps_own_predict = True
+
     def __init__(
         self,
         model_path: str,

@@ -27,6 +27,11 @@ _OUTPUT_FORMATS = ("tokens", "spans")
 _WARNED_FLAG = "_legacy_warning_emitted"
 _warned_lock = threading.Lock()
 
+# ``_bridging.detectors`` holds the ids of the detectors whose ``predict`` or ``predict_prompt``
+# is answering a ``detect`` call on this thread. A ``detect`` call made from inside that method
+# goes to ``_detect``, so an override that calls ``super().predict`` or ``detect`` does not recurse.
+_bridging = threading.local()
+
 
 def _reset_legacy_warnings() -> None:
     """Forget which legacy classes were warned about, so each warns again. For tests."""
@@ -54,6 +59,10 @@ class BaseDetector(ABC):
     supports_tokens: bool = False
     supports_detail: bool = False
     model_id: str | None = None
+
+    # Set to ``True`` in the body of a class whose own ``predict`` and ``predict_prompt`` are a
+    # scoring path of their own beside an inherited ``_detect``; ``detect`` does not go through them.
+    _keeps_own_predict: bool = False
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Reject a subclass that implements no detection method.
@@ -115,7 +124,12 @@ class BaseDetector(ABC):
                 code="detail_not_supported",
                 param="include_detail",
             )
-        result = self._detect(request, include_tokens=include_tokens, include_detail=include_detail)
+        if self._answers_through_predict(request, include_tokens, include_detail):
+            result = self._detect_via_predict(request, include_tokens, include_detail, stacklevel=3)
+        else:
+            result = self._detect(
+                request, include_tokens=include_tokens, include_detail=include_detail
+            )
         if min_score > 0.0:
             keep = [span.score >= min_score for span in result.spans]
             update: dict[str, object] = {
@@ -187,10 +201,45 @@ class BaseDetector(ABC):
             raise NotImplementedError(f"{type(self).__name__} does not implement _detect")
         return self._detect_via_predict(request, include_tokens, include_detail)
 
-    def _detect_via_predict(
+    def _answers_through_predict(
         self, request: DetectRequest, include_tokens: bool, include_detail: bool
+    ) -> bool:
+        """Tell whether ``detect`` answers ``request`` with an overridden ``predict*`` method.
+
+        It does when ``predict`` (for sources) or ``predict_prompt`` (for a prompt) is overridden
+        by a class more derived than the one that implements ``_detect`` or ``detect``, so the
+        override also decides what ``detect`` returns. A request for tokens or detail goes to
+        ``_detect``, because the ``predict*`` methods return neither, and so does a ``detect``
+        call made from inside the overridden method.
+
+        :param request: the request ``detect`` was called with.
+        :param include_tokens: whether token scores were asked for.
+        :param include_detail: whether detail was asked for.
+        :returns: ``True`` when the overridden method answers the request.
+        """
+        if include_tokens or include_detail:
+            return False
+        if id(self) in getattr(_bridging, "detectors", ()):
+            return False
+        name = "predict" if isinstance(request, SourcesInput) else "predict_prompt"
+        for cls in type(self).__mro__:
+            if "_detect" in vars(cls) or "detect" in vars(cls) or "_keeps_own_predict" in vars(cls):
+                return False
+            if name in vars(cls):
+                return True
+        return False
+
+    def _detect_via_predict(
+        self,
+        request: DetectRequest,
+        include_tokens: bool,
+        include_detail: bool,
+        stacklevel: int = 4,
     ) -> Detection:
-        """Answer ``detect`` with the legacy ``predict`` / ``predict_prompt`` of a subclass."""
+        """Answer ``detect`` with the legacy ``predict`` / ``predict_prompt`` of a subclass.
+
+        :param stacklevel: the ``warnings.warn`` stack level that names the caller of ``detect``.
+        """
         if include_tokens:
             raise InvalidInputError(
                 "This detector does not return token scores; call with include_tokens=False.",
@@ -214,24 +263,34 @@ class BaseDetector(ABC):
             warnings.warn(
                 _message(f"{cls.__qualname__}.predict (without _detect)", "_detect"),
                 LettuceDetectDeprecationWarning,
-                stacklevel=4,
+                stacklevel=stacklevel,
             )
-        if isinstance(request, SourcesInput):
-            raw = self.predict(
-                [chunk.text for chunk in request.sources],
-                request.answer,
-                request.question,
-                "spans",
-                min_confidence=0.0,
-            )
-        elif type(self).predict_prompt is BaseDetector.predict_prompt:
+        if not isinstance(request, SourcesInput) and (
+            type(self).predict_prompt is BaseDetector.predict_prompt
+        ):
             raise InvalidInputError(
                 "This detector does not accept a prompt request; pass sources instead.",
                 code="prompt_input_not_supported",
                 param="request",
             )
-        else:
-            raw = self.predict_prompt(request.prompt, request.answer, "spans", min_confidence=0.0)
+        if not hasattr(_bridging, "detectors"):
+            _bridging.detectors = set()
+        _bridging.detectors.add(id(self))
+        try:
+            if isinstance(request, SourcesInput):
+                raw = self.predict(
+                    [chunk.text for chunk in request.sources],
+                    request.answer,
+                    request.question,
+                    "spans",
+                    min_confidence=0.0,
+                )
+            else:
+                raw = self.predict_prompt(
+                    request.prompt, request.answer, "spans", min_confidence=0.0
+                )
+        finally:
+            _bridging.detectors.discard(id(self))
         spans = []
         synthetic = False
         for item in raw:
