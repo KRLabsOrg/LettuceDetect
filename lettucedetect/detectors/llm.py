@@ -16,7 +16,7 @@ from lettucedetect.detectors._llm_shared import (
     resolve_taxonomy,
 )
 from lettucedetect.detectors.base import BaseDetector
-from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
+from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError
 from lettucedetect.detectors.file_cache import FileCache
 from lettucedetect.detectors.generative import GenerativeConfig, GenerativeDetector
 from lettucedetect.detectors.llm_client import (
@@ -30,7 +30,7 @@ from lettucedetect.detectors.llm_judge import (
     response_format_block,
 )
 from lettucedetect.detectors.prompt_utils import Lang, PromptUtils
-from lettucedetect.detectors.types import PromptInput
+from lettucedetect.detectors.types import Detection, DetectRequest, PromptInput
 
 
 def _looks_native(model: str) -> bool:
@@ -61,7 +61,8 @@ class LLMDetector(BaseDetector):
         Use :class:`LLMJudgeDetector` or :class:`GenerativeDetector` and pass them a client.
         ``LLMDetector`` will be removed in 0.5.0. It builds one of the two, chosen by the model
         name or by ``native=``, and its ``provider``, ``client_kwargs`` and ``cache_file``
-        arguments and the omitted ``client`` are deprecated with it.
+        arguments and the omitted ``client`` are deprecated with it. ``detect`` and ``adetect``
+        are those of the detector it built.
     """
 
     def __init__(
@@ -206,6 +207,54 @@ class LLMDetector(BaseDetector):
             if self.native
             else LLMJudgeDetector(self.client, model, config=config, cache=self.cache)
         )
+        self._delegate = self._generative if self.native else self._judge
+        self.model_id = self._delegate.model_id
+
+    def detect(
+        self,
+        request: DetectRequest,
+        *,
+        min_score: float = 0.0,
+        include_tokens: bool = False,
+        include_detail: bool = False,
+    ) -> Detection:
+        """Detect hallucinated spans with the judge or the generative detector that was built.
+
+        :param request: the sources (or prompt) and the answer to check.
+        :param min_score: drop spans scored below this value, in ``[0, 1]``.
+        :param include_tokens: not supported, raises ``InvalidInputError``.
+        :param include_detail: not supported, raises ``InvalidInputError``.
+        :returns: the detection result of that detector.
+        """
+        return self._delegate.detect(
+            request,
+            min_score=min_score,
+            include_tokens=include_tokens,
+            include_detail=include_detail,
+        )
+
+    async def adetect(
+        self,
+        request: DetectRequest,
+        *,
+        min_score: float = 0.0,
+        include_tokens: bool = False,
+        include_detail: bool = False,
+    ) -> Detection:
+        """Async version of :meth:`detect`, forwarded to the same detector.
+
+        :param request: the sources (or prompt) and the answer to check.
+        :param min_score: drop spans scored below this value, in ``[0, 1]``.
+        :param include_tokens: not supported, raises ``InvalidInputError``.
+        :param include_detail: not supported, raises ``InvalidInputError``.
+        :returns: the detection result of that detector.
+        """
+        return await self._delegate.adetect(
+            request,
+            min_score=min_score,
+            include_tokens=include_tokens,
+            include_detail=include_detail,
+        )
 
     def _response_format_block(self) -> str:
         """Compose the response-format instructions for the enabled options.
@@ -299,19 +348,13 @@ class LLMDetector(BaseDetector):
         :param output_format: ``"tokens"`` or ``"spans"``.
         :param min_confidence: Passed as ``min_score`` for ``"spans"``; tokens are not filtered.
         :returns: List of spans.
+        :raises UpstreamError: (``unparseable_response``) the reply can't be parsed.
         """
         for_tokens = output_format == "tokens"
-        detector = self._generative if self.native else self._judge
-        try:
-            detection = detector.detect(
-                PromptInput(prompt=prompt, answer=answer),
-                min_score=0.0 if for_tokens else min_confidence,
-            )
-        except UpstreamError as exc:
-            if exc.code != "unparseable_response":
-                raise
-            # These methods keep returning no spans for a reply that can't be parsed.
-            return []
+        detection = self._delegate.detect(
+            PromptInput(prompt=prompt, answer=answer),
+            min_score=0.0 if for_tokens else min_confidence,
+        )
         # With a synthetic_score warning, a score of 1.0 marks a span without a model confidence.
         synthetic = any(warning.code == "synthetic_score" for warning in detection.warnings)
         spans = []
@@ -345,12 +388,9 @@ class LLMDetector(BaseDetector):
             ``0.0`` keeps every span. Only affects ``output_format="spans"`` — token
             output is returned unfiltered.
         :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
+        :raises InvalidInputError: ``unsupported_output_format`` or ``invalid_min_score``.
         """
-        if output_format not in ["tokens", "spans"]:
-            raise ValueError(
-                f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"
-            )
-        self._validate_min_confidence(min_confidence)
+        self._check_legacy_arguments(output_format, min_confidence)
         # Use PromptUtils to format the context and question
         full_prompt = PromptUtils.format_context(context, question, self.lang)
         return self._predict(full_prompt, answer, output_format, min_confidence)
@@ -367,12 +407,9 @@ class LLMDetector(BaseDetector):
             on top of the constructor-level ``min_confidence``. Ignored when
             ``output_format="tokens"``.
         :returns: List of spans, or per-token dicts when ``output_format="tokens"``.
+        :raises InvalidInputError: ``unsupported_output_format`` or ``invalid_min_score``.
         """
-        if output_format not in ["tokens", "spans"]:
-            raise ValueError(
-                f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"
-            )
-        self._validate_min_confidence(min_confidence)
+        self._check_legacy_arguments(output_format, min_confidence)
         return self._predict(prompt, answer, output_format, min_confidence)
 
     def predict_prompt_batch(
@@ -391,15 +428,16 @@ class LLMDetector(BaseDetector):
             on top of the constructor-level ``min_confidence``. Not applied to token output.
         :returns: One result per input pair: spans, or per-token dicts when
             ``output_format="tokens"``.
-        :raises ValueError: If ``len(prompts) != len(answers)``.
+        :raises InvalidInputError: ``length_mismatch`` if ``len(prompts) != len(answers)``,
+            ``unsupported_output_format`` or ``invalid_min_score``.
         """
         if len(prompts) != len(answers):
-            raise ValueError("Number of prompts must match number of answers")
-        if output_format not in ["tokens", "spans"]:
-            raise ValueError(
-                f"LLMDetector doesn't support '{output_format}' format. Use 'tokens' or 'spans'"
+            raise InvalidInputError(
+                "Number of prompts must match number of answers; pass lists of the same length.",
+                code="length_mismatch",
+                param="answers",
             )
-        self._validate_min_confidence(min_confidence)
+        self._check_legacy_arguments(output_format, min_confidence)
 
         with ThreadPoolExecutor(max_workers=30) as pool:
             futs = [

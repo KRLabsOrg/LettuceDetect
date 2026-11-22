@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import warnings
 from pathlib import Path
 from unittest.mock import patch
@@ -11,14 +12,25 @@ import pytest
 import lettucedetect
 from lettucedetect.detectors import _deprecation as dep
 from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning
-from lettucedetect.detectors.errors import ConfigurationError
+from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError, UpstreamError
 from lettucedetect.detectors.factory import make_detector
 from lettucedetect.detectors.file_cache import FileCache
 from lettucedetect.detectors.generative import GenerativeDetector
 from lettucedetect.detectors.llm import LLMDetector
+from lettucedetect.detectors.llm_client import LLMClient
 from lettucedetect.detectors.llm_judge import LLMJudgeDetector
+from lettucedetect.detectors.types import Chunk, PromptInput, SourcesInput
 from lettucedetect.models.inference import HallucinationDetector
-from tests.test_golden_llm_pytest import CASES, PLAIN, FakeClient
+from tests.golden import assert_golden
+from tests.test_golden_llm_pytest import (
+    ANSWERS,
+    CASES,
+    NATIVE_PLAIN,
+    PLAIN,
+    PROMPTS,
+    REASONED,
+    FakeClient,
+)
 
 WARNING = LettuceDetectDeprecationWarning
 NATIVE_MODEL = "KRLabsOrg/lettucedect-v2-qwen-2b"
@@ -201,3 +213,150 @@ def test_without_cache_file_nothing_is_cached_and_no_file_is_written(native, tmp
     assert (detector._generative or detector._judge).cache is None
     assert list(tmp_path.iterdir()) == []
     assert sorted(p for p in package.rglob("*") if "__pycache__" not in p.parts) == before
+
+
+# -- detect and adetect -------------------------------------------------------------------
+
+
+def _requests() -> list:
+    context, answer, question = CASES[0]
+    sources = [Chunk(id=str(i), text=text) for i, text in enumerate(context)]
+    return [
+        SourcesInput(sources=sources, answer=answer, question=question),
+        PromptInput(prompt=PROMPTS[1], answer=ANSWERS[1]),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("native", "replies", "delegate_class"),
+    [(False, REASONED, LLMJudgeDetector), (True, NATIVE_PLAIN, GenerativeDetector)],
+)
+def test_detect_and_adetect_equal_the_delegate_without_warning(native, replies, delegate_class):
+    old = _construct(client=FakeClient(replies), model="my-model", native=native)
+    new = delegate_class(FakeClient(replies), "my-model", config=old._delegate.config)
+    assert old.model_id == new.model_id == "my-model"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for request in _requests():
+            expected = new.detect(request, min_score=0.5)
+            assert expected.usage[0].model_id == "my-model"
+            assert old.detect(request, min_score=0.5) == expected
+            assert asyncio.run(old.adetect(request, min_score=0.5)) == expected
+            assert asyncio.run(old.adetect(request)) == asyncio.run(new.adetect(request))
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize(
+    ("flag", "code"),
+    [("include_tokens", "tokens_not_supported"), ("include_detail", "detail_not_supported")],
+)
+def test_detect_and_adetect_reject_the_unsupported_flags(native, flag, code):
+    detector = _construct(native=native)
+    request = _requests()[1]
+    with pytest.raises(InvalidInputError) as exc:
+        detector.detect(request, **{flag: True})
+    assert (exc.value.code, exc.value.param) == (code, flag)
+    with pytest.raises(InvalidInputError) as exc:
+        asyncio.run(detector.adetect(request, **{flag: True}))
+    assert (exc.value.code, exc.value.param) == (code, flag)
+
+
+# -- predict output -----------------------------------------------------------------------
+
+
+def test_facade_returns_the_golden_output_without_warning():
+    context, answer, question = CASES[0]
+    results = {}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        facade = HallucinationDetector(method="llm", client=FakeClient(PLAIN), native=False)
+        for label, kwargs in (("default", {}), ("spans", {"output_format": "spans"})):
+            results[label] = {
+                "predict": facade.predict(context, answer, question, **kwargs),
+                "predict_prompt": facade.predict_prompt(PROMPTS[0], answer, **kwargs),
+                "predict_prompt_batch": facade.predict_prompt_batch(PROMPTS, ANSWERS, **kwargs),
+            }
+    assert_golden("facade_llm", results)
+
+
+def test_min_confidence_is_the_min_score_of_the_delegate():
+    detector = _construct(client=FakeClient(REASONED), include_reasoning=True)
+    prompt, answer = PROMPTS[1], ANSWERS[1]
+    assert [s["confidence"] for s in detector.predict_prompt(prompt, answer)] == [0.88]
+    assert detector.predict_prompt(prompt, answer, min_confidence=0.9) == []
+    tokens = detector.predict_prompt(prompt, answer, "tokens", min_confidence=0.9)
+    assert [(t["pred"], t["prob"]) for t in tokens] == [(0, 0.1)] * 5 + [(1, 0.88)]
+
+
+# -- errors -------------------------------------------------------------------------------
+
+
+class _Failing(LLMClient):
+    """A client that fails every call with the given error and counts the calls."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls = 0
+
+    def complete(self, system, user, model, temperature, schema) -> str:
+        self.calls += 1
+        raise self.error
+
+
+def _entry_points(detector: LLMDetector, **kwargs) -> list:
+    return [
+        lambda: detector.predict(["context"], "answer", "question", **kwargs),
+        lambda: detector.predict_prompt("prompt", "answer", **kwargs),
+        lambda: detector.predict_prompt_batch(["prompt"], ["answer"], **kwargs),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "code", "param"),
+    [
+        ({"output_format": "detailed"}, "unsupported_output_format", "output_format"),
+        ({"min_confidence": 1.5}, "invalid_min_score", "min_confidence"),
+        ({"min_confidence": -0.1}, "invalid_min_score", "min_confidence"),
+    ],
+)
+def test_bad_call_arguments_raise_invalid_input_error_before_any_call(kwargs, code, param):
+    client = _Failing()
+    for call in _entry_points(_construct(client=client), **kwargs):
+        with pytest.raises(InvalidInputError) as exc:
+            call()
+        assert (exc.value.code, exc.value.param) == (code, param)
+    assert client.calls == 0
+
+
+def test_batch_length_mismatch_raises_invalid_input_error():
+    client = _Failing()
+    with pytest.raises(InvalidInputError) as exc:
+        _construct(client=client).predict_prompt_batch(["p1", "p2"], ["a1"])
+    assert (exc.value.code, exc.value.param) == ("length_mismatch", "answers")
+    assert client.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("native", "reply"),
+    [
+        (False, "not json at all"),
+        (False, '{"analysis": "nothing to list"}'),
+        (True, "not json at all"),
+        (True, '{"analysis": "nothing to list"}'),
+    ],
+)
+def test_unparseable_reply_raises_the_typed_error_of_the_delegate(native, reply):
+    detector = _construct(client=FakeClient({"answer": reply}), native=native)
+    for call in _entry_points(detector) + _entry_points(detector, output_format="tokens"):
+        with pytest.raises(UpstreamError) as exc:
+            call()
+        assert exc.value.code == "unparseable_response"
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_client_error_comes_out_of_every_entry_point_unwrapped(native):
+    error = UpstreamError("down", code="upstream_unavailable", service="llm", retryable=True)
+    for call in _entry_points(_construct(client=_Failing(error), native=native)):
+        with pytest.raises(UpstreamError) as exc:
+            call()
+        assert exc.value is error

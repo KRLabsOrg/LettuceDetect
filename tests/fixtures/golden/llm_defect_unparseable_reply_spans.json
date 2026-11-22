@@ -1,14 +1,21 @@
 {
   "predict": [
-    [],
-    []
+    {
+      "error": "unparseable_response"
+    },
+    {
+      "error": "unparseable_response"
+    }
   ],
   "predict_prompt": [
-    [],
-    []
+    {
+      "error": "unparseable_response"
+    },
+    {
+      "error": "unparseable_response"
+    }
   ],
-  "predict_prompt_batch": [
-    [],
-    []
-  ]
+  "predict_prompt_batch": {
+    "error": "unparseable_response"
+  }
 }
