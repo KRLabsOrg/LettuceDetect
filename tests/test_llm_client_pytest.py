@@ -13,9 +13,12 @@ import json
 import sys
 import types
 
+import httpx
+import openai
 import pytest
 
 from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS
+from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
 from lettucedetect.detectors.llm import LLMDetector
 from lettucedetect.detectors.llm_client import (
     BedrockClient,
@@ -179,6 +182,7 @@ class TestLLMDetectorWithInjectedClient:
                 "start": answer.index("Paris"),
                 "end": answer.index("Paris") + len("Paris"),
                 "text": "Paris",
+                "confidence": 1.0,
             }
         ]
 
@@ -211,6 +215,7 @@ class TestLLMDetectorWithInjectedClient:
                 "start": answer.index("Spain"),
                 "end": answer.index("Spain") + len("Spain"),
                 "text": "Spain",
+                "confidence": 1.0,
             }
         ]
 
@@ -227,7 +232,7 @@ class TestLLMDetectorWithInjectedClient:
         assert len(results) == 3
         assert all(isinstance(r, list) for r in results)
         # First answer contains "X", second does not.
-        assert results[0] == [{"start": 7, "end": 8, "text": "X"}]
+        assert results[0] == [{"start": 7, "end": 8, "text": "X", "confidence": 1.0}]
         assert results[1] == []
         assert client.calls and len(client.calls) == 3
 
@@ -337,7 +342,7 @@ class TestLLMDetectorWithInjectedClient:
         spans = detector.predict(["ctx"], answer, "q?", output_format="spans")
 
         assert client.calls[0]["schema"] == PLAIN_SCHEMA
-        assert spans == [{"start": 9, "end": 14, "text": "sunny"}]
+        assert spans == [{"start": 9, "end": 14, "text": "sunny", "confidence": 1.0}]
 
     def test_include_taxonomy_returns_category_and_subcategory_in_spans(self, cache_file):
         """With include_taxonomy=True, spans carry category and subcategory."""
@@ -368,6 +373,7 @@ class TestLLMDetectorWithInjectedClient:
                 "start": answer.index("it is sunny"),
                 "end": answer.index("it is sunny") + len("it is sunny"),
                 "text": "it is sunny",
+                "confidence": 1.0,
                 "category": "unsupported_addition",
                 "subcategory": "entity",
             }
@@ -640,6 +646,76 @@ class TestOpenAIClientComplete:
         assert json_schema["schema"] is PLAIN_SCHEMA
 
 
+def _openai_status_error(cls: type, status: int, code: str | None = None) -> Exception:
+    """Build an OpenAI status error as the SDK does, from a response and its body."""
+    response = httpx.Response(status, request=httpx.Request("POST", "http://test/v1"))
+    return cls("provider message", response=response, body={"code": code})
+
+
+_REQUEST = httpx.Request("POST", "http://test/v1")
+
+# (error raised by the SDK, expected class, expected code)
+OPENAI_ERRORS = [
+    (
+        _openai_status_error(openai.AuthenticationError, 401),
+        ConfigurationError,
+        "authentication_failed",
+    ),
+    (
+        _openai_status_error(openai.RateLimitError, 429, "insufficient_quota"),
+        ConfigurationError,
+        "quota_exceeded",
+    ),
+    (
+        _openai_status_error(openai.RateLimitError, 429, "rate_limit_exceeded"),
+        UpstreamError,
+        "upstream_unavailable",
+    ),
+    (openai.APITimeoutError(request=_REQUEST), UpstreamError, "upstream_unavailable"),
+    (openai.APIConnectionError(request=_REQUEST), UpstreamError, "upstream_unavailable"),
+    (
+        _openai_status_error(openai.InternalServerError, 500),
+        UpstreamError,
+        "upstream_unavailable",
+    ),
+]
+
+
+class TestOpenAIClientErrors:
+    """OpenAIClient.complete turns the SDK's errors into typed errors."""
+
+    @pytest.mark.parametrize(("raised", "expected", "code"), OPENAI_ERRORS)
+    def test_sdk_error_is_mapped_and_chained(self, raised, expected, code):
+        """Each SDK error class maps to its class and code, with the SDK error as the cause."""
+        client = OpenAIClient(api_key="test-key")
+
+        def fake_create(**kwargs):
+            raise raised
+
+        client._client.chat.completions.create = fake_create
+
+        with pytest.raises(expected) as exc:
+            client.complete("sys", "user", "gpt-test", 0.0, PLAIN_SCHEMA)
+        assert type(exc.value) is expected
+        assert exc.value.code == code
+        assert exc.value.__cause__ is raised
+        assert "provider message" not in str(exc.value)
+
+    def test_other_sdk_errors_propagate(self):
+        """An SDK error that is neither of the above (a bad request) is raised as it is."""
+        client = OpenAIClient(api_key="test-key")
+        raised = _openai_status_error(openai.BadRequestError, 400)
+
+        def fake_create(**kwargs):
+            raise raised
+
+        client._client.chat.completions.create = fake_create
+
+        with pytest.raises(openai.BadRequestError) as exc:
+            client.complete("sys", "user", "gpt-test", 0.0, PLAIN_SCHEMA)
+        assert exc.value is raised
+
+
 def _make_bedrock_client_with_fake(fake_runtime) -> BedrockClient:
     """Build a BedrockClient bypassing __init__ (which imports boto3)."""
     client = BedrockClient.__new__(BedrockClient)
@@ -705,10 +781,12 @@ class TestBedrockClientComplete:
         result = client.complete("s", "u", "m", 0.0, PLAIN_SCHEMA)
         assert json.loads(result) == {"hallucination_list": ["Y"]}
 
-    def test_complete_without_tool_use_returns_empty_string(self):
-        """complete() returns an empty string when no toolUse block is present."""
+    def test_complete_without_tool_use_raises_empty_response(self):
+        """complete() raises UpstreamError (empty_response) when no toolUse block is present."""
         response = {"output": {"message": {"content": [{"text": "no tool call here"}]}}}
         client = _make_bedrock_client_with_fake(_FakeBedrockRuntime(response))
 
-        result = client.complete("s", "u", "m", 0.0, PLAIN_SCHEMA)
-        assert result == ""
+        with pytest.raises(UpstreamError) as exc:
+            client.complete("s", "u", "m", 0.0, PLAIN_SCHEMA)
+        assert exc.value.code == "empty_response"
+        assert "no tool call here" not in str(exc.value)

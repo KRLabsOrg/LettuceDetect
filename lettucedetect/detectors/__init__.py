@@ -12,6 +12,7 @@ from lettucedetect.detectors.errors import (
 from lettucedetect.detectors.factory import make_detector as _make_detector
 from lettucedetect.detectors.file_cache import FileCache
 from lettucedetect.detectors.llm import LLMDetector
+from lettucedetect.detectors.llm_judge import LLMJudgeConfig, LLMJudgeDetector
 from lettucedetect.detectors.rag_fact_checker import RAGFactCheckerDetector
 from lettucedetect.detectors.response_cache import (
     InMemoryCache,
@@ -49,6 +50,8 @@ __all__ = [
     "InMemoryCache",
     "InvalidInputError",
     "LLMDetector",
+    "LLMJudgeConfig",
+    "LLMJudgeDetector",
     "LettuceDetectDeprecationWarning",
     "LettuceDetectError",
     "PromptInput",

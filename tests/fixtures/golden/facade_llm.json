@@ -224,6 +224,7 @@
   "spans": {
     "predict": [
       {
+        "confidence": 1.0,
         "end": 38,
         "start": 28,
         "text": "69 million"
@@ -231,6 +232,7 @@
     ],
     "predict_prompt": [
       {
+        "confidence": 1.0,
         "end": 38,
         "start": 28,
         "text": "69 million"
@@ -239,6 +241,7 @@
     "predict_prompt_batch": [
       [
         {
+          "confidence": 1.0,
           "end": 38,
           "start": 28,
           "text": "69 million"
@@ -246,6 +249,7 @@
       ],
       [
         {
+          "confidence": 1.0,
           "end": 30,
           "start": 25,
           "text": "Spain"
