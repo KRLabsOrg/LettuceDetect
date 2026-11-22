@@ -226,12 +226,14 @@ class DetectorContract:
             assert detector.detect(request) == first
 
     def test_a_call_leaves_an_empty_cwd_and_home_empty(self) -> None:
-        """With an empty temporary directory as cwd and HOME, detect and adetect leave both empty."""
+        """With an empty temporary directory as cwd and HOME, single calls and batches leave both empty."""
         detector = self.make_detector()
         with _isolated_environment() as (cwd, home):
             for request in self._requests():
                 detector.detect(request)
                 asyncio.run(detector.adetect(request))
+            detector.detect_batch(self._requests())
+            asyncio.run(detector.adetect_batch(self._requests()))
             _assert_empty(cwd, "cwd")
             _assert_empty(home, "HOME")
 
@@ -249,6 +251,8 @@ class DetectorContract:
                 for request in self._requests():
                     detector.detect(request)
                     asyncio.run(detector.adetect(request))
+                detector.detect_batch(self._requests())
+                asyncio.run(detector.adetect_batch(self._requests()))
         finally:
             root.removeHandler(recorder)
             root.setLevel(old_level)

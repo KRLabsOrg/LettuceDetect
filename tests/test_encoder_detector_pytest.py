@@ -681,3 +681,197 @@ class TestTypedEncoderDetectorContract(TestEncoderDetectorContract):
         for request in self._requests():
             spans = detector.detect(request).spans
             assert spans and all(s.category and s.subcategory for s in spans)
+
+
+# -- detect_batch: padded groups ------------------------------------------------------------
+
+
+def _batch_detector(tokenizer, batch_size=16, max_length=512, typer=None, **model_kwargs):
+    return EncoderDetector(
+        _stub_model(**model_kwargs),
+        tokenizer,
+        typer=typer,
+        config=EncoderConfig(max_length=max_length, batch_size=batch_size),
+        model_id="stub-encoder",
+    )
+
+
+def _single_group_requests(count: int) -> list:
+    """Build requests of both kinds with different lengths, each fitting one passage group."""
+    requests = []
+    for i in range(count):
+        word = ["paris", "word", "france", "capital"][i % 4]
+        answer = " ".join([word, "the", "capital", "of", "france"] * (1 + i % 4))
+        if i % 2:
+            requests.append(PromptInput(prompt=PROMPTS[i % len(PROMPTS)], answer=answer))
+        else:
+            requests.append(_sources(["short answer word .", "the capital ."], answer, "word ?"))
+    return requests
+
+
+@pytest.mark.parametrize("batch_size", [1, 3, 16])
+@pytest.mark.parametrize("options", [{}, {"include_tokens": True}, {"min_score": 0.6}])
+def test_batch_results_equal_single_detect_results(local_wordpiece_tokenizer, batch_size, options):
+    """Spans, tokens, usage and warnings of every request equal those of a single call."""
+    det = _batch_detector(local_wordpiece_tokenizer, batch_size, max_length=MULTI_MAX_LENGTH)
+    overlong = PromptInput(
+        prompt=" ".join(["the capital of france is paris ."] * 30), answer="paris is the capital"
+    )
+    multi_group = _sources(MULTI_CONTEXT, MULTI_ANSWER, MULTI_QUESTION)
+    requests = [*_single_group_requests(7), overlong, multi_group, *_single_group_requests(3)]
+    expected = [det.detect(request, **options) for request in requests]
+    assert _warning_codes(expected[7]) == ["input_truncated"]
+    assert len(det._group_passages_into_chunks(MULTI_CONTEXT, MULTI_QUESTION, MULTI_ANSWER)) > 1
+    assert any(e.spans for e in expected)
+    probe = local_wordpiece_tokenizer(
+        [r.prompt for r in requests[1:4:2]], [r.answer for r in requests[1:4:2]], padding=True
+    )
+    assert any(0 in mask for mask in probe["attention_mask"])  # groups really contain padding
+
+    results = det.detect_batch(requests, **options)
+
+    assert [result.get_or_raise() for result in results] == expected
+    assert all(e.usage[0].units["input_tokens"] > 0 for e in expected)
+
+
+def test_typed_batch_equals_single_calls_including_typer_usage(local_wordpiece_tokenizer):
+    det = _batch_detector(local_wordpiece_tokenizer, 4, typer=_Typer())
+    requests = _single_group_requests(6)
+    expected = [det.detect(request) for request in requests]
+    results = [result.get_or_raise() for result in det.detect_batch(requests)]
+    assert results == expected
+    assert all(len(result.usage) == 2 for result in results)
+    assert any(span.category for result in results for span in result.spans)
+
+
+@pytest.mark.parametrize(("count", "batch_size", "passes"), [(5, 2, 3), (16, 16, 1), (17, 16, 2)])
+def test_one_forward_pass_per_padded_group(local_wordpiece_tokenizer, count, batch_size, passes):
+    """Single-group requests take ceil(n / batch_size) forward passes."""
+    det = _batch_detector(local_wordpiece_tokenizer, batch_size)
+    det.detect_batch(_single_group_requests(count))
+    assert det.model.call_count == passes
+    sizes = [call.kwargs["input_ids"].shape[0] for call in det.model.call_args_list]
+    assert sizes == [batch_size] * (count // batch_size) + [count % batch_size] * (
+        count % batch_size > 0
+    )
+
+
+def test_request_with_several_passage_groups_is_scored_on_its_own(local_wordpiece_tokenizer):
+    det = _batch_detector(local_wordpiece_tokenizer, 16, max_length=MULTI_MAX_LENGTH)
+    groups = det._group_passages_into_chunks(MULTI_CONTEXT, MULTI_QUESTION, MULTI_ANSWER)
+    multi_group = _sources(MULTI_CONTEXT, MULTI_ANSWER, MULTI_QUESTION)
+    requests = [*_single_group_requests(2), multi_group, *_single_group_requests(2)]
+    det.detect_batch(requests)
+    sizes = [call.kwargs["input_ids"].shape[0] for call in det.model.call_args_list]
+    assert sizes == [4] + [1] * len(groups)
+
+
+async def test_gathered_adetect_and_adetect_batch_equal_sequential_and_never_overlap(
+    local_wordpiece_tokenizer,
+):
+    """Single and padded-batch calls mixed on one detector score one at a time."""
+    state = {"active": 0, "max": 0}
+    guard = threading.Lock()
+
+    def on_call():
+        with guard:
+            state["active"] += 1
+            state["max"] = max(state["max"], state["active"])
+        time.sleep(0.005)
+        with guard:
+            state["active"] -= 1
+
+    det = _batch_detector(
+        local_wordpiece_tokenizer, 3, max_length=MULTI_MAX_LENGTH, on_call=on_call
+    )
+    multi_group = _sources(MULTI_CONTEXT, MULTI_ANSWER, MULTI_QUESTION)
+    requests = [*_single_group_requests(9), multi_group, *_single_group_requests(6)]
+    batches = [requests[i : i + 5] for i in range(0, len(requests), 4)]
+    expected = [det.detect(request) for request in requests]
+    expected_batches = [[det.detect(request) for request in batch] for batch in batches]
+    state["max"] = 0
+
+    results = await asyncio.gather(
+        *(det.adetect(request) for request in requests),
+        *(det.adetect_batch(batch) for batch in batches),
+    )
+
+    assert list(results[: len(requests)]) == expected
+    assert [
+        [result.get_or_raise() for result in batch] for batch in results[len(requests) :]
+    ] == expected_batches
+    assert state["max"] == 1
+
+
+def test_typed_error_while_scoring_a_group_is_the_result_of_that_group_only(
+    local_wordpiece_tokenizer,
+):
+    from lettucedetect.detectors.errors import UpstreamError
+
+    error = UpstreamError("the stub failed", code="upstream_unavailable", service="stub")
+    calls = []
+
+    def fail_second():
+        calls.append(1)
+        if len(calls) == 2:
+            raise error
+
+    requests = _single_group_requests(7)
+    expected = [_batch_detector(local_wordpiece_tokenizer).detect(r) for r in requests]
+    results = _batch_detector(local_wordpiece_tokenizer, 3, on_call=fail_second).detect_batch(
+        requests
+    )
+    assert [result.ok for result in results] == [True] * 3 + [False] * 3 + [True]
+    assert all(result.error is error for result in results[3:6])
+    assert [results[i].get_or_raise() for i in (0, 1, 2, 6)] == [expected[i] for i in (0, 1, 2, 6)]
+
+
+def test_batch_with_a_left_padding_tokenizer_equals_single_calls(local_wordpiece_tokenizer):
+    import copy
+
+    tokenizer = copy.deepcopy(local_wordpiece_tokenizer)
+    tokenizer.padding_side = "left"
+    det = _batch_detector(tokenizer, 4)
+    requests = _single_group_requests(5)
+    expected = [det.detect(request) for request in requests]
+    det.model.reset_mock()
+    assert [result.get_or_raise() for result in det.detect_batch(requests)] == expected
+    assert det.model.call_count == 5  # nothing is padded, so one pass per request
+
+
+def test_batch_of_a_subclass_with_its_own_detect_goes_through_it(local_wordpiece_tokenizer):
+    class NoSpans(EncoderDetector):
+        def _detect(self, request, *, include_tokens, include_detail):
+            result = super()._detect(
+                request, include_tokens=include_tokens, include_detail=include_detail
+            )
+            return result.model_copy(update={"spans": []})
+
+    det = NoSpans(_stub_model(), local_wordpiece_tokenizer, config=EncoderConfig(max_length=512))
+    requests = _single_group_requests(4)
+    results = [result.get_or_raise() for result in det.detect_batch(requests)]
+    assert results == [det.detect(request) for request in requests]
+    assert all(result.spans == [] for result in results)
+
+
+def test_batch_works_on_a_detector_built_without_init(local_wordpiece_tokenizer):
+    det = EncoderDetector.__new__(EncoderDetector)
+    det.model, det.tokenizer = _stub_model(), local_wordpiece_tokenizer
+    det.device, det.max_length, det.lang, det.typer = torch.device("cpu"), 512, "en", None
+    requests = _single_group_requests(3)
+    expected = [det.detect(request) for request in requests]
+    assert [result.get_or_raise() for result in det.detect_batch(requests)] == expected
+
+
+def test_batch_logs_counts_and_no_customer_text(local_wordpiece_tokenizer, caplog):
+    det = _batch_detector(local_wordpiece_tokenizer, 2)
+    requests = _single_group_requests(3)
+    with caplog.at_level(logging.DEBUG, logger="lettucedetect"):
+        det.detect_batch(requests)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(
+        m.startswith("detect_batch started: requests=3 forward_groups=2 batch_size=2")
+        for m in messages
+    )
+    for request in requests:
+        assert not any(request.answer in m for m in messages)

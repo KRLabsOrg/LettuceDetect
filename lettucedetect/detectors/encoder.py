@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 import weakref
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,10 @@ from transformers import AutoModelForTokenClassification, AutoTokenizer
 
 from lettucedetect.datasets.hallucination_dataset import HallucinationDataset
 from lettucedetect.detectors.base import BaseDetector
-from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
+from lettucedetect.detectors.errors import ConfigurationError, LettuceDetectError, UpstreamError
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, PromptUtils
 from lettucedetect.detectors.types import (
+    BatchResult,
     DetectedSpan,
     Detection,
     DetectRequest,
@@ -158,8 +160,8 @@ class EncoderConfig(BaseModel):
     ``invalid_language`` or ``invalid_batch_size`` and ``param`` set to the option.
 
     :param max_length: maximum number of tokens of prompt plus answer.
-    :param batch_size: number of prompts ``predict_prompt_batch`` scores together in one padded
-        forward pass. ``detect`` scores one request at a time.
+    :param batch_size: number of requests ``detect_batch`` scores together in one padded forward
+        pass. ``detect`` scores one request at a time.
     :param lang: language of the prompt template, one of the supported languages.
     """
 
@@ -205,6 +207,7 @@ class EncoderDetector(BaseDetector):
     When prompt plus answer exceed ``max_length`` tokens, sources are split into passage groups,
     each group is scored on its own and the per-token probability is the ``max()`` over groups.
     Scoring runs under one private lock, so concurrent calls on one instance run one at a time.
+    ``detect_batch`` scores requests in padded groups of ``batch_size``, one forward pass per group.
 
     Example, loading the model once at startup::
 
@@ -242,6 +245,7 @@ class EncoderDetector(BaseDetector):
     model_id: str | None = None
     model_version: str | None = None
     typer: Any = None
+    batch_size: int = EncoderConfig().batch_size
 
     def __init__(
         self,
@@ -370,8 +374,6 @@ class EncoderDetector(BaseDetector):
         :param include_detail: unused, there is no detail.
         :returns: the detection result.
         """
-        answer = request.answer
-        units: dict[str, int] = {"answer_chars": len(answer)}
         requested = time.perf_counter()
         with self._get_scoring_lock():
             started = time.perf_counter()
@@ -382,26 +384,150 @@ class EncoderDetector(BaseDetector):
                 include_tokens,
                 (started - requested) * 1000,
             )
-            if isinstance(request, SourcesInput):
-                context = [chunk.text for chunk in request.sources]
-                groups = self._group_passages_into_chunks(context, request.question, answer)
-                logger.debug(
-                    "scoring sources request: sources=%d passage_groups=%d",
-                    len(context),
-                    len(groups),
-                )
-                prompts = [
-                    PromptUtils.format_context(group, request.question, self.lang)
-                    for group in groups
-                ]
-                units["sources"] = len(context)
-                units["source_chars"] = sum(len(text) for text in context)
-            else:
-                prompts = [request.prompt]
-                units["source_chars"] = len(request.prompt)
-            scored = [self._score_tokens(prompt, answer) for prompt in prompts]
+            prompts, units = self._prompts_and_units(request)
+            scored = [self._score_tokens(prompt, request.answer) for prompt in prompts]
             scoring_ms = (time.perf_counter() - started) * 1000
+        return self._detection(request, units, scored, include_tokens, scoring_ms)
 
+    def detect_batch(
+        self,
+        requests: Sequence[DetectRequest],
+        *,
+        min_score: float = 0.0,
+        include_tokens: bool = False,
+        include_detail: bool = False,
+    ) -> list[BatchResult]:
+        """Score many requests in padded groups of ``batch_size``, one forward pass per group.
+
+        Each result equals what :meth:`detect` returns for that request. A request whose sources
+        need several passage groups is scored on its own, as ``detect`` scores it. The scoring
+        lock is held for the whole batch, so a batch and single calls never score at the same
+        time. A typed error raised while a padded group is scored is the result of every request
+        of that group.
+
+        :param requests: the requests, any mix of ``SourcesInput`` and ``PromptInput``.
+        :param min_score: drop spans scored below this value, in ``[0, 1]``. Tokens are kept.
+        :param include_tokens: also return token scores.
+        :param include_detail: not supported, raises ``InvalidInputError``.
+        :returns: one result per request, in input order.
+        :raises InvalidInputError: before any request runs, as :meth:`BaseDetector.detect_batch`.
+        """
+        self._check_batch(requests, min_score, include_tokens, include_detail)
+        cls = type(self)
+        if (
+            cls._detect is not EncoderDetector._detect
+            or cls.detect is not BaseDetector.detect
+            or any(self._answers_through_predict(r, include_tokens, False) for r in requests)
+        ):
+            # A subclass that answers detect in its own way gets every request through detect.
+            return super().detect_batch(
+                requests,
+                min_score=min_score,
+                include_tokens=include_tokens,
+                include_detail=include_detail,
+            )
+
+        # Per request: the scored passage groups, or the error its scoring raised.
+        scored: list[list[tuple[list[dict], int, int | None]] | LettuceDetectError]
+        scored = [[] for _ in requests]
+        scoring_ms = [0.0] * len(requests)
+        with self._get_scoring_lock():
+            prepared = [self._prompts_and_units(request) for request in requests]
+            # Without right padding a group of one needs no padding at all.
+            batch_size = self.batch_size if self.tokenizer.padding_side == "right" else 1
+            single = [i for i, (prompts, _) in enumerate(prepared) if len(prompts) == 1]
+            groups = [single[i : i + batch_size] for i in range(0, len(single), batch_size)]
+            groups += [[i] for i, (prompts, _) in enumerate(prepared) if len(prompts) > 1]
+            logger.debug(
+                "detect_batch started: requests=%d forward_groups=%d batch_size=%d model_id=%s",
+                len(requests),
+                len(groups),
+                batch_size,
+                self.model_id,
+            )
+            for group in groups:
+                started = time.perf_counter()
+                prompts = prepared[group[0]][0]
+                try:
+                    if len(prompts) > 1:
+                        answer = requests[group[0]].answer
+                        outcome = [[self._score_tokens(prompt, answer) for prompt in prompts]]
+                    else:
+                        outcome = [
+                            [item]
+                            for item in self._score_tokens_batch(
+                                [prepared[i][0][0] for i in group],
+                                [requests[i].answer for i in group],
+                            )
+                        ]
+                except LettuceDetectError as exc:
+                    outcome = [exc] * len(group)
+                elapsed = (time.perf_counter() - started) * 1000
+                for i, item in zip(group, outcome, strict=True):
+                    scored[i], scoring_ms[i] = item, elapsed
+
+        results = []
+        for i, request in enumerate(requests):
+            try:
+                item = scored[i]
+                if isinstance(item, LettuceDetectError):
+                    raise item
+                detection = self._detection(
+                    request, prepared[i][1], item, include_tokens, scoring_ms[i]
+                )
+                results.append(BatchResult(detection=self._drop_spans_below(detection, min_score)))
+            except LettuceDetectError as exc:
+                results.append(BatchResult(error=exc))
+        return results
+
+    def _prompts_and_units(self, request: DetectRequest) -> tuple[list[str], dict[str, int]]:
+        """Build the prompts of a request and the usage counts known before scoring.
+
+        It tokenizes to group the passages, so the caller holds the scoring lock.
+
+        :param request: the sources (or prompt) and the answer to check.
+        :returns: one prompt per passage group, and the usage units.
+        """
+        answer = request.answer
+        units: dict[str, int] = {"answer_chars": len(answer)}
+        if isinstance(request, SourcesInput):
+            context = [chunk.text for chunk in request.sources]
+            groups = self._group_passages_into_chunks(context, request.question, answer)
+            logger.debug(
+                "scoring sources request: sources=%d passage_groups=%d",
+                len(context),
+                len(groups),
+            )
+            prompts = [
+                PromptUtils.format_context(group, request.question, self.lang) for group in groups
+            ]
+            units["sources"] = len(context)
+            units["source_chars"] = sum(len(text) for text in context)
+        else:
+            prompts = [request.prompt]
+            units["source_chars"] = len(request.prompt)
+        return prompts, units
+
+    def _detection(
+        self,
+        request: DetectRequest,
+        units: dict[str, int],
+        scored: list[tuple[list[dict], int, int | None]],
+        include_tokens: bool,
+        scoring_ms: float,
+    ) -> Detection:
+        """Build the result of a request from its scored passage groups.
+
+        It runs without the scoring lock.
+
+        :param request: the sources (or prompt) and the answer that were scored.
+        :param units: the usage units from :meth:`_prompts_and_units`; ``input_tokens`` is added.
+        :param scored: what :meth:`_score_tokens` returned for each passage group.
+        :param include_tokens: whether to fill ``Detection.tokens``.
+        :param scoring_ms: how long scoring took; in a batch, the time of the request's group.
+        :returns: the detection result.
+        """
+        answer = request.answer
         truncated = False
         for index, (_, input_tokens, full_tokens) in enumerate(scored):
             if full_tokens is not None:
@@ -508,7 +634,52 @@ class EncoderDetector(BaseDetector):
             offsets ``start`` and ``end``; the number of tokens fed to the model; and the
             untruncated token count when the input was cut, else ``None``.
         """
-        input_ids, probabilities, offsets, answer_start_token = self._run_model(prompt, answer)
+        return self._scored_tokens(prompt, answer, *self._run_model(prompt, answer))
+
+    def _score_tokens_batch(
+        self, prompts: list[str], answers: list[str]
+    ) -> list[tuple[list[dict], int, int | None]]:
+        """Score the answer tokens of several pairs in one padded forward pass.
+
+        :param prompts: the prompt strings.
+        :param answers: the answer strings, parallel to ``prompts``.
+        :returns: per pair, what :meth:`_score_tokens` returns for it.
+        """
+        scored = []
+        outputs = self._run_model_batch(prompts, answers)
+        for prompt, answer, (input_ids, probabilities, offsets, _) in zip(
+            prompts, answers, outputs, strict=True
+        ):
+            # The first answer token is located as in the single path, so results are equal.
+            answer_tokens = self.tokenizer(answer, add_special_tokens=False, return_tensors="pt")[
+                "input_ids"
+            ].shape[1]
+            answer_start_token = int(input_ids.size(0)) - answer_tokens - 1
+            scored.append(
+                self._scored_tokens(
+                    prompt, answer, input_ids, probabilities, offsets, answer_start_token
+                )
+            )
+        return scored
+
+    def _scored_tokens(
+        self,
+        prompt: str,
+        answer: str,
+        input_ids: torch.Tensor,
+        probabilities: torch.Tensor,
+        offsets: torch.Tensor,
+        answer_start_token: int,
+    ) -> tuple[list[dict], int, int | None]:
+        """Turn the model output of one pair into what :meth:`_score_tokens` returns.
+
+        :param prompt: the prompt string.
+        :param answer: the answer string.
+        :param input_ids: token ids of the pair, shape ``(seq_len,)``.
+        :param probabilities: softmax probabilities, shape ``(seq_len, num_labels)``.
+        :param offsets: character offsets, shape ``(seq_len, 2)``.
+        :param answer_start_token: index of the first answer token.
+        """
         seq_len = int(input_ids.size(0))
         logger.debug(
             "scored one group: input_tokens=%d answer_tokens=%d max_length=%d",
@@ -805,6 +976,57 @@ class EncoderDetector(BaseDetector):
     # Batched prediction with one forward pass for many pairs
     # ------------------------------------------------------------------
 
+    def _run_model_batch(
+        self, prompts: list[str], answers: list[str]
+    ) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]]:
+        """Tokenize the pairs as one right-padded batch and run the model on it once.
+
+        :param prompts: the prompt strings.
+        :param answers: the answer strings, parallel to ``prompts``.
+        :returns: per pair, in input order and cut to the pair's own length: token ids
+            ``(seq_len,)``, probabilities ``(seq_len, num_labels)``, character offsets and the
+            index of the first token of the answer sequence.
+        """
+        batch = self.tokenizer(
+            prompts,
+            answers,
+            truncation="only_first",
+            max_length=self.max_length,
+            padding=True,
+            return_offsets_mapping=True,
+            return_tensors="pt",
+            add_special_tokens=True,
+        )
+        offsets = batch.pop("offset_mapping")
+        seq_lens = batch["attention_mask"].sum(dim=1)
+
+        model_inputs = {
+            key: value.to(self.device)
+            for key, value in batch.items()
+            if key in ["input_ids", "attention_mask"]
+        }
+
+        with torch.no_grad():
+            outputs = self.model(**model_inputs)
+        probabilities = torch.softmax(outputs.logits, dim=-1)
+
+        results = []
+        for i in range(len(answers)):
+            seq_len = int(seq_lens[i].item())
+            answer_start_token = next(
+                (idx for idx, seq_id in enumerate(batch.sequence_ids(i)) if seq_id == 1),
+                seq_len - 1,
+            )
+            results.append(
+                (
+                    batch["input_ids"][i, :seq_len],
+                    probabilities[i, :seq_len],
+                    offsets[i, :seq_len],
+                    answer_start_token,
+                )
+            )
+        return results
+
     def _predict_batch(
         self, prompts: list[str], answers: list[str], output_format: str
     ) -> list[list]:
@@ -822,38 +1044,11 @@ class EncoderDetector(BaseDetector):
                     "TransformerDetector batched inference requires a right-padding tokenizer."
                 )
 
-            batch = self.tokenizer(
-                prompts,
-                answers,
-                truncation="only_first",
-                max_length=self.max_length,
-                padding=True,
-                return_offsets_mapping=True,
-                return_tensors="pt",
-                add_special_tokens=True,
-            )
-            offsets = batch.pop("offset_mapping")
-            seq_lens = batch["attention_mask"].sum(dim=1)
-
-            model_inputs = {
-                key: value.to(self.device)
-                for key, value in batch.items()
-                if key in ["input_ids", "attention_mask"]
-            }
-
-            with torch.no_grad():
-                outputs = self.model(**model_inputs)
-            probabilities = torch.softmax(outputs.logits, dim=-1)
-
             results: list[list] = []
-            for i, answer in enumerate(answers):
-                seq_len = int(seq_lens[i].item())
-                sequence_ids = batch.sequence_ids(i)
-                answer_start_token = next(
-                    (idx for idx, seq_id in enumerate(sequence_ids) if seq_id == 1),
-                    seq_len - 1,
-                )
-
+            outputs = self._run_model_batch(prompts, answers)
+            for i, (answer, output) in enumerate(zip(answers, outputs, strict=True)):
+                input_ids, probabilities, offsets, answer_start_token = output
+                seq_len = int(input_ids.size(0))
                 if seq_len >= self.max_length:
                     logger.warning(
                         "predict_prompt_batch: item %d (%d tokens) reached "
@@ -865,12 +1060,7 @@ class EncoderDetector(BaseDetector):
 
                 results.append(
                     self._decode_sample(
-                        batch["input_ids"][i, :seq_len],
-                        probabilities[i, :seq_len],
-                        offsets[i, :seq_len],
-                        answer_start_token,
-                        answer,
-                        output_format,
+                        input_ids, probabilities, offsets, answer_start_token, answer, output_format
                     )
                 )
             return results
