@@ -45,12 +45,13 @@ class RAGFactCheckerDetector(BaseDetector):
     :param model: OpenAI model (default ``"gpt-4o"``); also the ``model_id`` in ``usage``.
     :param base_url: optional base URL of the API, for example ``"http://localhost:1234/v1"``.
     :param temperature: sampling temperature (default ``0.0``).
-    :param fact_checker: an object with ``detect_hallucinations(context, answer, question)``
-        (and ``detect_hallucinations_batch`` for the batch method). When passed, nothing is built
-        and the environment is not read. When omitted, ``RAGFactChecker`` is built from the
-        arguments above, for backward compatibility (it lives outside this package).
+    :param fact_checker: an object with ``detect_hallucinations(context, answer, question)``.
+        When passed, nothing is built and the environment is not read. When omitted,
+        ``RAGFactChecker`` is built from the arguments above, for backward compatibility (it
+        lives outside this package).
     :param max_concurrency: the most ``detect``, ``adetect``, ``predict`` and ``predict_prompt``
-        calls that run the fact checker at once on this instance (default 30).
+        calls that run the fact checker at once on this instance (default 30). The requests of
+        ``detect_batch`` and ``adetect_batch`` count as ``detect`` calls.
     :param kwargs: ignored, kept for backward compatibility.
     :raises ConfigurationError: (``invalid_config``) ``max_concurrency`` is not an integer >= 1.
     """
@@ -207,11 +208,17 @@ class RAGFactCheckerDetector(BaseDetector):
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """Answer a ``predict*`` call with :meth:`detect`, in the legacy dict format."""
         detection = self.detect(request, include_detail=True)
+        return self._to_legacy_output(detection, request.answer, output_format, min_confidence)
+
+    def _to_legacy_output(
+        self, detection: Detection, answer: str, output_format: str, min_confidence: float
+    ) -> list[dict[str, Any]] | dict[str, Any]:
+        """Convert a detection that carries its detail into the legacy dict format."""
         detail = detection.detail
         assert detail is not None  # noqa: S101 - detect fills it when asked
         if output_format == "tokens":
             return self._convert_to_tokens(
-                request.answer, {"hallucinated_triplets": detail.triplets.hallucinated}
+                answer, {"hallucinated_triplets": detail.triplets.hallucinated}
             )
         spans = [
             {
@@ -286,7 +293,9 @@ class RAGFactCheckerDetector(BaseDetector):
         output_format: str = "tokens",
         min_confidence: float = 0.0,
     ) -> list[list[dict[str, Any]]]:
-        """Batch prediction using RAGFactChecker's batch processing.
+        """Batch prediction, through :meth:`detect_batch`.
+
+        A failed pair raises its error, the first one in input order.
 
         :raises InvalidInputError: (``length_mismatch``) for lists of different lengths;
             (``invalid_min_score``) for ``min_confidence`` outside ``[0, 1]``;
@@ -311,22 +320,14 @@ class RAGFactCheckerDetector(BaseDetector):
                 param="output_format",
             )
 
-        contexts = [[prompt] for prompt in prompts]  # Convert prompts to context lists
-        rag_results = self.rag.detect_hallucinations_batch(contexts, answers)
-
-        # Convert each result to lettuceDetect format
-        converted_results = []
-        for i, (answer, rag_result) in enumerate(zip(answers, rag_results)):
-            if output_format == "tokens":
-                converted = self._convert_to_tokens(answer, rag_result)
-            else:  # spans
-                converted = self._convert_to_spans(answer, rag_result)
-                converted = self._filter_spans_by_confidence(
-                    converted, output_format, min_confidence
-                )
-            converted_results.append(converted)
-
-        return converted_results
+        results = self.detect_batch(
+            [PromptInput(prompt=prompt, answer=answer) for prompt, answer in zip(prompts, answers)],
+            include_detail=True,
+        )
+        return [
+            self._to_legacy_output(result.get_or_raise(), answer, output_format, min_confidence)
+            for result, answer in zip(results, answers)
+        ]
 
     def _convert_to_tokens(self, answer: str, rag_result: dict[str, Any]) -> list[dict[str, Any]]:
         """Convert RAGFactChecker result to token format."""

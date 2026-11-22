@@ -6,10 +6,13 @@ import asyncio
 import threading
 import warnings
 from abc import ABC
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning, _message
-from lettucedetect.detectors.errors import InvalidInputError
+from lettucedetect.detectors.errors import InvalidInputError, LettuceDetectError
 from lettucedetect.detectors.types import (
+    BatchResult,
     Chunk,
     DetectedSpan,
     Detection,
@@ -27,6 +30,11 @@ _OUTPUT_FORMATS = ("tokens", "spans")
 _WARNED_FLAG = "_legacy_warning_emitted"
 _warned_lock = threading.Lock()
 
+# ``_bridging.detectors`` holds the ids of the detectors whose ``predict`` or ``predict_prompt``
+# is answering a ``detect`` call on this thread. A ``detect`` call made from inside that method
+# goes to ``_detect``, so an override that calls ``super().predict`` or ``detect`` does not recurse.
+_bridging = threading.local()
+
 
 def _reset_legacy_warnings() -> None:
     """Forget which legacy classes were warned about, so each warns again. For tests."""
@@ -41,19 +49,27 @@ def _reset_legacy_warnings() -> None:
 class BaseDetector(ABC):
     """All hallucination detectors implement a common interface.
 
-    A new detector implements ``_detect`` and gets ``detect``, ``adetect`` and the ``predict*``
-    methods for free. A detector that implements only the legacy ``predict`` and
+    A new detector implements ``_detect`` and gets ``detect``, ``adetect``, ``detect_batch``,
+    ``adetect_batch`` and the ``predict*`` methods for free. A detector that implements only the legacy ``predict`` and
     ``predict_prompt`` still works through ``detect``, with one deprecation warning per class.
     A subclass that overrides none of ``detect``, ``_detect`` and ``predict`` cannot be defined.
 
     :cvar supports_tokens: whether ``include_tokens=True`` is supported.
     :cvar supports_detail: whether ``include_detail=True`` is supported.
     :cvar model_id: id of the model behind the detector, ``None`` if there is none.
+    :cvar max_concurrency: how many requests of one batch ``detect_batch`` runs at once. The
+        default of 1 runs them one after the other; a detector that serves concurrent ``detect``
+        calls sets its own limit.
     """
 
     supports_tokens: bool = False
     supports_detail: bool = False
     model_id: str | None = None
+    max_concurrency: int = 1
+
+    # Set to ``True`` in the body of a class whose own ``predict`` and ``predict_prompt`` are a
+    # scoring path of their own beside an inherited ``_detect``; ``detect`` does not go through them.
+    _keeps_own_predict: bool = False
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Reject a subclass that implements no detection method.
@@ -97,6 +113,21 @@ class BaseDetector(ABC):
                 code="invalid_request",
                 param="request",
             )
+        self._check_options(min_score, include_tokens, include_detail)
+        if self._answers_through_predict(request, include_tokens, include_detail):
+            result = self._detect_via_predict(request, include_tokens, include_detail, stacklevel=3)
+        else:
+            result = self._detect(
+                request, include_tokens=include_tokens, include_detail=include_detail
+            )
+        return self._drop_spans_below(result, min_score)
+
+    def _check_options(self, min_score: float, include_tokens: bool, include_detail: bool) -> None:
+        """Validate the options ``detect`` and ``detect_batch`` share.
+
+        :raises InvalidInputError: if ``min_score`` is outside ``[0, 1]`` or a flag is set that
+            the detector does not support.
+        """
         if not 0.0 <= min_score <= 1.0:
             raise InvalidInputError(
                 "min_score must be in [0, 1]; pass a value between 0.0 and 1.0.",
@@ -115,22 +146,25 @@ class BaseDetector(ABC):
                 code="detail_not_supported",
                 param="include_detail",
             )
-        result = self._detect(request, include_tokens=include_tokens, include_detail=include_detail)
-        if min_score > 0.0:
-            keep = [span.score >= min_score for span in result.spans]
-            update: dict[str, object] = {
-                "spans": [span for span, kept in zip(result.spans, keep, strict=True) if kept]
-            }
-            if result.detail is not None and result.detail.span_triplets:
-                # span_triplets is parallel to spans, so it is filtered with them.
-                triplets = result.detail.span_triplets
-                update["detail"] = result.detail.model_copy(
-                    update={
-                        "span_triplets": [t for t, kept in zip(triplets, keep, strict=True) if kept]
-                    }
-                )
-            result = result.model_copy(update=update)
-        return result
+
+    @staticmethod
+    def _drop_spans_below(result: Detection, min_score: float) -> Detection:
+        """Return ``result`` without the spans scored below ``min_score``; tokens are kept."""
+        if min_score <= 0.0:
+            return result
+        keep = [span.score >= min_score for span in result.spans]
+        update: dict[str, object] = {
+            "spans": [span for span, kept in zip(result.spans, keep, strict=True) if kept]
+        }
+        if result.detail is not None and result.detail.span_triplets:
+            # span_triplets is parallel to spans, so it is filtered with them.
+            triplets = result.detail.span_triplets
+            update["detail"] = result.detail.model_copy(
+                update={
+                    "span_triplets": [t for t, kept in zip(triplets, keep, strict=True) if kept]
+                }
+            )
+        return result.model_copy(update=update)
 
     async def adetect(
         self,
@@ -170,6 +204,101 @@ class BaseDetector(ABC):
             include_detail=include_detail,
         )
 
+    def detect_batch(
+        self,
+        requests: Sequence[DetectRequest],
+        *,
+        min_score: float = 0.0,
+        include_tokens: bool = False,
+        include_detail: bool = False,
+    ) -> list[BatchResult]:
+        """Detect hallucinated spans for many requests; one result per request, in input order.
+
+        Each request runs through :meth:`detect`, at most ``max_concurrency`` of them at once.
+        A request that raises a :class:`LettuceDetectError` does not stop the others: its
+        result holds the error in place of a detection. Any other exception is a bug and is
+        raised for the whole batch.
+
+        :param requests: the requests, any mix of ``SourcesInput`` and ``PromptInput``.
+        :param min_score: drop spans scored below this value, in ``[0, 1]``. Tokens are kept.
+        :param include_tokens: also return token scores (needs ``supports_tokens``).
+        :param include_detail: also return fact checker evidence (needs ``supports_detail``).
+        :returns: one result per request, each with a detection or with the error of that
+            request; an empty list for no requests.
+        :raises InvalidInputError: before any request runs, if an item is not a ``SourcesInput``
+            or ``PromptInput`` (``invalid_request``), ``min_score`` is outside ``[0, 1]``, or a
+            flag is set that the detector does not support.
+        """
+        self._check_batch(requests, min_score, include_tokens, include_detail)
+
+        def run(request: DetectRequest) -> BatchResult:
+            try:
+                detection = self.detect(
+                    request,
+                    min_score=min_score,
+                    include_tokens=include_tokens,
+                    include_detail=include_detail,
+                )
+            except LettuceDetectError as exc:
+                return BatchResult(error=exc)
+            return BatchResult(detection=detection)
+
+        workers = min(self.max_concurrency, len(requests))
+        if workers <= 1:
+            return [run(request) for request in requests]
+        # The pool only bounds the requests of this batch. The bound across calls is the
+        # detector's own, which every ``detect`` goes through.
+        with ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="lettucedetect-batch"
+        ) as pool:
+            return list(pool.map(run, requests))
+
+    async def adetect_batch(
+        self,
+        requests: Sequence[DetectRequest],
+        *,
+        min_score: float = 0.0,
+        include_tokens: bool = False,
+        include_detail: bool = False,
+    ) -> list[BatchResult]:
+        """Async version of :meth:`detect_batch`; it runs ``detect_batch`` in a worker thread.
+
+        The event loop is never blocked, and the notes of :meth:`adetect` about the default
+        executor apply. Errors for the whole batch are raised from the awaited call before any
+        request runs. Cancelling stops the wait, not the batch: the worker thread finishes the
+        requests and the detector stays usable.
+
+        :param requests: the requests, any mix of ``SourcesInput`` and ``PromptInput``.
+        :param min_score: drop spans scored below this value, in ``[0, 1]``.
+        :param include_tokens: also return token scores.
+        :param include_detail: also return fact checker evidence.
+        :returns: one result per request, equal to what :meth:`detect_batch` returns.
+        """
+        return await asyncio.to_thread(
+            self.detect_batch,
+            requests,
+            min_score=min_score,
+            include_tokens=include_tokens,
+            include_detail=include_detail,
+        )
+
+    def _check_batch(
+        self,
+        requests: Sequence[DetectRequest],
+        min_score: float,
+        include_tokens: bool,
+        include_detail: bool,
+    ) -> None:
+        """Validate the arguments of ``detect_batch``; items are named by position."""
+        for index, request in enumerate(requests):
+            if not isinstance(request, (SourcesInput, PromptInput)):
+                raise InvalidInputError(
+                    f"requests[{index}] must be a SourcesInput or a PromptInput.",
+                    code="invalid_request",
+                    param="requests",
+                )
+        self._check_options(min_score, include_tokens, include_detail)
+
     def _detect(
         self, request: DetectRequest, *, include_tokens: bool, include_detail: bool
     ) -> Detection:
@@ -187,10 +316,45 @@ class BaseDetector(ABC):
             raise NotImplementedError(f"{type(self).__name__} does not implement _detect")
         return self._detect_via_predict(request, include_tokens, include_detail)
 
-    def _detect_via_predict(
+    def _answers_through_predict(
         self, request: DetectRequest, include_tokens: bool, include_detail: bool
+    ) -> bool:
+        """Tell whether ``detect`` answers ``request`` with an overridden ``predict*`` method.
+
+        It does when ``predict`` (for sources) or ``predict_prompt`` (for a prompt) is overridden
+        by a class more derived than the one that implements ``_detect`` or ``detect``, so the
+        override also decides what ``detect`` returns. A request for tokens or detail goes to
+        ``_detect``, because the ``predict*`` methods return neither, and so does a ``detect``
+        call made from inside the overridden method.
+
+        :param request: the request ``detect`` was called with.
+        :param include_tokens: whether token scores were asked for.
+        :param include_detail: whether detail was asked for.
+        :returns: ``True`` when the overridden method answers the request.
+        """
+        if include_tokens or include_detail:
+            return False
+        if id(self) in getattr(_bridging, "detectors", ()):
+            return False
+        name = "predict" if isinstance(request, SourcesInput) else "predict_prompt"
+        for cls in type(self).__mro__:
+            if "_detect" in vars(cls) or "detect" in vars(cls) or "_keeps_own_predict" in vars(cls):
+                return False
+            if name in vars(cls):
+                return True
+        return False
+
+    def _detect_via_predict(
+        self,
+        request: DetectRequest,
+        include_tokens: bool,
+        include_detail: bool,
+        stacklevel: int = 4,
     ) -> Detection:
-        """Answer ``detect`` with the legacy ``predict`` / ``predict_prompt`` of a subclass."""
+        """Answer ``detect`` with the legacy ``predict`` / ``predict_prompt`` of a subclass.
+
+        :param stacklevel: the ``warnings.warn`` stack level that names the caller of ``detect``.
+        """
         if include_tokens:
             raise InvalidInputError(
                 "This detector does not return token scores; call with include_tokens=False.",
@@ -214,24 +378,34 @@ class BaseDetector(ABC):
             warnings.warn(
                 _message(f"{cls.__qualname__}.predict (without _detect)", "_detect"),
                 LettuceDetectDeprecationWarning,
-                stacklevel=4,
+                stacklevel=stacklevel,
             )
-        if isinstance(request, SourcesInput):
-            raw = self.predict(
-                [chunk.text for chunk in request.sources],
-                request.answer,
-                request.question,
-                "spans",
-                min_confidence=0.0,
-            )
-        elif type(self).predict_prompt is BaseDetector.predict_prompt:
+        if not isinstance(request, SourcesInput) and (
+            type(self).predict_prompt is BaseDetector.predict_prompt
+        ):
             raise InvalidInputError(
                 "This detector does not accept a prompt request; pass sources instead.",
                 code="prompt_input_not_supported",
                 param="request",
             )
-        else:
-            raw = self.predict_prompt(request.prompt, request.answer, "spans", min_confidence=0.0)
+        if not hasattr(_bridging, "detectors"):
+            _bridging.detectors = set()
+        _bridging.detectors.add(id(self))
+        try:
+            if isinstance(request, SourcesInput):
+                raw = self.predict(
+                    [chunk.text for chunk in request.sources],
+                    request.answer,
+                    request.question,
+                    "spans",
+                    min_confidence=0.0,
+                )
+            else:
+                raw = self.predict_prompt(
+                    request.prompt, request.answer, "spans", min_confidence=0.0
+                )
+        finally:
+            _bridging.detectors.discard(id(self))
         spans = []
         synthetic = False
         for item in raw:
@@ -284,15 +458,24 @@ class BaseDetector(ABC):
     ) -> list:
         """Answer a ``predict*`` call with :meth:`detect`, in the legacy dict format."""
         self._check_legacy_arguments(output_format, min_confidence)
+        self._check_legacy_tokens(output_format)
+        detection = self.detect(
+            request, min_score=min_confidence, include_tokens=output_format == "tokens"
+        )
+        return self._to_legacy(detection, output_format)
+
+    def _check_legacy_tokens(self, output_format: str) -> None:
+        """Reject ``"tokens"`` output on a detector without token scores."""
         if output_format == "tokens" and not self.supports_tokens:
             raise InvalidInputError(
                 'This detector does not return token scores; call with output_format="spans".',
                 code="tokens_not_supported",
                 param="output_format",
             )
-        detection = self.detect(
-            request, min_score=min_confidence, include_tokens=output_format == "tokens"
-        )
+
+    @staticmethod
+    def _to_legacy(detection: Detection, output_format: str) -> list:
+        """Convert a detection into the legacy dict format of the ``predict*`` methods."""
         if output_format == "tokens":
             assert detection.tokens is not None  # noqa: S101 - detect fills it when asked
             return [
@@ -368,7 +551,11 @@ class BaseDetector(ABC):
         output_format: str = "tokens",
         min_confidence: float = 0.0,
     ) -> list:
-        """Batch version of :meth:`predict_prompt`; for now one pair at a time.
+        """Batch version of :meth:`predict_prompt`.
+
+        The default builds the requests and calls :meth:`detect_batch`. A failed pair raises
+        its error, the first one in input order. A detector with its own ``predict_prompt``
+        gets every pair through that method instead.
 
         :param prompts: List of full prompt strings.
         :param answers: List of answers to inspect.
@@ -385,10 +572,23 @@ class BaseDetector(ABC):
                 code="length_mismatch",
                 param="answers",
             )
-        return [
-            self.predict_prompt(prompt, answer, output_format, min_confidence)
-            for prompt, answer in zip(prompts, answers, strict=True)
-        ]
+        if type(self).predict_prompt is not BaseDetector.predict_prompt:
+            return [
+                self.predict_prompt(prompt, answer, output_format, min_confidence)
+                for prompt, answer in zip(prompts, answers, strict=True)
+            ]
+        if not prompts:
+            return []
+        self._check_legacy_tokens(output_format)
+        results = self.detect_batch(
+            [
+                PromptInput(prompt=prompt, answer=answer)
+                for prompt, answer in zip(prompts, answers, strict=True)
+            ],
+            min_score=min_confidence,
+            include_tokens=output_format == "tokens",
+        )
+        return [self._to_legacy(result.get_or_raise(), output_format) for result in results]
 
     @staticmethod
     def _validate_min_confidence(min_confidence: float) -> None:

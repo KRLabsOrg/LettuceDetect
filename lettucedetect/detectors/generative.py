@@ -101,7 +101,8 @@ class GenerativeConfig(BaseModel):
         subcategories the only subcategory is ``unspecified``.
     :param verify: run a second, strict LLM call that re-judges the flagged spans.
     :param max_concurrency: the most LLM calls in flight at once on one detector, the verify
-        call included; at least 1.
+        call included; at least 1. Single calls and batches share the bound, and a batch runs
+        this many of its requests at once.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
@@ -220,6 +221,7 @@ class GenerativeDetector(BaseDetector):
         self._verify_template = load_verify_template()
         # Held only around a client call, so every entry point shares the bound.
         self._semaphore = threading.BoundedSemaphore(self.config.max_concurrency)
+        self.max_concurrency = self.config.max_concurrency
 
     def _detect(
         self, request: DetectRequest, *, include_tokens: bool, include_detail: bool

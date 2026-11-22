@@ -10,6 +10,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, NonNegativeInt, model_validator
 
+from lettucedetect.detectors.errors import LettuceDetectError
+
 Triplet = list[str]
 """A (subject, predicate, object) triplet produced by the RAG fact checker."""
 
@@ -217,3 +219,40 @@ class Detection(BaseModel):
     detail: DetailedResult | None = None
     usage: list[Usage] = Field(default_factory=list)
     warnings: list[ResultWarning] = Field(default_factory=list)
+
+
+class BatchResult(BaseModel):
+    """The outcome of one request of a batch: its detection, or the error it raised.
+
+    Exactly one of the two fields is set.
+
+    :param detection: the result, ``None`` when the request failed.
+    :param error: the error the request raised, ``None`` when it succeeded.
+    """
+
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True, arbitrary_types_allowed=True)
+
+    detection: Detection | None = None
+    error: LettuceDetectError | None = None
+
+    @model_validator(mode="after")
+    def _validate_exactly_one_is_set(self) -> BatchResult:
+        if (self.detection is None) == (self.error is None):
+            raise ValueError("exactly one of detection and error must be set")
+        return self
+
+    @property
+    def ok(self) -> bool:
+        """Whether the request succeeded."""
+        return self.error is None
+
+    def get_or_raise(self) -> Detection:
+        """Return the detection, or raise the error the request failed with.
+
+        :returns: the detection of a request that succeeded.
+        :raises LettuceDetectError: the stored error of a request that failed.
+        """
+        if self.error is not None:
+            raise self.error
+        assert self.detection is not None  # noqa: S101 - the validator allows no other case
+        return self.detection

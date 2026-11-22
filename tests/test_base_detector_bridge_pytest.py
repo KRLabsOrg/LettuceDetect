@@ -350,3 +350,163 @@ def test_subclass_of_a_warned_class_warns_on_its_own():
         Parent().detect(SOURCES)
     with pytest.warns(LettuceDetectDeprecationWarning, match="Child"):
         Child().detect(SOURCES)
+
+
+# --- detect goes through a predict* override of a detect-capable class -------------------------
+
+
+class FiltersShort(NewStyle):
+    """Overrides predict below the class that implements _detect, and filters its spans."""
+
+    def predict(self, context, answer, question=None, output_format="tokens", min_confidence=0.0):  # noqa: D102
+        spans = super().predict(context, answer, question, output_format, min_confidence)
+        return [span for span in spans if len(span["text"]) < 3]
+
+
+def test_detect_goes_through_an_overridden_predict():
+    """A predict override below _detect also decides what detect returns for sources."""
+    d = FiltersShort()
+    with pytest.warns(LettuceDetectDeprecationWarning, match="FiltersShort"):
+        result = d.detect(SOURCES)
+    assert [s.text for s in result.spans] == ["ef"]
+    assert [s["text"] for s in d.predict(["s1", "s2"], "abcdef", "q?", "spans")] == ["ef"]
+    assert [(u.model_id, u.units) for u in result.usage] == [(None, {})]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert [s.text for s in d.detect(SOURCES, min_score=0.5).spans] == []
+        # predict_prompt is not overridden, so a prompt request is answered by _detect.
+        assert [s.text for s in d.detect(PROMPT).spans] == ["abc", "ef"]
+
+
+def test_detect_goes_through_an_overridden_predict_prompt():
+    """A predict_prompt override answers a prompt request; sources stay on _detect."""
+
+    class PromptOnly(NewStyle):
+        def predict_prompt(self, prompt, answer, output_format="tokens", min_confidence=0.0):
+            return [{"start": 0, "end": 1, "text": "a", "confidence": 0.5}]
+
+    d = PromptOnly()
+    with pytest.warns(LettuceDetectDeprecationWarning, match="PromptOnly"):
+        assert [s.text for s in d.detect(PROMPT).spans] == ["a"]
+    assert [s.text for s in d.detect(SOURCES).spans] == ["abc", "ef"]
+
+
+def test_tokens_request_on_a_predict_override_is_answered_by_detect():
+    """A tokens request keeps the _detect result, because predict returns no token offsets."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = FiltersShort().detect(SOURCES, include_tokens=True)
+    assert result.tokens
+    assert [s.text for s in result.spans] == ["abc", "ef"]
+
+
+def test_predict_override_that_calls_detect_does_not_recurse():
+    """An override built on detect reaches _detect instead of itself."""
+
+    class OnDetect(NewStyle):
+        def predict(
+            self, context, answer, question=None, output_format="tokens", min_confidence=0.0
+        ):
+            spans = self.detect(SOURCES).spans
+            return [{"start": s.start, "end": s.end, "text": s.text} for s in spans[:1]]
+
+    d = OnDetect()
+    with pytest.warns(LettuceDetectDeprecationWarning):
+        assert [s.text for s in d.detect(SOURCES).spans] == ["abc"]
+    assert [s.text for s in d.detect(SOURCES).spans] == ["abc"]
+    assert d.predict(["s1"], "abcdef") == [{"start": 0, "end": 3, "text": "abc"}]
+
+
+def test_class_that_defines_detect_and_predict_together_is_not_bridged():
+    """A predict defined beside _detect is an adapter over it, so detect stays on _detect."""
+
+    class Both(BaseDetector):
+        def _detect(self, request, *, include_tokens, include_detail):
+            return Detection(spans=[DetectedSpan(start=0, end=3, text="abc", score=0.8)])
+
+        def predict(
+            self, context, answer, question=None, output_format="tokens", min_confidence=0.0
+        ):
+            raise AssertionError("detect must not call predict")
+
+    class Child(Both):
+        pass
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for cls in (Both, Child):
+            assert [s.text for s in cls().detect(SOURCES).spans] == ["abc"]
+
+
+def test_none_of_the_library_detectors_is_bridged():
+    """None of the library's own detectors answers detect through its predict* methods."""
+    from lettucedetect.detectors import (
+        EncoderDetector,
+        GenerativeDetector,
+        LLMDetector,
+        LLMJudgeDetector,
+        RAGFactCheckerDetector,
+        TransformerDetector,
+        VelaDetector,
+    )
+
+    for cls in (
+        EncoderDetector,
+        TransformerDetector,
+        LLMJudgeDetector,
+        GenerativeDetector,
+        LLMDetector,
+        RAGFactCheckerDetector,
+        VelaDetector,
+    ):
+        detector = object.__new__(cls)  # no constructor: only the class layout matters
+        for request in (SOURCES, PROMPT):
+            assert not detector._answers_through_predict(request, False, False), cls.__name__
+
+
+def test_transformer_subclass_with_a_predict_override_gives_the_same_spans_from_detect(
+    local_wordpiece_tokenizer,
+):
+    """A TransformerDetector subclass whose predict post-filters spans is not bypassed by detect."""
+    import torch
+
+    from lettucedetect.detectors.transformer import TransformerDetector
+
+    def forward(input_ids=None, attention_mask=None, **kwargs):
+        score = ((input_ids * 7) % 11 - 5).float() / 2
+        return type("Output", (), {"logits": torch.stack([-score, score], dim=-1)})()
+
+    with warnings.catch_warnings():
+        # Subclassing and building the deprecated class warn; that is not what is tested here.
+        warnings.simplefilter("ignore", LettuceDetectDeprecationWarning)
+
+        class ShortSpansOnly(TransformerDetector):
+            def predict(
+                self, context, answer, question=None, output_format="tokens", min_confidence=0.0
+            ):
+                spans = super().predict(context, answer, question, output_format, min_confidence)
+                return [span for span in spans if len(span["text"]) <= 5]
+
+        plain = TransformerDetector.__new__(TransformerDetector)
+        filtering = ShortSpansOnly.__new__(ShortSpansOnly)
+    for detector in (plain, filtering):
+        detector.model, detector.tokenizer = forward, local_wordpiece_tokenizer
+        detector.device, detector.max_length, detector.lang = torch.device("cpu"), 512, "en"
+    context = ["the capital of france is paris ."]
+    answer = "paris is the capital of france and the answer is a short word"
+    request = SourcesInput(sources=[Chunk(id="0", text=context[0])], answer=answer)
+
+    predicted = filtering.predict(context, answer, output_format="spans")
+    unfiltered = plain.predict(context, answer, output_format="spans")
+    assert predicted
+    assert len(predicted) < len(unfiltered), "the override must really drop a span"
+    with pytest.warns(LettuceDetectDeprecationWarning, match="ShortSpansOnly"):
+        detected = filtering.detect(request)
+    assert [(s.start, s.end, s.text, s.score) for s in detected.spans] == [
+        (s["start"], s["end"], s["text"], s["confidence"]) for s in predicted
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert [(s.start, s.end) for s in plain.detect(request).spans] == [
+            (s["start"], s["end"]) for s in unfiltered
+        ]

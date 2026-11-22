@@ -24,6 +24,7 @@ from lettucedetect.detectors.response_cache import (
 )
 from lettucedetect.detectors.transformer import TransformerDetector
 from lettucedetect.detectors.types import (
+    BatchResult,
     Chunk,
     DetailedResult,
     DetectedSpan,
@@ -40,6 +41,7 @@ from lettucedetect.detectors.vela import VelaConfig, VelaDetector
 
 __all__ = [
     "BaseDetector",
+    "BatchResult",
     "Chunk",
     "ConfigurationError",
     "DetailedResult",
