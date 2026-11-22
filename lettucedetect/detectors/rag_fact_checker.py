@@ -50,7 +50,8 @@ class RAGFactCheckerDetector(BaseDetector):
         and the environment is not read. When omitted, ``RAGFactChecker`` is built from the
         arguments above, for backward compatibility (it lives outside this package).
     :param max_concurrency: the most ``detect``, ``adetect``, ``predict`` and ``predict_prompt``
-        calls that run the fact checker at once on this instance (default 30).
+        calls that run the fact checker at once on this instance (default 30). The requests of
+        ``detect_batch`` and ``adetect_batch`` count as ``detect`` calls.
     :param kwargs: ignored, kept for backward compatibility.
     :raises ConfigurationError: (``invalid_config``) ``max_concurrency`` is not an integer >= 1.
     """

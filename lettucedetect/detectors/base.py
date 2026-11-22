@@ -6,10 +6,13 @@ import asyncio
 import threading
 import warnings
 from abc import ABC
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 
 from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning, _message
-from lettucedetect.detectors.errors import InvalidInputError
+from lettucedetect.detectors.errors import InvalidInputError, LettuceDetectError
 from lettucedetect.detectors.types import (
+    BatchResult,
     Chunk,
     DetectedSpan,
     Detection,
@@ -46,19 +49,23 @@ def _reset_legacy_warnings() -> None:
 class BaseDetector(ABC):
     """All hallucination detectors implement a common interface.
 
-    A new detector implements ``_detect`` and gets ``detect``, ``adetect`` and the ``predict*``
-    methods for free. A detector that implements only the legacy ``predict`` and
+    A new detector implements ``_detect`` and gets ``detect``, ``adetect``, ``detect_batch``,
+    ``adetect_batch`` and the ``predict*`` methods for free. A detector that implements only the legacy ``predict`` and
     ``predict_prompt`` still works through ``detect``, with one deprecation warning per class.
     A subclass that overrides none of ``detect``, ``_detect`` and ``predict`` cannot be defined.
 
     :cvar supports_tokens: whether ``include_tokens=True`` is supported.
     :cvar supports_detail: whether ``include_detail=True`` is supported.
     :cvar model_id: id of the model behind the detector, ``None`` if there is none.
+    :cvar max_concurrency: how many requests of one batch ``detect_batch`` runs at once. The
+        default of 1 runs them one after the other; a detector that serves concurrent ``detect``
+        calls sets its own limit.
     """
 
     supports_tokens: bool = False
     supports_detail: bool = False
     model_id: str | None = None
+    max_concurrency: int = 1
 
     # Set to ``True`` in the body of a class whose own ``predict`` and ``predict_prompt`` are a
     # scoring path of their own beside an inherited ``_detect``; ``detect`` does not go through them.
@@ -106,6 +113,21 @@ class BaseDetector(ABC):
                 code="invalid_request",
                 param="request",
             )
+        self._check_options(min_score, include_tokens, include_detail)
+        if self._answers_through_predict(request, include_tokens, include_detail):
+            result = self._detect_via_predict(request, include_tokens, include_detail, stacklevel=3)
+        else:
+            result = self._detect(
+                request, include_tokens=include_tokens, include_detail=include_detail
+            )
+        return self._drop_spans_below(result, min_score)
+
+    def _check_options(self, min_score: float, include_tokens: bool, include_detail: bool) -> None:
+        """Validate the options ``detect`` and ``detect_batch`` share.
+
+        :raises InvalidInputError: if ``min_score`` is outside ``[0, 1]`` or a flag is set that
+            the detector does not support.
+        """
         if not 0.0 <= min_score <= 1.0:
             raise InvalidInputError(
                 "min_score must be in [0, 1]; pass a value between 0.0 and 1.0.",
@@ -124,27 +146,25 @@ class BaseDetector(ABC):
                 code="detail_not_supported",
                 param="include_detail",
             )
-        if self._answers_through_predict(request, include_tokens, include_detail):
-            result = self._detect_via_predict(request, include_tokens, include_detail, stacklevel=3)
-        else:
-            result = self._detect(
-                request, include_tokens=include_tokens, include_detail=include_detail
+
+    @staticmethod
+    def _drop_spans_below(result: Detection, min_score: float) -> Detection:
+        """Return ``result`` without the spans scored below ``min_score``; tokens are kept."""
+        if min_score <= 0.0:
+            return result
+        keep = [span.score >= min_score for span in result.spans]
+        update: dict[str, object] = {
+            "spans": [span for span, kept in zip(result.spans, keep, strict=True) if kept]
+        }
+        if result.detail is not None and result.detail.span_triplets:
+            # span_triplets is parallel to spans, so it is filtered with them.
+            triplets = result.detail.span_triplets
+            update["detail"] = result.detail.model_copy(
+                update={
+                    "span_triplets": [t for t, kept in zip(triplets, keep, strict=True) if kept]
+                }
             )
-        if min_score > 0.0:
-            keep = [span.score >= min_score for span in result.spans]
-            update: dict[str, object] = {
-                "spans": [span for span, kept in zip(result.spans, keep, strict=True) if kept]
-            }
-            if result.detail is not None and result.detail.span_triplets:
-                # span_triplets is parallel to spans, so it is filtered with them.
-                triplets = result.detail.span_triplets
-                update["detail"] = result.detail.model_copy(
-                    update={
-                        "span_triplets": [t for t, kept in zip(triplets, keep, strict=True) if kept]
-                    }
-                )
-            result = result.model_copy(update=update)
-        return result
+        return result.model_copy(update=update)
 
     async def adetect(
         self,
@@ -183,6 +203,101 @@ class BaseDetector(ABC):
             include_tokens=include_tokens,
             include_detail=include_detail,
         )
+
+    def detect_batch(
+        self,
+        requests: Sequence[DetectRequest],
+        *,
+        min_score: float = 0.0,
+        include_tokens: bool = False,
+        include_detail: bool = False,
+    ) -> list[BatchResult]:
+        """Detect hallucinated spans for many requests; one result per request, in input order.
+
+        Each request runs through :meth:`detect`, at most ``max_concurrency`` of them at once.
+        A request that raises a :class:`LettuceDetectError` does not stop the others: its
+        result holds the error in place of a detection. Any other exception is a bug and is
+        raised for the whole batch.
+
+        :param requests: the requests, any mix of ``SourcesInput`` and ``PromptInput``.
+        :param min_score: drop spans scored below this value, in ``[0, 1]``. Tokens are kept.
+        :param include_tokens: also return token scores (needs ``supports_tokens``).
+        :param include_detail: also return fact checker evidence (needs ``supports_detail``).
+        :returns: one result per request, each with a detection or with the error of that
+            request; an empty list for no requests.
+        :raises InvalidInputError: before any request runs, if an item is not a ``SourcesInput``
+            or ``PromptInput`` (``invalid_request``), ``min_score`` is outside ``[0, 1]``, or a
+            flag is set that the detector does not support.
+        """
+        self._check_batch(requests, min_score, include_tokens, include_detail)
+
+        def run(request: DetectRequest) -> BatchResult:
+            try:
+                detection = self.detect(
+                    request,
+                    min_score=min_score,
+                    include_tokens=include_tokens,
+                    include_detail=include_detail,
+                )
+            except LettuceDetectError as exc:
+                return BatchResult(error=exc)
+            return BatchResult(detection=detection)
+
+        workers = min(self.max_concurrency, len(requests))
+        if workers <= 1:
+            return [run(request) for request in requests]
+        # The pool only bounds the requests of this batch. The bound across calls is the
+        # detector's own, which every ``detect`` goes through.
+        with ThreadPoolExecutor(
+            max_workers=workers, thread_name_prefix="lettucedetect-batch"
+        ) as pool:
+            return list(pool.map(run, requests))
+
+    async def adetect_batch(
+        self,
+        requests: Sequence[DetectRequest],
+        *,
+        min_score: float = 0.0,
+        include_tokens: bool = False,
+        include_detail: bool = False,
+    ) -> list[BatchResult]:
+        """Async version of :meth:`detect_batch`; it runs ``detect_batch`` in a worker thread.
+
+        The event loop is never blocked, and the notes of :meth:`adetect` about the default
+        executor apply. Errors for the whole batch are raised from the awaited call before any
+        request runs. Cancelling stops the wait, not the batch: the worker thread finishes the
+        requests and the detector stays usable.
+
+        :param requests: the requests, any mix of ``SourcesInput`` and ``PromptInput``.
+        :param min_score: drop spans scored below this value, in ``[0, 1]``.
+        :param include_tokens: also return token scores.
+        :param include_detail: also return fact checker evidence.
+        :returns: one result per request, equal to what :meth:`detect_batch` returns.
+        """
+        return await asyncio.to_thread(
+            self.detect_batch,
+            requests,
+            min_score=min_score,
+            include_tokens=include_tokens,
+            include_detail=include_detail,
+        )
+
+    def _check_batch(
+        self,
+        requests: Sequence[DetectRequest],
+        min_score: float,
+        include_tokens: bool,
+        include_detail: bool,
+    ) -> None:
+        """Validate the arguments of ``detect_batch``; items are named by position."""
+        for index, request in enumerate(requests):
+            if not isinstance(request, (SourcesInput, PromptInput)):
+                raise InvalidInputError(
+                    f"requests[{index}] must be a SourcesInput or a PromptInput.",
+                    code="invalid_request",
+                    param="requests",
+                )
+        self._check_options(min_score, include_tokens, include_detail)
 
     def _detect(
         self, request: DetectRequest, *, include_tokens: bool, include_detail: bool

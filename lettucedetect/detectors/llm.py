@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 from lettucedetect.detectors._deprecation import (
@@ -30,7 +31,7 @@ from lettucedetect.detectors.llm_judge import (
     response_format_block,
 )
 from lettucedetect.detectors.prompt_utils import Lang, PromptUtils
-from lettucedetect.detectors.types import Detection, DetectRequest, PromptInput
+from lettucedetect.detectors.types import BatchResult, Detection, DetectRequest, PromptInput
 
 
 def _looks_native(model: str) -> bool:
@@ -251,6 +252,29 @@ class LLMDetector(BaseDetector):
         """
         return await self._delegate.adetect(
             request,
+            min_score=min_score,
+            include_tokens=include_tokens,
+            include_detail=include_detail,
+        )
+
+    def detect_batch(
+        self,
+        requests: Sequence[DetectRequest],
+        *,
+        min_score: float = 0.0,
+        include_tokens: bool = False,
+        include_detail: bool = False,
+    ) -> list[BatchResult]:
+        """Detect hallucinated spans for many requests with the detector that was built.
+
+        :param requests: the requests, any mix of ``SourcesInput`` and ``PromptInput``.
+        :param min_score: drop spans scored below this value, in ``[0, 1]``.
+        :param include_tokens: not supported, raises ``InvalidInputError``.
+        :param include_detail: not supported, raises ``InvalidInputError``.
+        :returns: one result per request, in input order, from that detector.
+        """
+        return self._delegate.detect_batch(
+            requests,
             min_score=min_score,
             include_tokens=include_tokens,
             include_detail=include_detail,

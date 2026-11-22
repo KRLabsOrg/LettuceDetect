@@ -13,6 +13,7 @@ import pytest
 
 from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.types import (
+    BatchResult,
     Chunk,
     DetectedSpan,
     Detection,
@@ -229,6 +230,43 @@ class WrongModelId(DetectOnly):
         )
 
 
+class BatchIgnoresMinScore(DetectOnly):
+    """Its ``detect_batch`` ignores ``min_score``."""
+
+    def detect_batch(self, requests, *, min_score=0.0, include_tokens=False, include_detail=False):  # noqa: D102
+        return super().detect_batch(
+            requests, min_score=0.0, include_tokens=include_tokens, include_detail=include_detail
+        )
+
+
+class BatchDropsTheOthers(DetectOnly):
+    """When one request of a batch fails, its ``detect_batch`` reports that error for all."""
+
+    def detect_batch(self, requests, *, min_score=0.0, include_tokens=False, include_detail=False):  # noqa: D102
+        results = super().detect_batch(
+            requests,
+            min_score=min_score,
+            include_tokens=include_tokens,
+            include_detail=include_detail,
+        )
+        errors = [result.error for result in results if not result.ok]
+        return [BatchResult(error=errors[0]) for _ in results] if errors else results
+
+
+class BatchBlocksTheLoop(DetectOnly):
+    """Its ``adetect_batch`` runs the batch on the event loop's own thread."""
+
+    async def adetect_batch(  # noqa: D102
+        self, requests, *, min_score=0.0, include_tokens=False, include_detail=False
+    ):
+        return self.detect_batch(
+            requests,
+            min_score=min_score,
+            include_tokens=include_tokens,
+            include_detail=include_detail,
+        )
+
+
 class BrokenContract(DetectorContract):
     """A contract bound to one broken stand-in."""
 
@@ -256,6 +294,12 @@ BROKEN = [
     (AdetectDiffers, "test_adetect_equals_detect"),
     (Unrepeatable, "test_same_input_gives_the_same_result_also_after_other_input"),
     (WrongModelId, "test_usage_has_an_entry_with_the_model_id_and_a_model_version_field"),
+    (
+        BatchIgnoresMinScore,
+        "test_detect_batch_returns_one_result_per_request_in_order_equal_to_single_calls",
+    ),
+    (BatchDropsTheOthers, "test_failed_request_is_reported_beside_the_results_of_the_others"),
+    (BatchBlocksTheLoop, "test_adetect_batch_runs_off_the_loop_thread_and_keeps_the_loop_free"),
 ]
 
 
