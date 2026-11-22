@@ -63,6 +63,11 @@ Each name below is deprecated since 0.3.0 and carries a `.. deprecated::` note i
 - Errors and logging convention in `CONTRIBUTING.md`
 - "Vela 2.0" section in the detection methods guide, with the reproduced Vela 2.0 0.3B results
 
+## [Unreleased]
+
+### Fixed
+- Claude Code Stop hook: `--min-confidence` above `0.0` no longer drops every span in `--llm-model` mode. Unscored spans are kept, matching `BaseDetector._filter_spans_by_confidence` (#117)
+
 ## [0.2.3] - 2026-08-14
 
 ### Added
