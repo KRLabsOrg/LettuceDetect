@@ -14,10 +14,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from lettucedetect.detectors._llm_shared import (
     Labels,
     fetch_parsed,
+    load_verify_template,
     locate_items,
     resolve_taxonomy,
     to_detected_spans,
     unparseable_response,
+    verify_spans,
 )
 from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.errors import ConfigurationError
@@ -185,7 +187,8 @@ class LLMJudgeConfig(BaseModel):
     :param min_score: drop spans the model scored below this value, in ``[0, 1]``, before the
         verify pass. ``min_score`` of ``detect`` filters the final spans on top of it.
     :param verify: run a second, strict LLM call that re-judges the flagged spans.
-    :param max_concurrency: the most LLM calls in flight at once on one detector, at least 1.
+    :param max_concurrency: the most LLM calls in flight at once on one detector, the verify
+        call included; at least 1.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
@@ -247,11 +250,15 @@ class LLMJudgeDetector(BaseDetector):
     ``score`` is the model's own ``confidence``, which it gives with ``include_reasoning=True``.
     A span without one scores 1.0, "flagged without a score", and the result then carries one
     ``synthetic_score`` warning. Other warnings: ``span_not_found`` (items that are not in the
-    answer were dropped) and ``item_malformed`` (items that are neither a string nor an object
-    with ``text`` were dropped).
+    answer were dropped), ``item_malformed`` (items that are neither a string nor an object
+    with ``text`` were dropped) and ``verification_skipped`` (see below).
 
-    ``usage`` has one entry with the units ``llm_calls`` (calls actually made), ``cache_hits``,
-    ``source_chars`` and ``answer_chars``.
+    With ``verify=True`` a second call re-judges the flagged spans and the rejected ones are
+    dropped. When that call fails with an ``UpstreamError``, the first-pass spans are returned
+    with the ``verification_skipped`` warning.
+
+    ``usage`` has one entry with the units ``llm_calls`` (calls actually made, the verify call
+    included), ``cache_hits``, ``source_chars`` and ``answer_chars``.
 
     Example::
 
@@ -272,7 +279,8 @@ class LLMJudgeDetector(BaseDetector):
     :param model: the model name passed to the client; also the ``model_id`` in ``usage``.
     :param config: options, ``LLMJudgeConfig()`` when ``None``.
     :param cache: a cache for the replies; ``None`` means no caching and no file. A reply is
-        stored only after it parsed, under ``make_cache_key(..., kind="judge")``.
+        stored only after it parsed, under ``make_cache_key`` with the kinds ``"judge"`` and
+        ``"verify"``.
     :param model_version: version reported in ``usage`` and part of the cache key.
     """
 
@@ -314,6 +322,7 @@ class LLMJudgeDetector(BaseDetector):
         )
         prompt_path = self.config.prompt_path or PROMPT_DIR / "hallucination_detection.txt"
         self._template = Template(Path(prompt_path).read_text(encoding="utf-8"))
+        self._verify_template = load_verify_template()
         # Held only around a client call, so every entry point shares the bound.
         self._semaphore = threading.BoundedSemaphore(self.config.max_concurrency)
 
@@ -397,6 +406,29 @@ class LLMJudgeDetector(BaseDetector):
                 malformed,
                 len(items),
             )
+
+        if config.verify and located:
+            located, skipped = verify_spans(
+                self.client,
+                self._semaphore,
+                self.cache,
+                units,
+                self._verify_template,
+                located,
+                lang=config.lang,
+                context=context,
+                answer=answer,
+                model=self.model_id,
+                model_version=self.model_version,
+                temperature=config.temperature,
+            )
+            if skipped:
+                warnings.append(
+                    ResultWarning(
+                        code="verification_skipped",
+                        message="The verify call failed; the spans are unverified.",
+                    )
+                )
 
         spans, synthetic = to_detected_spans(located)
         if synthetic:

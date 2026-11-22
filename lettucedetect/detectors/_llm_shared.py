@@ -1,27 +1,37 @@
 """Steps shared by the LLM-backed detectors.
 
-Everything except :func:`fetch_parsed` is a pure function: no client, no cache and no thread.
+Only :func:`fetch_parsed` touches a client or a cache, and :func:`verify_spans` calls it. The
+other functions are pure.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import numbers
 import re
 import threading
 from collections.abc import Callable
+from string import Template
 from typing import Any, TypeVar
 
 from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS, SUBCATEGORY_DEFINITIONS
 from lettucedetect.detectors.errors import UpstreamError
-from lettucedetect.detectors.llm_client import LLMClient
-from lettucedetect.detectors.response_cache import ResponseCache
+from lettucedetect.detectors.llm_client import LLMClient, build_verification_schema
+from lettucedetect.detectors.prompt_utils import PROMPT_DIR, PromptUtils
+from lettucedetect.detectors.response_cache import ResponseCache, make_cache_key
 from lettucedetect.detectors.types import DetectedSpan
+
+logger = logging.getLogger(__name__)
 
 # The only logger that may carry customer text, the raw reply included.
 content_logger = logging.getLogger("lettucedetect.content")
 
 T = TypeVar("T")
+
+VERIFY_SYSTEM = (
+    "You are a strict fact-checker confirming whether flagged spans are truly unsupported."
+)
 
 Labels = dict[str, Any]
 """Label names mapped to their descriptions (``None`` or empty for a label without one)."""
@@ -193,11 +203,11 @@ def fetch_parsed(
     if from_cache:
         units["cache_hits"] += 1
     else:
+        units["llm_calls"] += 1
         with semaphore:
             reply = client.complete(
                 system=system, user=user, model=model, temperature=temperature, schema=schema
             )
-        units["llm_calls"] += 1
     content_logger.debug("LLM reply: %s", reply)
     try:
         parsed = parse(reply)
@@ -208,3 +218,102 @@ def fetch_parsed(
     if cache is not None and not from_cache:
         cache.set(key, reply)
     return parsed
+
+
+def load_verify_template() -> Template:
+    """Load the packaged prompt template of the verify pass."""
+    return Template((PROMPT_DIR / "hallucination_verification.txt").read_text(encoding="utf-8"))
+
+
+def build_verify_prompt(
+    template: Template, lang: str, context: str, answer: str, texts: list[str]
+) -> str:
+    """Fill the verify prompt with the flagged span texts as candidates.
+
+    :param template: the verify prompt template.
+    :param lang: language code of the sources and the answer.
+    :param context: the formatted sources, or the prompt.
+    :param answer: the answer the spans are in.
+    :param texts: the text of each flagged span.
+    :returns: the user prompt of the verify call.
+    """
+    return template.substitute(
+        lang=PromptUtils.get_full_language_name(lang),
+        context=context,
+        answer=answer,
+        candidates="\n".join(f"- {text}" for text in texts),
+    )
+
+
+def parse_rejected(reply: str) -> set[str]:
+    """Parse a verify reply into the span texts the verifier rejected.
+
+    :param reply: the raw reply of the client.
+    :returns: the ``text`` of every verdict whose ``is_hallucination`` is false.
+    :raises UpstreamError: (``unparseable_response``) the reply is not JSON, has no
+        ``verifications`` or has one that is not a list.
+    """
+    try:
+        verdicts = json.loads(reply)["verifications"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise unparseable_response("a JSON object with verifications") from exc
+    if not isinstance(verdicts, list):
+        raise unparseable_response("a JSON object whose verifications is a list")
+    return {
+        verdict["text"]
+        for verdict in verdicts
+        if isinstance(verdict, dict)
+        and verdict.get("is_hallucination") is False
+        and isinstance(verdict.get("text"), str)
+    }
+
+
+def verify_spans(
+    client: LLMClient,
+    semaphore: threading.BoundedSemaphore,
+    cache: ResponseCache | None,
+    units: dict[str, int],
+    template: Template,
+    spans: list[dict[str, Any]],
+    *,
+    lang: str,
+    context: str,
+    answer: str,
+    model: str,
+    model_version: str | None,
+    temperature: float,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Re-judge the flagged spans with one strict LLM call and drop the rejected ones.
+
+    A span the verifier does not mention is kept. When the verify call fails with an
+    ``UpstreamError`` (its reply can't be parsed, or the client reports the service failed), the
+    spans are returned unchanged and ``fallback_used`` is logged with the code
+    ``verification_skipped``. Any other error propagates.
+
+    :param spans: the first-pass spans, dicts with ``text``.
+    :returns: the kept spans, and whether the verification was skipped.
+    """
+    user = build_verify_prompt(template, lang, context, answer, [span["text"] for span in spans])
+    try:
+        rejected = fetch_parsed(
+            client,
+            semaphore,
+            cache,
+            make_cache_key(user, model, model_version, temperature, "verify"),
+            parse_rejected,
+            units,
+            system=VERIFY_SYSTEM,
+            user=user,
+            model=model,
+            temperature=temperature,
+            schema=build_verification_schema(),
+        )
+    except UpstreamError as exc:
+        logger.warning(
+            "verification_skipped: the verify call failed (%s), keeping %d first-pass spans",
+            exc.code,
+            len(spans),
+            extra={"event": "fallback_used"},
+        )
+        return spans, True
+    return [span for span in spans if span["text"] not in rejected], False

@@ -77,9 +77,14 @@ class FakeClient(LLMClient):
         self,
         replies: dict[str, str] | str,
         on_call: Callable[[], None] | None = None,
+        verify: str | Exception | None = None,
     ) -> None:
-        """Keep the replies (one for every request, or keyed by answer) and the hook."""
+        """Keep the replies (one for every request, or keyed by answer) and the hook.
+
+        ``verify`` is the reply to every verify call, or the error it raises.
+        """
         self.replies = replies
+        self.verify = verify
         self.on_call = on_call
         self.calls: list[dict] = []
         self.thread_ids: list[int] = []
@@ -100,6 +105,10 @@ class FakeClient(LLMClient):
         try:
             if self.on_call:
                 self.on_call()
+            if "verifications" in schema["properties"]:
+                if isinstance(self.verify, Exception):
+                    raise self.verify
+                return self.verify
             if isinstance(self.replies, str):
                 return self.replies
             for answer, reply in self.replies.items():
@@ -461,7 +470,6 @@ GOLDEN_NAMES = [
     name
     for name, (kwargs, _, _) in CONFIGS.items()
     if not kwargs.get("native")
-    and not kwargs.get("verify")
     and name not in ("defect_no_hallucination_list", "defect_unparseable_reply")
 ]
 
@@ -788,3 +796,131 @@ async def test_concurrent_adetect_calls_lose_no_cache_key(backend, tmp_path):
     assert len(client.calls) == 6
     assert all((_units(r)["llm_calls"], _units(r)["cache_hits"]) == (0, 1) for r in second)
     assert [r.spans for r in second] == [r.spans for r in first]
+
+
+# -- verify pass -----------------------------------------------------------------------------
+
+
+def _verdicts(**rejected: bool) -> str:
+    return json.dumps(
+        {
+            "verifications": [
+                {"text": text.replace("_", " "), "reasoning": "r", "is_hallucination": verdict}
+                for text, verdict in rejected.items()
+            ]
+        }
+    )
+
+
+REJECT_BERLIN = _verdicts(Berlin=False)
+
+
+def _verifying(verify: str | Exception, replies: str = PLAIN, cache=None, **options):
+    return LLMJudgeDetector(
+        FakeClient(replies, verify=verify),
+        MODEL,
+        config=LLMJudgeConfig(verify=True, **options),
+        cache=cache,
+    )
+
+
+async def test_verify_drops_rejected_spans_and_counts_its_call():
+    """A rejected span is dropped, the others are kept, and ``llm_calls`` includes the verify call."""
+    detector = _verifying(REJECT_BERLIN)
+    result = detector.detect(SOURCES)
+    assert [s.text for s in result.spans] == ["3 million"]
+    assert _codes(result) == ["synthetic_score"]
+    assert _units(result)["llm_calls"] == 2
+    verify_call = detector.client.calls[1]
+    assert "strict fact-checker" in verify_call["system"]
+    assert "- Berlin\n- 3 million" in verify_call["user"]
+    assert await _verifying(REJECT_BERLIN).adetect(SOURCES) == result
+
+
+def test_verify_is_not_called_without_spans():
+    """With no first-pass span there is nothing to verify and one call is made."""
+    detector = _verifying(REJECT_BERLIN, json.dumps({"hallucination_list": []}))
+    result = detector.detect(SOURCES)
+    assert result.spans == []
+    assert _units(result)["llm_calls"] == 1
+
+
+def test_config_min_score_is_applied_before_the_verify_pass():
+    """A span below ``LLMJudgeConfig.min_score`` is not sent to the verifier."""
+    detector = _verifying(_verdicts(), REASONED, include_reasoning=True, min_score=0.7)
+    result = detector.detect(SOURCES)
+    assert [s.text for s in result.spans] == ["Berlin"]
+    assert "- Berlin" in detector.client.calls[1]["user"]
+    assert "- 3 million" not in detector.client.calls[1]["user"]
+
+
+@pytest.mark.parametrize(
+    "verify",
+    [
+        "not valid json",
+        json.dumps({"verdicts": []}),
+        json.dumps({"verifications": "none"}),
+        UpstreamError("down", code="upstream_unavailable"),
+    ],
+)
+async def test_failed_verify_keeps_first_pass_spans_with_a_warning(verify, caplog):
+    """A verify reply that can't be parsed keeps the spans, warns and logs ``fallback_used`` once."""
+    with caplog.at_level(logging.DEBUG):
+        result = _verifying(verify).detect(SOURCES)
+    assert [s.text for s in result.spans] == ["Berlin", "3 million"]
+    assert _codes(result) == ["verification_skipped", "synthetic_score"]
+    assert _units(result)["llm_calls"] == 2
+    fallbacks = [r for r in caplog.records if getattr(r, "event", None) == "fallback_used"]
+    assert len(fallbacks) == 1
+    assert fallbacks[0].levelno == logging.WARNING
+    assert "verification_skipped" in fallbacks[0].getMessage()
+    assert "Berlin" not in fallbacks[0].getMessage()
+    assert await _verifying(verify).adetect(SOURCES) == result
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConfigurationError("bad key", code="authentication_failed"), OwnClientError("boom")],
+)
+async def test_verify_fallback_does_not_swallow_other_errors(error):
+    """Only ``UpstreamError`` triggers the fallback; other errors of the client come out."""
+    with pytest.raises(type(error)) as sync_exc:
+        _verifying(error).detect(SOURCES)
+    assert sync_exc.value is error
+    with pytest.raises(type(error)) as async_exc:
+        await _verifying(error).adetect(SOURCES)
+    assert async_exc.value is error
+
+
+def test_verify_reply_is_cached_under_the_verify_key():
+    """The verify reply has its own key; a second call makes no client call at all."""
+    detector = _verifying(REJECT_BERLIN, cache=SyncOnlyCache())
+    first = detector.detect(SOURCES)
+    assert detector.cache.get(_key(detector, 1, kind="verify")) == REJECT_BERLIN
+    second = detector.detect(SOURCES)
+    assert len(detector.client.calls) == 2
+    assert (_units(second)["llm_calls"], _units(second)["cache_hits"]) == (0, 2)
+    assert second.spans == first.spans
+
+
+def test_unparseable_verify_reply_is_not_cached():
+    """A verify reply that can't be parsed is not stored, so the next call asks again."""
+    detector = _verifying("not valid json", cache=SyncOnlyCache())
+    detector.detect(SOURCES)
+    assert detector.cache.get(_key(detector, 1, kind="verify")) is None
+    result = detector.detect(SOURCES)
+    assert (_units(result)["llm_calls"], _units(result)["cache_hits"]) == (1, 1)
+
+
+def test_max_concurrency_counts_the_verify_call():
+    """First-pass and verify calls of concurrent requests share the one bound."""
+    requests, replies = _numbered(6)
+    client = FakeClient(replies, on_call=lambda: time.sleep(0.03), verify=_verdicts())
+    detector = LLMJudgeDetector(
+        client, MODEL, config=LLMJudgeConfig(verify=True, max_concurrency=1)
+    )
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(detector.detect, requests))
+    assert client.max_in_flight == 1
+    assert len(client.calls) == 12
+    assert all(len(result.spans) == 1 for result in results)
