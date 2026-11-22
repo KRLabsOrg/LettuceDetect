@@ -13,7 +13,13 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS, SUBCATEGORY_DEFINITIONS
-from lettucedetect.detectors import LLMJudgeConfig, LLMJudgeDetector
+from lettucedetect.detectors import (
+    FileCache,
+    InMemoryCache,
+    LLMJudgeConfig,
+    LLMJudgeDetector,
+    make_cache_key,
+)
 from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
 from lettucedetect.detectors.llm_client import LLMClient
 from lettucedetect.detectors.types import Chunk, Detection, PromptInput, SourcesInput
@@ -588,3 +594,197 @@ async def test_max_concurrency_bounds_client_calls_across_detect_and_adetect():
     assert [[s.text for s in result.spans] for result in results] == [
         [f"word-{chr(ord('a') + i)}"] for i in range(12)
     ]
+
+
+# -- cache and usage -------------------------------------------------------------------------
+
+
+class SyncOnlyCache(InMemoryCache):
+    """A cache whose async methods fail, to show the detector uses the sync ones."""
+
+    async def aget(self, key):  # noqa: D102
+        raise AssertionError("aget was called")
+
+    async def aset(self, key, value, *, ttl_seconds=None):  # noqa: D102
+        raise AssertionError("aset was called")
+
+    async def adelete(self, key):  # noqa: D102
+        raise AssertionError("adelete was called")
+
+
+def _cached(replies: dict[str, str] | str = PLAIN, cache=None, **kwargs) -> LLMJudgeDetector:
+    cache = SyncOnlyCache() if cache is None else cache
+    return LLMJudgeDetector(FakeClient(replies), MODEL, cache=cache, **kwargs)
+
+
+def _key(detector: LLMJudgeDetector, call: int = 0, kind: str = "judge") -> str:
+    """Return the cache key of a call the detector's client received."""
+    return make_cache_key(
+        detector.client.calls[call]["user"],
+        MODEL,
+        detector.model_version,
+        detector.config.temperature,
+        kind,
+    )
+
+
+def _units(result: Detection) -> dict[str, int]:
+    (usage,) = result.usage
+    return usage.units
+
+
+@pytest.mark.parametrize(
+    ("request_", "source_chars"),
+    [(SOURCES, sum(len(chunk.text) for chunk in SOURCES.sources)), (PROMPT, len(PROMPT.prompt))],
+)
+def test_usage_without_a_cache_counts_the_call(request_, source_chars):
+    """``usage`` has one entry with the model id, the version and the four units."""
+    detector = LLMJudgeDetector(FakeClient(PLAIN), MODEL, model_version="v7")
+    (usage,) = detector.detect(request_).usage
+    assert usage.model_id == MODEL
+    assert usage.model_version == "v7"
+    assert usage.units == {
+        "llm_calls": 1,
+        "cache_hits": 0,
+        "source_chars": source_chars,
+        "answer_chars": len(ANSWER),
+    }
+
+
+def test_cache_hit_makes_no_client_call_and_is_counted_as_a_hit():
+    """The second call is served from the cache under the ``make_cache_key`` judge key."""
+    detector = _cached()
+    miss = detector.detect(SOURCES)
+    hit = detector.detect(SOURCES)
+    assert len(detector.client.calls) == 1
+    assert detector.cache.get(_key(detector)) == PLAIN
+    assert (_units(miss)["llm_calls"], _units(miss)["cache_hits"]) == (1, 0)
+    assert (_units(hit)["llm_calls"], _units(hit)["cache_hits"]) == (0, 1)
+    assert hit.spans == miss.spans
+    assert hit.warnings == miss.warnings
+
+
+def test_another_model_version_misses():
+    """The key holds the model version, so a new version does not read the old reply."""
+    cache = SyncOnlyCache()
+    old = _cached(cache=cache, model_version="v1")
+    new = _cached(cache=cache, model_version="v2")
+    old.detect(SOURCES)
+    new.detect(SOURCES)
+    assert len(new.client.calls) == 1
+    assert _key(old) != _key(new)
+    old.detect(SOURCES)
+    assert len(old.client.calls) == 1
+
+
+def test_unparseable_reply_is_never_stored():
+    """A reply that does not parse raises and leaves the cache empty."""
+    detector = _cached("not json at all")
+    with pytest.raises(UpstreamError):
+        detector.detect(SOURCES)
+    assert detector.cache.get(_key(detector)) is None
+
+
+def test_unparseable_cached_entry_is_deleted_and_raises():
+    """A cached entry that does not parse is removed, the call raises and no client call is made."""
+    detector = _cached()
+    detector.detect(SOURCES)
+    key = _key(detector)
+    detector.cache.set(key, "garbage")
+    with pytest.raises(UpstreamError) as exc:
+        detector.detect(SOURCES)
+    assert exc.value.code == "unparseable_response"
+    assert detector.cache.get(key) is None
+    assert len(detector.client.calls) == 1
+    assert _units(detector.detect(SOURCES))["llm_calls"] == 1
+
+
+async def test_adetect_has_the_cache_behaviour_of_detect():
+    """Through ``adetect``: a miss writes after parsing, then a hit, with ``detect``'s usage."""
+    detector = _cached()
+    miss = await detector.adetect(SOURCES)
+    assert detector.cache.get(_key(detector)) == PLAIN
+    hit = await detector.adetect(SOURCES)
+    assert len(detector.client.calls) == 1
+    assert miss == _cached().detect(SOURCES)
+    assert hit == detector.detect(SOURCES)
+    assert _units(hit)["cache_hits"] == 1
+
+
+async def test_adetect_stores_no_unparseable_reply_and_deletes_an_unparseable_entry():
+    """Through ``adetect``: a bad reply is not stored, a bad entry is deleted and raises."""
+    bad = _cached("not json at all")
+    with pytest.raises(UpstreamError):
+        await bad.adetect(SOURCES)
+    assert bad.cache.get(_key(bad)) is None
+
+    detector = _cached()
+    await detector.adetect(SOURCES)
+    key = _key(detector)
+    detector.cache.set(key, "garbage")
+    with pytest.raises(UpstreamError) as exc:
+        await detector.adetect(SOURCES)
+    assert exc.value.code == "unparseable_response"
+    assert detector.cache.get(key) is None
+    assert len(detector.client.calls) == 1
+
+
+@pytest.mark.parametrize("reply", [PLAIN, "not json at all"])
+async def test_cancelled_adetect_never_leaves_an_unparsed_reply_in_the_cache(reply):
+    """After a cancel the thread finishes: the key is absent or holds the parsed reply."""
+    entered, gate, returned = threading.Event(), threading.Event(), threading.Event()
+
+    def blocked() -> None:
+        entered.set()
+        gate.wait(10)
+        returned.set()
+
+    cache = SyncOnlyCache()
+    detector = LLMJudgeDetector(FakeClient(reply, on_call=blocked), MODEL, cache=cache)
+    task = asyncio.create_task(detector.adetect(SOURCES))
+    while not entered.is_set():
+        await asyncio.sleep(0.005)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    key = _key(detector)
+    assert cache.get(key) is None
+    gate.set()
+    while not returned.is_set():
+        await asyncio.sleep(0.005)
+    await asyncio.sleep(0.05)  # let the abandoned thread parse and write
+
+    if reply == PLAIN:
+        assert cache.get(key) == PLAIN
+        result = await detector.adetect(SOURCES)
+        assert [s.text for s in result.spans] == ["Berlin", "3 million"]
+        assert (_units(result)["llm_calls"], _units(result)["cache_hits"]) == (0, 1)
+    else:
+        assert cache.get(key) is None
+        detector.client.replies = PLAIN
+        result = await detector.adetect(SOURCES)
+        assert [s.text for s in result.spans] == ["Berlin", "3 million"]
+        assert (_units(result)["llm_calls"], _units(result)["cache_hits"]) == (1, 0)
+
+
+@pytest.mark.parametrize("backend", ["memory", "file"])
+async def test_concurrent_adetect_calls_lose_no_cache_key(backend, tmp_path):
+    """Concurrent calls with different requests each store their key and report their own usage."""
+    cache = InMemoryCache() if backend == "memory" else FileCache(tmp_path / "cache.json")
+    requests, replies = _numbered(6)
+    client = FakeClient(replies, on_call=lambda: time.sleep(0.03))
+    detector = LLMJudgeDetector(client, MODEL, cache=cache)
+    first = await asyncio.gather(*(detector.adetect(request) for request in requests))
+    assert all(
+        (_units(r)["llm_calls"], _units(r)["cache_hits"], _units(r)["answer_chars"])
+        == (1, 0, len(request.answer))
+        for r, request in zip(first, requests, strict=True)
+    )
+    for call in range(6):
+        assert cache.get(_key(detector, call)) in replies.values()
+    assert len({_key(detector, call) for call in range(6)}) == 6
+
+    second = await asyncio.gather(*(detector.adetect(request) for request in requests))
+    assert len(client.calls) == 6
+    assert all((_units(r)["llm_calls"], _units(r)["cache_hits"]) == (0, 1) for r in second)
+    assert [r.spans for r in second] == [r.spans for r in first]

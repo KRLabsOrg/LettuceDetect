@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from lettucedetect.detectors._llm_shared import (
     Labels,
-    complete,
+    fetch_parsed,
     locate_items,
     resolve_taxonomy,
     to_detected_spans,
@@ -23,7 +23,7 @@ from lettucedetect.detectors.base import BaseDetector
 from lettucedetect.detectors.errors import ConfigurationError
 from lettucedetect.detectors.llm_client import LLMClient, build_hallucination_schema
 from lettucedetect.detectors.prompt_utils import LANG_TO_PASSAGE, PROMPT_DIR, PromptUtils
-from lettucedetect.detectors.response_cache import ResponseCache
+from lettucedetect.detectors.response_cache import ResponseCache, make_cache_key
 from lettucedetect.detectors.types import (
     Detection,
     DetectRequest,
@@ -250,6 +250,9 @@ class LLMJudgeDetector(BaseDetector):
     answer were dropped) and ``item_malformed`` (items that are neither a string nor an object
     with ``text`` were dropped).
 
+    ``usage`` has one entry with the units ``llm_calls`` (calls actually made), ``cache_hits``,
+    ``source_chars`` and ``answer_chars``.
+
     Example::
 
         detector = LLMJudgeDetector(
@@ -268,8 +271,9 @@ class LLMJudgeDetector(BaseDetector):
     :param client: the LLM client every call goes through. Its errors propagate unwrapped.
     :param model: the model name passed to the client; also the ``model_id`` in ``usage``.
     :param config: options, ``LLMJudgeConfig()`` when ``None``.
-    :param cache: a cache for the replies; ``None`` means no caching.
-    :param model_version: version reported in ``usage``.
+    :param cache: a cache for the replies; ``None`` means no caching and no file. A reply is
+        stored only after it parsed, under ``make_cache_key(..., kind="judge")``.
+    :param model_version: version reported in ``usage`` and part of the cache key.
     """
 
     supports_tokens = False
@@ -333,28 +337,39 @@ class LLMJudgeDetector(BaseDetector):
         :param include_detail: unused, ``detect`` rejects it (``supports_detail`` is ``False``).
         :returns: the detection result.
         :raises UpstreamError: (``unparseable_response``) the reply is not JSON, has no
-            ``hallucination_list`` or has one that is not a list.
+            ``hallucination_list`` or has one that is not a list. Such a reply is not cached,
+            and a cached one is deleted.
         """
         config = self.config
         answer = request.answer
         if isinstance(request, SourcesInput):
-            context = PromptUtils.format_context(
-                [chunk.text for chunk in request.sources], request.question, config.lang
-            )
+            sources = [chunk.text for chunk in request.sources]
+            context = PromptUtils.format_context(sources, request.question, config.lang)
         else:
+            sources = [request.prompt]
             context = request.prompt
+        units = {
+            "llm_calls": 0,
+            "cache_hits": 0,
+            "source_chars": sum(len(text) for text in sources),
+            "answer_chars": len(answer),
+        }
         logger.debug("detect started: kind=%s model_id=%s", request.kind, self.model_id)
 
-        reply = complete(
+        prompt = self._build_prompt(context, answer)
+        items = fetch_parsed(
             self.client,
             self._semaphore,
+            self.cache,
+            make_cache_key(prompt, self.model_id, self.model_version, config.temperature, "judge"),
+            parse_hallucination_list,
+            units,
             system=_SYSTEM,
-            user=self._build_prompt(context, answer),
+            user=prompt,
             model=self.model_id,
             temperature=config.temperature,
             schema=self._schema,
         )
-        items = parse_hallucination_list(reply)
         located, not_found, malformed = locate_items(items, answer, config.min_score)
 
         warnings = []
@@ -395,6 +410,6 @@ class LLMJudgeDetector(BaseDetector):
         logger.debug("detect finished: items=%d spans=%d", len(items), len(spans))
         return Detection(
             spans=spans,
-            usage=[Usage(model_id=self.model_id, model_version=self.model_version, units={})],
+            usage=[Usage(model_id=self.model_id, model_version=self.model_version, units=units)],
             warnings=warnings,
         )

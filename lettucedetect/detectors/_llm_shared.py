@@ -1,6 +1,6 @@
 """Steps shared by the LLM-backed detectors.
 
-Everything except :func:`complete` is a pure function: no client, no cache and no thread.
+Everything except :func:`fetch_parsed` is a pure function: no client, no cache and no thread.
 """
 
 from __future__ import annotations
@@ -9,15 +9,19 @@ import logging
 import numbers
 import re
 import threading
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from lettucedetect.datasets.taxonomy import CATEGORY_DEFINITIONS, SUBCATEGORY_DEFINITIONS
 from lettucedetect.detectors.errors import UpstreamError
 from lettucedetect.detectors.llm_client import LLMClient
+from lettucedetect.detectors.response_cache import ResponseCache
 from lettucedetect.detectors.types import DetectedSpan
 
 # The only logger that may carry customer text, the raw reply included.
 content_logger = logging.getLogger("lettucedetect.content")
+
+T = TypeVar("T")
 
 Labels = dict[str, Any]
 """Label names mapped to their descriptions (``None`` or empty for a label without one)."""
@@ -153,24 +157,54 @@ def to_detected_spans(spans: list[dict[str, Any]]) -> tuple[list[DetectedSpan], 
     return detected, synthetic
 
 
-def complete(
+def fetch_parsed(
     client: LLMClient,
     semaphore: threading.BoundedSemaphore,
+    cache: ResponseCache | None,
+    key: str,
+    parse: Callable[[str], T],
+    units: dict[str, int],
     *,
     system: str,
     user: str,
     model: str,
     temperature: float,
     schema: dict[str, Any],
-) -> str:
-    """Call the client while holding the detector's semaphore, and return the raw reply.
+) -> T:
+    """Get the reply of one LLM call, from the cache or the client, and parse it.
 
-    The semaphore is held only for the client call and is released when the call returns or
-    raises. Errors of the client propagate unwrapped.
+    This is the only place a client or a cache is touched. The semaphore is held only for the
+    client call and is released when the call returns or raises. A reply is written to the cache
+    only after it parsed, and a cached reply that does not parse is deleted. The cache's
+    synchronous methods are used, so the function runs as it is in a worker thread.
+
+    :param client: the LLM client. Its errors propagate unwrapped.
+    :param semaphore: the detector's bound on client calls in flight.
+    :param cache: the reply cache, ``None`` for no caching.
+    :param key: the cache key of the call.
+    :param parse: turns the raw reply into the result, or raises ``UpstreamError``.
+    :param units: the usage counts of the detect call; ``cache_hits`` or ``llm_calls`` is
+        incremented.
+    :returns: what ``parse`` returned.
+    :raises UpstreamError: whatever ``parse`` raised.
     """
-    with semaphore:
-        reply = client.complete(
-            system=system, user=user, model=model, temperature=temperature, schema=schema
-        )
+    reply = cache.get(key) if cache is not None else None
+    from_cache = reply is not None
+    if from_cache:
+        units["cache_hits"] += 1
+    else:
+        with semaphore:
+            reply = client.complete(
+                system=system, user=user, model=model, temperature=temperature, schema=schema
+            )
+        units["llm_calls"] += 1
     content_logger.debug("LLM reply: %s", reply)
-    return reply
+    try:
+        parsed = parse(reply)
+    except UpstreamError:
+        if from_cache:
+            cache.delete(key)
+        raise
+    if cache is not None and not from_cache:
+        cache.set(key, reply)
+    return parsed
