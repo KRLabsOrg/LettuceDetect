@@ -119,12 +119,22 @@ Test files must follow the naming pattern `test_*_pytest.py`.
 
 ```
 lettucedetect/
-  detectors/        # Detection methods (transformer, LLM, RAGFactChecker)
-    transformer.py   # Fine-tuned encoder model detector
-    llm.py           # OpenAI API-based detector
-    factory.py       # make_detector() factory function
-    base.py          # Abstract base class
-    prompt_utils.py  # Prompt formatting utilities
+  detectors/            # Detectors, their request and result types, errors and caches
+    base.py              # BaseDetector: detect, adetect, detect_batch, adetect_batch
+    types.py             # SourcesInput, PromptInput, Detection, DetectedSpan, Usage, ...
+    errors.py            # InvalidInputError, ConfigurationError, UpstreamError
+    encoder.py           # EncoderDetector: fine-tuned encoder models
+    taxonomy_head.py     # TaxonomyTyper: adds category and subcategory to encoder spans
+    llm_judge.py         # LLMJudgeDetector: an LLM judge on a client the caller passes
+    generative.py        # GenerativeDetector: fine-tuned generative models
+    rag_fact_checker.py  # RAGFactCheckerDetector: triplet-based fact checking
+    vela.py              # VelaDetector: Vela 2.0 models (vela_client.py is its HTTP client)
+    llm_client.py        # LLMClient, OpenAIClient, BedrockClient
+    response_cache.py    # ResponseCache protocol, InMemoryCache, make_cache_key
+    file_cache.py        # FileCache
+    registry.py          # load_detector() and the registry of KR Labs model ids
+    prompt_utils.py      # Prompt formatting utilities
+    transformer.py, llm.py, factory.py, cache.py  # Deprecated names, kept as adapters
   datasets/          # Dataset classes and data structures
   models/            # Inference facade, training, evaluation
   preprocess/        # Data preprocessing (RAGTruth, RAGBench)
@@ -135,6 +145,35 @@ tests/               # Pytest test suite
 docs/                # MkDocs documentation source
 scripts/             # Training, evaluation, and utility scripts
 ```
+
+### Adding a detector
+
+A detector is a subclass of `BaseDetector` in `lettucedetect/detectors/`.
+
+- **Implement `_detect(request, *, include_tokens, include_detail)`.** It gets a validated
+  `SourcesInput` or `PromptInput` and returns a `Detection`. `BaseDetector` builds `detect`,
+  `adetect`, `detect_batch` and `adetect_batch` on it, and applies `min_score`.
+- **Set the class attributes** `model_id`, `supports_tokens`, `supports_detail` and
+  `max_concurrency` (how many requests of one batch run at once; the default is 1).
+- **Take loaded objects in the constructor**: a model and tokenizer, or a client. The constructor
+  downloads nothing and reads no environment variable. If the detector loads a model by name, do
+  it in a `from_pretrained` class method.
+- **Put options in a frozen pydantic config model** and raise `ConfigurationError` for an invalid
+  one, as `EncoderConfig` does.
+- **Run the contract suite.** Subclass `DetectorContract` from `tests/detector_contract.py` in your
+  `tests/test_*_pytest.py` file, set `sources_request` and `prompt_request`, and implement the
+  suite's `make_detector(on_call)` hook with a fake model or client. The module docstring
+  explains each step. The suite checks span offsets, scores, `usage`, the batch methods, and that
+  a call writes no file, prints nothing and logs no customer text outside `lettucedetect.content`.
+- **Export the class** from `lettucedetect/detectors/__init__.py`.
+
+`registry.py` maps the model ids of the published KR Labs models to their detector class, and
+`load_detector(model_id, ...)` builds a detector from that mapping. The mapping is private and
+there is no public registration function. A new KR Labs model is added by a pull request that
+adds its id to the mapping and to `tests/test_registry_pytest.py`. `load_detector` knows how to
+build `EncoderDetector` and `GenerativeDetector` entries, so an entry of another class also needs
+its own branch there. Detectors for other models, and detectors without a model id such as
+`RAGFactCheckerDetector`, are built through their class and are not in the registry.
 
 ## Making changes
 
@@ -161,7 +200,7 @@ scripts/             # Training, evaluation, and utility scripts
 Good areas for contribution:
 
 - **New language support** — add prompt templates in `lettucedetect/prompts/` (see existing `qa_prompt_en.txt` and `summary_prompt_en.txt` as examples, and add the language to `LANG_TO_PASSAGE` in `prompt_utils.py`)
-- **New detection methods** — implement `BaseDetector` in `lettucedetect/detectors/` and register it in `factory.py`
+- **New detection methods** — implement `_detect` on a `BaseDetector` subclass in `lettucedetect/detectors/` and run the contract suite against it (see [Adding a detector](#adding-a-detector))
 - **Documentation** — improve or expand the docs in `docs/`
 - **Tests** — increase coverage, especially for edge cases
 - **Bug fixes** — check [open issues](https://github.com/KRLabsOrg/LettuceDetect/issues)

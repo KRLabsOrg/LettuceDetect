@@ -219,6 +219,9 @@ class _DetectOnly(BaseDetector):
         return _result().model_copy(update={"tokens": None})
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_predict_on_a_detector_without_tokens_names_the_spans_format():
     # predict defaults to "tokens"; the error names the argument the caller can change.
     detector = _DetectOnly()

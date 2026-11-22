@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from lettucedetect.detectors.base import BaseDetector
+from lettucedetect.detectors.base import BaseDetector, _deprecated_predict
 from lettucedetect.detectors.errors import ConfigurationError, InvalidInputError, UpstreamError
 from lettucedetect.detectors.types import (
     Chunk,
@@ -239,6 +239,7 @@ class RAGFactCheckerDetector(BaseDetector):
             }
         return self._filter_spans_by_confidence(spans, output_format, min_confidence)
 
+    @_deprecated_predict("detect")
     def predict(
         self,
         context: list[str],
@@ -249,6 +250,12 @@ class RAGFactCheckerDetector(BaseDetector):
         **kwargs,
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """Predict hallucinations using RAGFactChecker, through :meth:`detect`.
+
+        .. deprecated:: 0.3.0
+            Use :meth:`detect`, with ``min_score`` in place of ``min_confidence`` and
+            ``include_detail`` in place of ``output_format="detailed"``; ``detect`` has no token
+            output, so ``include_tokens`` is not supported here. ``predict`` will be removed
+            in 0.5.0.
 
         :param context: List of context documents
         :param answer: Answer text to check for hallucinations
@@ -271,6 +278,7 @@ class RAGFactCheckerDetector(BaseDetector):
         )
         return self._legacy_output(request, output_format, min_confidence)
 
+    @_deprecated_predict("detect")
     def predict_prompt(
         self,
         prompt: str,
@@ -280,12 +288,19 @@ class RAGFactCheckerDetector(BaseDetector):
     ) -> list[dict[str, Any]] | dict[str, Any]:
         """Predict using a single prompt string as context, through :meth:`detect`.
 
+        .. deprecated:: 0.3.0
+            Use :meth:`detect` with a ``PromptInput``, with ``min_score`` in place of
+            ``min_confidence`` and ``include_detail`` in place of ``output_format="detailed"``;
+            ``detect`` has no token output, so ``include_tokens`` is not supported here.
+            ``predict_prompt`` will be removed in 0.5.0.
+
         :raises InvalidInputError: as :meth:`predict`.
         """
         self._check_rag_arguments(output_format, min_confidence)
         request = PromptInput(prompt=prompt, answer=answer)
         return self._legacy_output(request, output_format, min_confidence)
 
+    @_deprecated_predict("detect_batch")
     def predict_prompt_batch(
         self,
         prompts: list[str],
@@ -296,6 +311,11 @@ class RAGFactCheckerDetector(BaseDetector):
         """Batch prediction, through :meth:`detect_batch`.
 
         A failed pair raises its error, the first one in input order.
+
+        .. deprecated:: 0.3.0
+            Use :meth:`detect_batch`, with ``min_score`` in place of ``min_confidence``.
+            ``output_format`` has no replacement here: ``detect_batch`` has no token output, so
+            ``include_tokens`` is not supported. ``predict_prompt_batch`` will be removed in 0.5.0.
 
         :raises InvalidInputError: (``length_mismatch``) for lists of different lengths;
             (``invalid_min_score``) for ``min_confidence`` outside ``[0, 1]``;

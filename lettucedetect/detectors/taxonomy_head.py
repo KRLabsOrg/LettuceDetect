@@ -11,20 +11,24 @@ without a generative model. Labels enter only as text, matching the training set
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
 import torch
 from transformers import AutoModel, AutoTokenizer
 
+from lettucedetect.detectors._deprecation import _UNSET, _message, _warn
 from lettucedetect.detectors.encoder import (
     _LOCK_GUARD,
     _log_model_loaded,
     _model_load_error,
     _resolved_commit,
 )
+from lettucedetect.detectors.errors import LettuceDetectError
 from lettucedetect.prompts.generative import CATEGORY_DESCRIPTIONS, SUBCATEGORY_DESCRIPTIONS
 
 logger = logging.getLogger(__name__)
@@ -90,6 +94,11 @@ class TaxonomyTyper:
 
         TaxonomyTyper(encoder, tokenizer, categories={"pricing_claim": "a price not in the context"})
 
+    .. deprecated:: 0.3.0
+        ``TaxonomyTyper(model_path, device=...)``, the call with a model name or path as the
+        first argument (or as ``model_path=``), still loads the typing head itself. Use
+        :meth:`TaxonomyTyper.from_pretrained`. This call form will be removed in 0.5.0.
+
     :param encoder: the label-conditioned encoder, ready for inference (it is not moved or
         switched to eval mode).
     :param tokenizer: the encoder's fast tokenizer.
@@ -107,16 +116,64 @@ class TaxonomyTyper:
 
     def __init__(
         self,
-        encoder: Any,  # noqa: ANN401
-        tokenizer: Any,  # noqa: ANN401
-        *,
+        encoder: Any = _UNSET,  # noqa: ANN401
+        tokenizer: Any = _UNSET,  # noqa: ANN401
+        *legacy_args: Any,  # noqa: ANN401
         categories: dict[str, str] | None = None,
         subcategories: dict[str, str] | None = None,
         max_length: int = 1024,
         model_id: str | None = None,
         model_version: str | None = None,
+        **legacy_kwargs: Any,  # noqa: ANN401
     ) -> None:
-        """Build the typer from loaded objects and pre-compute taxonomy-label embeddings."""
+        """Build the typer from loaded objects and pre-compute taxonomy-label embeddings.
+
+        ``legacy_args`` and ``legacy_kwargs`` belong to the deprecated call
+        ``TaxonomyTyper(model_path, device=None, max_length=1024, categories=None,
+        subcategories=None, **tok_kwargs)``; the current call accepts neither.
+        """
+        if "model_path" in legacy_kwargs or isinstance(encoder, (str, os.PathLike)):
+            _warn(_message("TaxonomyTyper(model_path, ...)", "TaxonomyTyper.from_pretrained"), 2)
+            positional = [encoder, tokenizer, *legacy_args]
+            named = [
+                legacy_kwargs.pop("model_path", _UNSET),
+                legacy_kwargs.pop("device", None),
+                max_length,
+                categories,
+                subcategories,
+            ]
+            if len(positional) > len(named):
+                raise TypeError(
+                    f"TaxonomyTyper takes at most {len(named)} positional arguments "
+                    f"({len(positional)} given)"
+                )
+            # Each old parameter takes its positional value, else its keyword value or default.
+            model_path, device, max_length, categories, subcategories = (
+                by_name if by_position is _UNSET else by_position
+                for by_position, by_name in zip_longest(positional, named, fillvalue=_UNSET)
+            )
+            try:
+                loaded = TaxonomyTyper.from_pretrained(
+                    str(model_path),
+                    device=device,
+                    categories=categories,
+                    subcategories=subcategories,
+                    model_version=model_version,
+                    **legacy_kwargs,
+                )
+            except LettuceDetectError as exc:
+                # The old call raised the loader's own error.
+                if isinstance(exc.__cause__, OSError):
+                    raise exc.__cause__
+                raise
+            vars(self).update(vars(loaded))
+            self.max_length = max_length
+            return
+        if encoder is _UNSET or tokenizer is _UNSET or legacy_args or legacy_kwargs:
+            raise TypeError(
+                "TaxonomyTyper takes an encoder and a tokenizer, and keyword arguments "
+                "categories, subcategories, max_length, model_id and model_version."
+            )
         device = getattr(encoder, "device", None)
         self.device = device if isinstance(device, torch.device) else torch.device("cpu")
         self.max_length = max_length

@@ -91,6 +91,9 @@ def _forget_warned_classes():
 # --- detect-only subclass answers predict* ---------------------------------------------------
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_predict_spans_maps_score_to_confidence():
     """A detect-only subclass answers predict(output_format="spans") with confidence from score."""
     d = NewStyle()
@@ -112,18 +115,27 @@ def test_predict_spans_maps_score_to_confidence():
     )
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_predict_tokens_maps_score_to_prob():
     """The predict method returns token dicts with pred from flagged and prob from score."""
     out = NewStyle().predict(["s1"], "abcdef")
     assert out == [{"token": "abc", "pred": 1, "prob": 0.8}]
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_predict_min_confidence_filters_spans():
     """min_confidence is passed on as min_score and drops low spans."""
     out = NewStyle().predict(["s1"], "abcdef", output_format="spans", min_confidence=0.5)
     assert [s["text"] for s in out] == ["abc"]
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_predict_prompt_and_batch():
     """predict_prompt builds a PromptInput; the batch runs one pair at a time, in order."""
     d = NewStyle()
@@ -134,6 +146,9 @@ def test_predict_prompt_and_batch():
     assert [r.prompt for r in d.requests[-2:]] == ["p1", "p2"]
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize(
     ("call", "code", "param"),
     [
@@ -363,6 +378,9 @@ class FiltersShort(NewStyle):
         return [span for span in spans if len(span["text"]) < 3]
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_detect_goes_through_an_overridden_predict():
     """A predict override below _detect also decides what detect returns for sources."""
     d = FiltersShort()
@@ -464,6 +482,9 @@ def test_none_of_the_library_detectors_is_bridged():
             assert not detector._answers_through_predict(request, False, False), cls.__name__
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_transformer_subclass_with_a_predict_override_gives_the_same_spans_from_detect(
     local_wordpiece_tokenizer,
 ):

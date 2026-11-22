@@ -250,6 +250,9 @@ def test_include_tokens_raises_tokens_not_supported():
 # -- legacy predict* methods -----------------------------------------------------------------
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize("output_format", ["tokens", "spans", "detailed"])
 def test_predict_and_predict_prompt_go_through_detect(output_format):
     """``predict`` and ``predict_prompt`` call ``detect`` once per call."""
@@ -260,6 +263,9 @@ def test_predict_and_predict_prompt_go_through_detect(output_format):
     assert detect.call_count == 2
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_predict_spans_carry_the_source_triplet():
     """Legacy spans keep their ``triplet`` key."""
     spans = _detector().predict(["context"], ANSWER, output_format="spans")
@@ -269,6 +275,9 @@ def test_predict_spans_carry_the_source_triplet():
     ]
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize(
     ("kwargs", "code", "param"),
     [
@@ -290,6 +299,9 @@ def test_predict_and_predict_prompt_raise_invalid_input_error(kwargs, code, para
     assert detector.rag.calls == []
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 @pytest.mark.parametrize(
     ("args", "kwargs", "code"),
     [
@@ -308,6 +320,9 @@ def test_predict_prompt_batch_raises_invalid_input_error(args, kwargs, code):
     batch.assert_not_called()
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_max_concurrency_bounds_concurrent_predict_calls():
     """``predict`` and ``predict_prompt`` share the bound through ``detect``."""
     lock = threading.Lock()

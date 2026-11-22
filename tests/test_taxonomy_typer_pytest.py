@@ -7,13 +7,17 @@ import os
 import socket
 import threading
 import time
+import warnings
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 
+from lettucedetect.detectors import _deprecation as dep
+from lettucedetect.detectors._deprecation import LettuceDetectDeprecationWarning
 from lettucedetect.detectors.encoder import EncoderDetector
 from lettucedetect.detectors.errors import ConfigurationError, UpstreamError
 from lettucedetect.detectors.taxonomy_head import TaxonomyTyper
@@ -367,3 +371,110 @@ def test_the_typing_lock_is_per_typer_and_reentrant(local_wordpiece_tokenizer):
     assert first._get_scoring_lock() is not second._get_scoring_lock()
     with first._get_scoring_lock(), first._get_scoring_lock():
         pass
+
+
+# ----------------------------------------------------------------------
+# The deprecated call with a model name or path
+# ----------------------------------------------------------------------
+
+LEGACY_MESSAGE = (
+    f"TaxonomyTyper(model_path, ...) is deprecated since {dep.DEPRECATED_SINCE} and will be "
+    f"removed in {dep.REMOVED_IN}. Use TaxonomyTyper.from_pretrained."
+)
+
+
+def test_the_old_call_loads_the_head_and_warns_once(head_loaders):
+    encoder, tok_loader, model_loader = head_loaders
+    with pytest.warns(LettuceDetectDeprecationWarning) as caught:
+        typer = TaxonomyTyper("org/head", device="cpu")
+    assert [str(w.message) for w in caught] == [LEGACY_MESSAGE]
+    assert caught[0].filename == __file__
+    tok_loader.assert_called_once_with("org/head")
+    model_loader.assert_called_once_with("org/head")
+    assert typer.encoder is encoder
+    assert (typer.device, encoder.device) == (torch.device("cpu"), torch.device("cpu"))
+    assert (typer.model_id, typer.max_length) == ("org/head", 1024)
+    assert typer.cat_names and typer.sub_names
+    spans = typer.type_spans("the capital is paris", "ctx", [{"start": 0, "end": 3}])
+    assert spans[0]["category"] in typer.cat_names
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: TaxonomyTyper("org/head", "cpu", 64, CATS, SUBS, local_files_only=True),
+        lambda: TaxonomyTyper(
+            model_path="org/head",
+            device=torch.device("cpu"),
+            max_length=64,
+            categories=CATS,
+            subcategories=SUBS,
+            local_files_only=True,
+        ),
+        lambda: TaxonomyTyper(
+            "org/head",
+            "cpu",
+            max_length=64,
+            categories=CATS,
+            subcategories=SUBS,
+            local_files_only=True,
+        ),
+    ],
+    ids=["positional", "keywords", "mixed"],
+)
+def test_the_old_call_keeps_every_old_argument(call, head_loaders):
+    encoder, tok_loader, model_loader = head_loaders
+    with pytest.warns(LettuceDetectDeprecationWarning):
+        typer = call()
+    tok_loader.assert_called_once_with("org/head", local_files_only=True)
+    model_loader.assert_called_once_with("org/head", local_files_only=True)
+    assert typer.encoder is encoder
+    assert typer.device == torch.device("cpu")
+    assert typer.max_length == 64
+    assert (typer.cat_names, typer.sub_names) == (["pricing_claim"], ["currency"])
+
+
+def test_the_old_call_takes_a_path_and_raises_the_loader_error(head_loaders, tmp_path):
+    _, tok_loader, model_loader = head_loaders
+    with pytest.warns(LettuceDetectDeprecationWarning):
+        typer = TaxonomyTyper(Path(tmp_path))
+    model_loader.assert_called_once_with(str(tmp_path))
+    assert typer.model_id == str(tmp_path)
+    tok_loader.side_effect = OSError("gone")
+    with pytest.warns(LettuceDetectDeprecationWarning), pytest.raises(OSError, match="gone"):
+        TaxonomyTyper("org/head")
+
+
+def test_the_old_call_inside_the_package_and_the_new_call_are_silent(
+    head_loaders, local_wordpiece_tokenizer
+):
+    namespace = {"__name__": "lettucedetect.fake_internal", "T": TaxonomyTyper}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        exec("T('org/head', device='cpu')\nT(model_path='org/head')", namespace)  # noqa: S102
+        TaxonomyTyper(_StubEncoder(), local_wordpiece_tokenizer)
+        TaxonomyTyper(encoder=_StubEncoder(), tokenizer=local_wordpiece_tokenizer, max_length=8)
+        TaxonomyTyper.from_pretrained("org/head", device="cpu")
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda tokenizer: TaxonomyTyper(),
+        lambda tokenizer: TaxonomyTyper(_StubEncoder()),
+        lambda tokenizer: TaxonomyTyper(_StubEncoder(), tokenizer, 64),
+        lambda tokenizer: TaxonomyTyper(_StubEncoder(), tokenizer, device="cpu"),
+        lambda tokenizer: TaxonomyTyper("org/head", "cpu", 64, CATS, SUBS, "extra"),
+    ],
+)
+def test_a_wrong_call_still_raises_type_error(call, head_loaders, local_wordpiece_tokenizer):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", LettuceDetectDeprecationWarning)
+        with pytest.raises(TypeError):
+            call(local_wordpiece_tokenizer)
+
+
+def test_the_class_docstring_has_the_deprecation_note():
+    note = TaxonomyTyper.__doc__.split(f".. deprecated:: {dep.DEPRECATED_SINCE}", 1)[1]
+    assert "TaxonomyTyper.from_pretrained" in note
+    assert dep.REMOVED_IN in note

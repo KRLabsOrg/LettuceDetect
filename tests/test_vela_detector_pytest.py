@@ -516,6 +516,9 @@ def test_tokens_and_detail_are_not_supported(flag, code):
     assert model.calls == []
 
 
+@pytest.mark.filterwarnings(
+    "ignore::lettucedetect.detectors._deprecation.LettuceDetectDeprecationWarning"
+)
 def test_predict_returns_legacy_spans():
     spans = _detector().predict(
         ["Paris is the capital of France."],
