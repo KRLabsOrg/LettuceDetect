@@ -43,17 +43,17 @@ All notable changes to LettuceDetect are documented here.
 - A fact checker result that doesn't have the expected types used to be passed through; `RAGFactCheckerDetector` now raises `UpstreamError` (`invalid_model_output`)
 - `LLMDetector` used to log malformed items, dropped span texts and the raw reply on its module logger; module loggers now record counts only, and the raw reply is logged at DEBUG on the `lettucedetect.content` logger
 - `CacheManager` used to create its directory and read the file in the constructor; the constructor now touches no disk, the first write creates the directory, writes are atomic, and an invalid file raises `ConfigurationError` (`cache_file_invalid`) on first use
-- `TaxonomyTyper(model_path, device=...)` used to load the typing head itself; the constructor now takes a loaded encoder and tokenizer, and `TaxonomyTyper.from_pretrained(model_id, device=...)` does the loading. The old call raises `TypeError`
 - Concurrent `predict*` calls on one `TransformerDetector` used to run unsynchronised on the shared tokenizer; they now run one at a time
 - `pydantic`, `httpx`, `packaging` and `typing_extensions` are now required dependencies
 
 ### Deprecated
-Each name below is deprecated since 0.3.0 and carries a `.. deprecated::` note in its docstring. `TransformerDetector`, `LLMDetector` and its arguments, `make_detector` and `CacheManager` warn with `LettuceDetectDeprecationWarning` when used from outside the `lettucedetect` package. The `predict*` methods and their `min_confidence` and `output_format` arguments do not emit a warning in this release. A `BaseDetector` subclass that implements only the `predict*` methods keeps working through `detect` and warns once per class; implement `_detect` instead.
+Each name below is deprecated since 0.3.0 and carries a `.. deprecated::` note in its docstring. Using one from outside the `lettucedetect` package warns with `LettuceDetectDeprecationWarning`; calls made inside the package are silent, so `HallucinationDetector`, which is not deprecated, does not warn. The `predict*` methods warn on every detector, once per call, and that warning covers their `min_confidence` and `output_format` arguments, which have no warning of their own. A `BaseDetector` subclass that implements only the `predict*` methods keeps working through `detect` and warns once per class; implement `_detect` instead.
 - `TransformerDetector`: use `EncoderDetector.from_pretrained`. Removed in 0.5.0.
 - `LLMDetector`: use `LLMJudgeDetector` or `GenerativeDetector`. Removed in 0.5.0.
 - The `provider`, `client_kwargs` and `cache_file` arguments of `LLMDetector`, and leaving out `client`: use `LLMJudgeDetector` or `GenerativeDetector`. Removed in 0.5.0. Build the client yourself (`OpenAIClient` or `BedrockClient`) and pass `cache=FileCache(path)` for a cache file.
 - `make_detector`: use `load_detector`. Removed in 0.5.0. For a model that is not a registered KR Labs model id, build the detector class directly.
 - `CacheManager`: use `FileCache`. Removed in 0.5.0.
+- `TaxonomyTyper(model_path, ...)`: use `TaxonomyTyper.from_pretrained`. Removed in 0.5.0. The constructor now takes a loaded encoder and tokenizer; a call with a model name or path as the first argument still loads the typing head itself.
 - `predict` and `predict_prompt`: use `detect`. Removed in 0.5.0.
 - `predict_prompt_batch`: use `detect_batch`. Removed in 0.5.0.
 - The `min_confidence` argument of the three methods above: use `min_score`. Removed in 0.5.0.

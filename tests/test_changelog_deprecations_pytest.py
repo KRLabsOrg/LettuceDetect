@@ -13,6 +13,7 @@ from lettucedetect.detectors import BaseDetector, LLMDetector
 from lettucedetect.detectors import _deprecation as dep
 from lettucedetect.detectors import cache as cache_module
 from lettucedetect.detectors import factory as factory_module
+from lettucedetect.detectors.taxonomy_head import TaxonomyTyper
 
 CHANGELOG = Path(__file__).resolve().parents[1] / "CHANGELOG.md"
 
@@ -25,6 +26,7 @@ NAME = re.compile(r"`([^`]+)`")
 PREDICT_METHODS = ("predict", "predict_prompt", "predict_prompt_batch")
 PREDICT_ARGUMENTS = ("min_confidence", "output_format")
 LLM_DETECTOR_ARGUMENTS = ("provider", "client_kwargs", "cache_file", "client")
+TYPER_MODEL_PATH_CALL = "TaxonomyTyper(model_path, ...)"
 
 
 def _deprecated_section() -> list[str]:
@@ -76,6 +78,8 @@ def _owners(name: str) -> list[object]:
     if name in LLM_DETECTOR_ARGUMENTS:
         assert name in inspect.signature(LLMDetector.__init__).parameters
         return [LLMDetector]
+    if name == TYPER_MODEL_PATH_CALL:
+        return [TaxonomyTyper]
     for module in (detectors, factory_module, cache_module):
         if hasattr(module, name):
             return [getattr(module, name)]
@@ -110,6 +114,7 @@ def test_the_section_lists_every_deprecated_name():
         "LLMDetector",
         "make_detector",
         "CacheManager",
+        TYPER_MODEL_PATH_CALL,
         *PREDICT_METHODS,
         *PREDICT_ARGUMENTS,
         *LLM_DETECTOR_ARGUMENTS,

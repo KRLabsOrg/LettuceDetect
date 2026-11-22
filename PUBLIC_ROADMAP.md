@@ -15,7 +15,7 @@ Open:
 
 Shipped in this milestone so far: the network-free unit suite as a merge gate ([#73](https://github.com/KRLabsOrg/LettuceDetect/issues/73)), the `lettucedetect` CLI ([#47](https://github.com/KRLabsOrg/LettuceDetect/issues/47)), the detector latency/throughput benchmark ([#58](https://github.com/KRLabsOrg/LettuceDetect/issues/58)), token output from the LLM detector ([#65](https://github.com/KRLabsOrg/LettuceDetect/issues/65)), the `min_confidence` documentation ([#64](https://github.com/KRLabsOrg/LettuceDetect/issues/64)), and deterministic localization of repeated LLM spans ([#85](https://github.com/KRLabsOrg/LettuceDetect/issues/85)).
 
-## Now: [0.3.0 — One typed detect interface for the detectors](https://github.com/KRLabsOrg/LettuceDetect/issues/126)
+## Next: [0.3.0 — One typed detect interface for the detectors](https://github.com/KRLabsOrg/LettuceDetect/issues/126)
 
 Release 0.3.0 gives the detectors package one typed interface: `detect`, `adetect`, `detect_batch` and `adetect_batch` take a typed request and return a typed result with spans, scores, usage and warnings. The existing API keeps working through adapters that are deprecated in 0.3.0 and removed in 0.5.0. The [changelog](CHANGELOG.md) lists every deprecated name and every behavior that changes through the existing API.
 
